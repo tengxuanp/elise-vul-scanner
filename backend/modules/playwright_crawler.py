@@ -1,7 +1,6 @@
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse, parse_qs
-import json
 
 STATIC_EXTENSIONS = (
     ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg",
@@ -10,15 +9,6 @@ STATIC_EXTENSIONS = (
 
 def is_static_resource(url):
     return url.lower().endswith(STATIC_EXTENSIONS)
-
-def extract_json_params(post_data):
-    try:
-        parsed = json.loads(post_data)
-        if isinstance(parsed, dict):
-            return list(parsed.keys())
-    except:
-        return []
-    return []
 
 def crawl_site(target_url, max_depth=2):
     visited = set()
@@ -37,30 +27,14 @@ def crawl_site(target_url, max_depth=2):
             key = (ep.get("url"), ep.get("method"), tuple(sorted(ep.get("params", []))))
             if key not in seen and ep.get("url"):
                 seen.add(key)
-                unique.append({
-                    "url": ep.get("url"),
-                    "method": ep.get("method"),
-                    "params": ep.get("params") or []
-                })
-        return unique
-
-    def deduplicate_captured(requests):
-        seen = set()
-        unique = []
-        for req in requests:
-            key = (req["method"], req["url"], req.get("post_data") or "")
-            if key not in seen:
-                seen.add(key)
-                unique.append(req)
+                unique.append(ep)
         return unique
 
     def crawl(url, depth, browser):
         if depth > max_depth or normalize_url(url) in visited:
             return
         visited.add(normalize_url(url))
-
         page = browser.new_page()
-        page.set_extra_http_headers({"User-Agent": "EliseScanner/1.0"})
 
         def capture_request(request):
             if not is_static_resource(request.url):
@@ -75,24 +49,22 @@ def crawl_site(target_url, max_depth=2):
 
         try:
             page.goto(url, timeout=10000, wait_until="domcontentloaded")
+            soup = BeautifulSoup(page.content(), "html.parser")
 
-            content = page.content()
-            soup = BeautifulSoup(content, 'html.parser')
-
-            for form in soup.find_all('form'):
-                action = form.get('action') or url
-                method = form.get('method', 'GET').upper()
+            for form in soup.find_all("form"):
+                action = form.get("action") or url
+                method = form.get("method", "GET").upper()
                 full_action_url = urljoin(url, action)
                 if not is_static_resource(full_action_url):
-                    form_params = [i.get('name') for i in form.find_all('input') if i.get('name')]
+                    form_params = [i.get("name") for i in form.find_all("input") if i.get("name")]
                     raw_endpoints.append({
                         "url": full_action_url,
                         "method": method,
                         "params": form_params or []
                     })
 
-            for link in soup.find_all('a', href=True):
-                href = link['href']
+            for link in soup.find_all("a", href=True):
+                href = link["href"]
                 if href.startswith("#"):
                     continue
                 full_url = urljoin(url, href)
@@ -104,7 +76,6 @@ def crawl_site(target_url, max_depth=2):
                         "params": get_params or []
                     })
                     crawl(full_url, depth + 1, browser)
-
         except Exception as e:
             print(f"[ERROR] Failed to crawl {url}: {e}")
         finally:
@@ -115,19 +86,4 @@ def crawl_site(target_url, max_depth=2):
         crawl(target_url, 0, browser)
         browser.close()
 
-    # Extract endpoints from captured API requests
-    for req in captured_requests:
-        parsed = urlparse(req["url"])
-        params = list(parse_qs(parsed.query).keys())
-        if req["method"] == "POST" and req.get("post_data"):
-            params += extract_json_params(req["post_data"])
-        raw_endpoints.append({
-            "url": f"{parsed.scheme}://{parsed.netloc}{parsed.path}",
-            "method": req["method"],
-            "params": params or []
-        })
-
-    print(f"[INFO] Total Crawled Endpoints: {len(raw_endpoints)}")
-    print(f"[INFO] Total Captured API Requests: {len(captured_requests)}")
-
-    return deduplicate(raw_endpoints), deduplicate_captured(captured_requests)
+    return deduplicate(raw_endpoints), deduplicate(captured_requests)
