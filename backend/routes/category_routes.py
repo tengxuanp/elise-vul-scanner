@@ -2,7 +2,6 @@
 from fastapi import APIRouter
 import json
 import os
-from modules.categorize_endpoints import categorize_endpoint
 
 DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "crawl_result.json")
 

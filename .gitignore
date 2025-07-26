@@ -1,0 +1,6 @@
+# Ignore environment variables
+.env
+
+# Ignore crawl data outputs
+backend/data/*.json
+
