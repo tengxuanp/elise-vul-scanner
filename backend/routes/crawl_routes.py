@@ -1,8 +1,11 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from modules.playwright_crawler import crawl_site  # Adjust import path
+from modules.playwright_crawler import crawl_site
+from modules.categorize_endpoints import process_crawl_results
+from urllib.parse import urlparse
 import json
 import os
+from pathlib import Path
 
 router = APIRouter()
 
@@ -23,13 +26,23 @@ def start_crawl(request: CrawlRequest):
 
     try:
         endpoints, captured_requests = crawl_site(request.target_url)
+
+        # ✅ Save crawl result
         with open(CRAWL_RESULT_FILE, "w") as f:
             json.dump({
                 "endpoints": endpoints,
                 "captured_requests": captured_requests
             }, f, indent=2)
+
+        # ✅ Categorize immediately after
+        process_crawl_results(
+            input_path=Path(CRAWL_RESULT_FILE),
+            output_dir=Path(DATA_PATH) / "results",
+            target_url=request.target_url
+        )
+
         crawl_status["status"] = "completed"
-        return {"message": "Crawl completed."}
+        return {"message": "Crawl and categorization completed."}
     except Exception as e:
         crawl_status["status"] = "error"
         raise HTTPException(status_code=500, detail=str(e))

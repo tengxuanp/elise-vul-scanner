@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from routes import (
     crawl_routes,
     category_routes,
+    fuzz_routes,
+    recommend_routes,
     # exploit_routes,          # Optional if you have it
     # report_routes            # Optional if you have it
 )
@@ -24,6 +26,8 @@ app.add_middleware(
 # === API Routers Registration ===
 app.include_router(crawl_routes.router, prefix="/api", tags=["Crawl"])
 app.include_router(category_routes.router, prefix="/api", tags=["Categorization"])
+app.include_router(recommend_routes.router, prefix="/api", tags=["Recommender"])
+app.include_router(fuzz_routes.router, prefix="/api", tags=["Fuzzing"])
 # Optional:
 # app.include_router(exploit_routes.router, prefix="/api", tags=["Exploitation"])
 # app.include_router(report_routes.router, prefix="/api", tags=["Reporting"])

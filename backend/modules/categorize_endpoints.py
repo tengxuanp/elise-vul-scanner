@@ -4,7 +4,6 @@ from typing import List, Dict, Any
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
-# === CATEGORY ENGINE === #
 def extract_params_from_url(url: str) -> List[str]:
     parsed = urlparse(url)
     return list(parse_qs(parsed.query).keys())
@@ -19,7 +18,6 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
     parsed_params = set(raw_params)
     parsed_params.update(extract_params_from_url(url))
 
-    # Attempt to extract post_data fields if available
     if post_data and isinstance(post_data, str):
         try:
             post_fields = parse_qs(post_data)
@@ -31,7 +29,10 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
     categories = []
     vuln_candidates = []
 
-    static_extensions = (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2", ".ttf", ".map", ".json", ".txt", ".md")
+    static_extensions = (
+        ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+        ".woff", ".woff2", ".ttf", ".map", ".json", ".txt", ".md"
+    )
     if url.lower().endswith(static_extensions):
         categories.append("Static_Asset")
 
@@ -74,8 +75,7 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "tested": False
     }
 
-# === MAIN PROCESSOR === #
-def process_crawl_results(input_path: Path, output_path: Path):
+def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
     if not input_path.exists():
         raise FileNotFoundError(f"❌ Input file not found: {input_path}")
 
@@ -87,7 +87,7 @@ def process_crawl_results(input_path: Path, output_path: Path):
     elif isinstance(data, dict):
         raw_endpoints = data.get("endpoints", []) + data.get("captured_requests", [])
     else:
-        raise ValueError("❌ Input JSON must be a list or contain 'endpoints'/'captured_requests'")
+        raise ValueError("❌ Invalid crawl_result.json format")
 
     seen = set()
     deduped = []
@@ -129,19 +129,11 @@ def process_crawl_results(input_path: Path, output_path: Path):
         if "Uncategorized" in result["categories"]:
             grouped["Uncategorized"].append(result)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as outfile:
-        json.dump({"total": len(deduped), "grouped": grouped}, outfile, indent=2)
+    host = urlparse(target_url).netloc.replace(":", "_")
+    output_file = output_dir / host / "categorized_endpoints.json"
+    output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    print(f"✅ Grouped & categorized {len(deduped)} endpoints → {output_path}")
+    with output_file.open("w", encoding="utf-8") as outfile:
+        json.dump({"target": target_url, "total": len(deduped), "grouped": grouped}, outfile, indent=2)
 
-# === CLI RUNNER === #
-if __name__ == "__main__":
-    BASE_DIR = Path(__file__).resolve().parent.parent
-    INPUT_FILE = BASE_DIR / "data" / "crawl_result.json"
-    OUTPUT_FILE = BASE_DIR / "data" / "categorized_endpoints.json"
-
-    try:
-        process_crawl_results(INPUT_FILE, OUTPUT_FILE)
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    print(f"✅ Grouped & categorized {len(deduped)} endpoints → {output_file}")
