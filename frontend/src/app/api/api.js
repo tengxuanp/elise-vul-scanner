@@ -3,7 +3,8 @@ import axios from 'axios';
 // Axios instance with baseURL
 const api = axios.create({
   baseURL: 'http://localhost:8000/api',  // Adjust if needed
-  timeout: 50000,
+  timeout: 0,
+  // timeout: 50000,
 });
 
 // Global Response Interceptor
