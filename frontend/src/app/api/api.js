@@ -3,7 +3,7 @@ import axios from 'axios';
 // Axios instance with baseURL
 const api = axios.create({
   baseURL: 'http://localhost:8000/api',  // Adjust if needed
-  timeout: 50000,
+  timeout: 0, // Disable timeout to allow long-running requests
 });
 
 // Global Response Interceptor
@@ -113,4 +113,26 @@ export const exploitTarget = (tool, endpoint_url, options = {}) => {
 
 export const getReport = () => {
   return api.get('/report', { responseType: 'blob' });
+};
+
+// === Probe API ===
+
+export const startProbe = async () => {
+  try {
+    const res = await api.post('/probe');
+    return res.data;
+  } catch (err) {
+    console.error('Start Probe failed:', err);
+    throw err;
+  }
+};
+
+export const getProbeStatus = async (taskId) => {
+  try {
+    const res = await api.get(`/probe/status/${taskId}`);
+    return res.data;
+  } catch (err) {
+    console.error('Get Probe Status failed:', err);
+    throw err;
+  }
 };
