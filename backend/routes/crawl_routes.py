@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import json
 import os
 from pathlib import Path
+import threading
 
 router = APIRouter()
 
@@ -20,32 +21,35 @@ class CrawlRequest(BaseModel):
 def start_crawl(request: CrawlRequest):
     if crawl_status["status"] == "running":
         raise HTTPException(status_code=400, detail="Crawl already running.")
-    
+
     crawl_status["status"] = "running"
     os.makedirs(DATA_PATH, exist_ok=True)
 
-    try:
-        endpoints, captured_requests = crawl_site(request.target_url)
+    def run_crawl():
+        try:
+            endpoints, captured_requests = crawl_site(request.target_url)
 
-        # ✅ Save crawl result
-        with open(CRAWL_RESULT_FILE, "w") as f:
-            json.dump({
-                "endpoints": endpoints,
-                "captured_requests": captured_requests
-            }, f, indent=2)
+            with open(CRAWL_RESULT_FILE, "w", encoding="utf-8") as f:
+                json.dump({
+                    "endpoints": endpoints,
+                    "captured_requests": captured_requests
+                }, f, indent=2)
 
-        # ✅ Categorize immediately after
-        process_crawl_results(
-            input_path=Path(CRAWL_RESULT_FILE),
-            output_dir=Path(DATA_PATH) / "results",
-            target_url=request.target_url
-        )
+            process_crawl_results(
+                input_path=Path(CRAWL_RESULT_FILE),
+                output_dir=Path(DATA_PATH) / "results",
+                target_url=request.target_url
+            )
 
-        crawl_status["status"] = "completed"
-        return {"message": "Crawl and categorization completed."}
-    except Exception as e:
-        crawl_status["status"] = "error"
-        raise HTTPException(status_code=500, detail=str(e))
+            crawl_status["status"] = "completed"
+        except Exception as e:
+            crawl_status["status"] = "error"
+            print(f"[ERROR] Crawl failed: {e}")
+
+    # 🔁 Fire-and-forget crawl in background
+    threading.Thread(target=run_crawl).start()
+
+    return {"status": "started"}
 
 @router.get("/crawl/result")
 def get_crawl_result():
@@ -55,7 +59,7 @@ def get_crawl_result():
     if not os.path.exists(CRAWL_RESULT_FILE):
         return {"status": "completed", "endpoints": [], "captured_requests": []}
 
-    with open(CRAWL_RESULT_FILE) as f:
+    with open(CRAWL_RESULT_FILE, encoding="utf-8") as f:
         result = json.load(f)
         return {
             "status": "completed",

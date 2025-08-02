@@ -48,9 +48,10 @@ def crawl_site(target_url, max_depth=2):
         page.on("request", capture_request)
 
         try:
-            page.goto(url, timeout=10000, wait_until="domcontentloaded")
+            page.goto(url, timeout=15000, wait_until="networkidle")
             soup = BeautifulSoup(page.content(), "html.parser")
 
+            # Capture form actions
             for form in soup.find_all("form"):
                 action = form.get("action") or url
                 method = form.get("method", "GET").upper()
@@ -63,12 +64,26 @@ def crawl_site(target_url, max_depth=2):
                         "params": form_params or []
                     })
 
+            # Capture <a href> links and click them
             for link in soup.find_all("a", href=True):
                 href = link["href"]
-                if href.startswith("#"):
-                    continue
                 full_url = urljoin(url, href)
-                if urlparse(full_url).netloc == urlparse(target_url).netloc and not is_static_resource(full_url):
+                if href.startswith("#/"):
+                    # Manually trigger client-side route rendering
+                    try:
+                        page.goto(full_url, timeout=15000, wait_until="networkidle")
+                        sub_soup = BeautifulSoup(page.content(), "html.parser")
+                        # Try to identify queryable input params
+                        inputs = sub_soup.find_all("input")
+                        param_names = [inp.get("name") for inp in inputs if inp.get("name")]
+                        raw_endpoints.append({
+                            "url": full_url,
+                            "method": "GET",
+                            "params": param_names or []
+                        })
+                    except Exception as e:
+                        print(f"[WARN] Could not load client-side route {full_url}: {e}")
+                elif urlparse(full_url).netloc == urlparse(target_url).netloc and not is_static_resource(full_url):
                     get_params = list(parse_qs(urlparse(full_url).query).keys())
                     raw_endpoints.append({
                         "url": full_url,
@@ -76,6 +91,7 @@ def crawl_site(target_url, max_depth=2):
                         "params": get_params or []
                     })
                     crawl(full_url, depth + 1, browser)
+
         except Exception as e:
             print(f"[ERROR] Failed to crawl {url}: {e}")
         finally:
