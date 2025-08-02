@@ -3,7 +3,8 @@ import axios from 'axios';
 // Axios instance with baseURL
 const api = axios.create({
   baseURL: 'http://localhost:8000/api',  // Adjust if needed
-  timeout: 50000,
+  timeout: 0,
+  // timeout: 50000,
 });
 
 // Global Response Interceptor
@@ -99,6 +100,28 @@ export const fuzzEndpoint = async (endpoint_url, method, payloads = []) => {
     return res.data;
   } catch (err) {
     console.error('Fuzzing failed:', err);
+    throw err;
+  }
+};
+
+// === Probe & Recommender API ===
+
+export const startProbe = async () => {
+  try {
+    const res = await api.post('/probe');
+    return res.data;
+  } catch (err) {
+    console.error('Probe failed:', err);
+    throw err;
+  }
+};
+
+export const getRecommendations = async () => {
+  try {
+    const res = await api.get('/recommend_probed');
+    return res.data;
+  } catch (err) {
+    console.error('Recommendation failed:', err);
     throw err;
   }
 };

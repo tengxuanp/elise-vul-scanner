@@ -6,9 +6,9 @@ from html import escape
 class FeatureExtractor:
     def extract_features(self, url, param, payload, method="GET"):
         parsed = urlparse(url)
-        if parsed.hostname not in ["localhost", "127.0.0.1"]:
-            print(f"[✘] Blocked external domain: {parsed.hostname}")
-            return None
+        # if parsed.hostname not in ["localhost", "127.0.0.1"]:
+        #     print(f"[✘] Blocked external domain: {parsed.hostname}")
+        #     return None
 
         html = ""
         executed_flag = {"value": False}  # ✅ mutable for closure access
