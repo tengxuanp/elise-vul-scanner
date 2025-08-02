@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect } from 'react';
 import CrawlForm from '../components/CrawlForm';
-import { startFuzz, getFuzzResult, getCategorizedEndpoints } from '../api/api';
+import { startFuzz, getCategorizedEndpoints, startProbe, getRecommendations } from '../api/api';
 import { toast } from 'react-toastify';
 
 export default function CrawlAndFuzzPage() {
@@ -11,10 +11,14 @@ export default function CrawlAndFuzzPage() {
   const [alerts, setAlerts] = useState([]);
   const [loadingFuzz, setLoadingFuzz] = useState(false);
   const [loadingScan, setLoadingScan] = useState(false);
+  const [loadingProbe, setLoadingProbe] = useState(false);
+  const [loadingReco, setLoadingReco] = useState(false);
 
   const [categorized, setCategorized] = useState(null);
   const [hasScanned, setHasScanned] = useState(false);
   const [targetUrl, setTargetUrl] = useState("");
+  const [probeCount, setProbeCount] = useState(null);
+  const [recommendations, setRecommendations] = useState([]);
 
   useEffect(() => {
     setEndpoints([]);
@@ -84,6 +88,34 @@ export default function CrawlAndFuzzPage() {
       console.error(err);
     } finally {
       setLoadingFuzz(false);
+    }
+  };
+
+  const handleProbe = async () => {
+    try {
+      setLoadingProbe(true);
+      const res = await startProbe();
+      setProbeCount(res.probed_count || 0);
+      toast.success(`Probed ${res.probed_count || 0} param(s).`);
+    } catch (err) {
+      console.error('Probe failed:', err);
+      toast.error('Probe failed.');
+    } finally {
+      setLoadingProbe(false);
+    }
+  };
+
+  const handleRecommend = async () => {
+    try {
+      setLoadingReco(true);
+      const res = await getRecommendations();
+      setRecommendations(res.recommendations || []);
+      toast.success(`Got recommendations for ${res.recommendations?.length || 0} param(s).`);
+    } catch (err) {
+      console.error('Recommendation failed:', err);
+      toast.error('Recommendation failed.');
+    } finally {
+      setLoadingReco(false);
     }
   };
 
@@ -166,6 +198,31 @@ export default function CrawlAndFuzzPage() {
         </div>
       )}
 
+      {hasScanned && (
+        <div className="border p-4 rounded space-y-2">
+          <h2 className="text-xl font-semibold">Probe & Recommend</h2>
+          <div className="flex space-x-2">
+            <button
+              onClick={handleProbe}
+              className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600"
+              disabled={loadingProbe}
+            >
+              {loadingProbe ? 'Probing...' : 'Start Probe'}
+            </button>
+            <button
+              onClick={handleRecommend}
+              className="bg-purple-500 text-white px-4 py-2 rounded hover:bg-purple-600"
+              disabled={loadingReco}
+            >
+              {loadingReco ? 'Recommending...' : 'Recommend Payloads'}
+            </button>
+          </div>
+          {probeCount !== null && (
+            <p className="text-sm text-gray-600">Probed {probeCount} param(s).</p>
+          )}
+        </div>
+      )}
+
       {fuzzResults.length > 0 && (
         <div className="border p-4 rounded">
           <h2 className="text-xl font-semibold mb-2">Fuzzing Results</h2>
@@ -189,6 +246,34 @@ export default function CrawlAndFuzzPage() {
                   <td className="border px-2 py-1">{r.status_code}</td>
                   <td className="border px-2 py-1">{r.response_length}</td>
                   <td className="border px-2 py-1">{r.reflects_payload}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {recommendations.length > 0 && (
+        <div className="border p-4 rounded">
+          <h2 className="text-xl font-semibold mb-2">Payload Recommendations</h2>
+          <table className="table-auto w-full border text-sm">
+            <thead>
+              <tr className="bg-gray-200">
+                <th className="border px-2 py-1">Endpoint</th>
+                <th className="border px-2 py-1">Param</th>
+                <th className="border px-2 py-1">Recommended Payloads</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recommendations.map((r, idx) => (
+                <tr key={idx} className="hover:bg-gray-50">
+                  <td className="border px-2 py-1">{r.method} {r.url}</td>
+                  <td className="border px-2 py-1">{r.param}</td>
+                  <td className="border px-2 py-1">
+                    {r.recommendations
+                      .map(([p, prob]) => `${p} (${(prob * 100).toFixed(1)}%)`)
+                      .join(', ')}
+                  </td>
                 </tr>
               ))}
             </tbody>

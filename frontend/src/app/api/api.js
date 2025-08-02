@@ -103,6 +103,28 @@ export const fuzzEndpoint = async (endpoint_url, method, payloads = []) => {
   }
 };
 
+// === Probe & Recommender API ===
+
+export const startProbe = async () => {
+  try {
+    const res = await api.post('/probe');
+    return res.data;
+  } catch (err) {
+    console.error('Probe failed:', err);
+    throw err;
+  }
+};
+
+export const getRecommendations = async () => {
+  try {
+    const res = await api.get('/recommend_probed');
+    return res.data;
+  } catch (err) {
+    console.error('Recommendation failed:', err);
+    throw err;
+  }
+};
+
 // === Exploit API ===
 
 export const exploitTarget = (tool, endpoint_url, options = {}) => {
