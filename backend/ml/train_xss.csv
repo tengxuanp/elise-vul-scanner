@@ -1409,3 +1409,9 @@ op_html,op_attr,op_js,op_vbs,op_quot,esc_double,esc_single,esc_back,esc_left,esc
 5,3,0,0,1,0,0,0,1,1,1,1,1,0,0,0,0,140,"["" onmousemove=alert``;""]"
 5,3,0,0,1,0,0,0,1,1,1,1,1,0,0,0,0,140,"["" onmousemove=alert``;""]"
 5,3,0,0,1,0,0,0,1,1,1,1,1,0,0,0,0,140,"["" onmousemove=alert``;""]"
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,141,[<svg onload=alert()>]
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,141,[<svg onload=prompt()>]
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,141,[<svg onload=confirm()>]
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,142,[<a href="javascript:alert()">link</a>]
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,142,[<a href="javascript:prompt()">link</a>]
+2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,142,[<a href="javascript:confirm()">link</a>]

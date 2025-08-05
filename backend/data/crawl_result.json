@@ -1,24 +1,24 @@
 {
   "endpoints": [
     {
-      "url": "https://demo.testfire.net/search.jsp",
+      "url": "http://testfire.net/search.jsp",
       "method": "GET",
       "params": [
         "query"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp",
+      "url": "http://testfire.net/index.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/login.jsp",
+      "url": "http://testfire.net/login.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/doLogin",
+      "url": "http://testfire.net/doLogin",
       "method": "POST",
       "params": [
         "uid",
@@ -27,200 +27,200 @@
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside_contact.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_contact.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/feedback.jsp",
+      "url": "http://testfire.net/feedback.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal.htm",
+      "url": "http://testfire.net/index.jsp?content=personal.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business.htm",
+      "url": "http://testfire.net/index.jsp?content=business.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside.htm",
+      "url": "http://testfire.net/index.jsp?content=inside.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_deposit.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_deposit.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_checking.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_checking.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_loans.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_loans.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_cards.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_cards.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_investments.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_investments.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_other.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_other.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_deposit.htm",
+      "url": "http://testfire.net/index.jsp?content=business_deposit.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_lending.htm",
+      "url": "http://testfire.net/index.jsp?content=business_lending.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_cards.htm",
+      "url": "http://testfire.net/index.jsp?content=business_cards.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_insurance.htm",
+      "url": "http://testfire.net/index.jsp?content=business_insurance.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_retirement.htm",
+      "url": "http://testfire.net/index.jsp?content=business_retirement.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=business_other.htm",
+      "url": "http://testfire.net/index.jsp?content=business_other.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside_about.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_about.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/cgi.exe",
+      "url": "http://testfire.net/cgi.exe",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside_investor.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_investor.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside_press.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_press.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=inside_careers.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_careers.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/subscribe.jsp",
+      "url": "http://testfire.net/subscribe.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=privacy.htm",
+      "url": "http://testfire.net/index.jsp?content=privacy.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=security.htm",
+      "url": "http://testfire.net/index.jsp?content=security.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/status_check.jsp",
+      "url": "http://testfire.net/status_check.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html",
+      "url": "http://testfire.net/swagger/index.html",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/disclaimer.htm?url=http://www.netscape.com",
+      "url": "http://testfire.net/disclaimer.htm?url=http://www.netscape.com",
       "method": "GET",
       "params": [
         "url"
       ]
     },
     {
-      "url": "https://demo.testfire.net/disclaimer.htm?url=http://www.microsoft.com",
+      "url": "http://testfire.net/disclaimer.htm?url=http://www.microsoft.com",
       "method": "GET",
       "params": [
         "url"
       ]
     },
     {
-      "url": "https://demo.testfire.net/sendFeedback",
+      "url": "http://testfire.net/sendFeedback",
       "method": "POST",
       "params": [
         "cfile",
@@ -232,7 +232,7 @@
       ]
     },
     {
-      "url": "https://demo.testfire.net/doSubscribe",
+      "url": "http://testfire.net/doSubscribe",
       "method": "POST",
       "params": [
         "txtEmail",
@@ -240,26 +240,26 @@
       ]
     },
     {
-      "url": "https://demo.testfire.net/index.jsp?content=personal_savings.htm",
+      "url": "http://testfire.net/index.jsp?content=personal_savings.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/default.jsp?content=security.htm",
+      "url": "http://testfire.net/default.jsp?content=security.htm",
       "method": "GET",
       "params": [
         "content"
       ]
     },
     {
-      "url": "https://demo.testfire.net/survey_questions.jsp",
+      "url": "http://testfire.net/survey_questions.jsp",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/survey_questions.jsp?step=a",
+      "url": "http://testfire.net/survey_questions.jsp?step=a",
       "method": "GET",
       "params": [
         "step"
@@ -271,92 +271,92 @@
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/1. Login",
+      "url": "http://testfire.net/swagger/index.html#/1. Login",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/1._Login/checkLogin",
+      "url": "http://testfire.net/swagger/index.html#/1._Login/checkLogin",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/1._Login/login",
+      "url": "http://testfire.net/swagger/index.html#/1._Login/login",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/2. Account",
+      "url": "http://testfire.net/swagger/index.html#/2. Account",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/2._Account/getAccount",
+      "url": "http://testfire.net/swagger/index.html#/2._Account/getAccount",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/2._Account/getAccountBalance",
+      "url": "http://testfire.net/swagger/index.html#/2._Account/getAccountBalance",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/2._Account/showLastTenTransactions",
+      "url": "http://testfire.net/swagger/index.html#/2._Account/showLastTenTransactions",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/2._Account/getTransactions",
+      "url": "http://testfire.net/swagger/index.html#/2._Account/getTransactions",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/3. Transfer",
+      "url": "http://testfire.net/swagger/index.html#/3. Transfer",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/3._Transfer/trasnfer",
+      "url": "http://testfire.net/swagger/index.html#/3._Transfer/trasnfer",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/4. Feedback",
+      "url": "http://testfire.net/swagger/index.html#/4. Feedback",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/4._Feedback/sendFeedback",
+      "url": "http://testfire.net/swagger/index.html#/4._Feedback/sendFeedback",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/4._Feedback/getFeedback",
+      "url": "http://testfire.net/swagger/index.html#/4._Feedback/getFeedback",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/5. Admin",
+      "url": "http://testfire.net/swagger/index.html#/5. Admin",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/5._Admin/addUser",
+      "url": "http://testfire.net/swagger/index.html#/5._Admin/addUser",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/5._Admin/changePassword",
+      "url": "http://testfire.net/swagger/index.html#/5._Admin/changePassword",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/6. Logout",
+      "url": "http://testfire.net/swagger/index.html#/6. Logout",
       "method": "GET",
       "params": []
     },
     {
-      "url": "https://demo.testfire.net/swagger/index.html#/6._Logout/doLogOut",
+      "url": "http://testfire.net/swagger/index.html#/6._Logout/doLogOut",
       "method": "GET",
       "params": []
     }
@@ -364,133 +364,100 @@
   "captured_requests": [
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/",
+      "url": "http://testfire.net/",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/index.jsp",
+      "url": "http://testfire.net/index.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/login.jsp",
+      "url": "http://testfire.net/login.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/index.jsp?content=inside_contact.htm",
+      "url": "http://testfire.net/index.jsp?content=inside_contact.htm",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/feedback.jsp",
+      "url": "http://testfire.net/feedback.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/cgi.exe",
+      "url": "http://testfire.net/cgi.exe",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/subscribe.jsp",
+      "url": "http://testfire.net/subscribe.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/default.jsp?content=security.htm",
+      "url": "http://testfire.net/default.jsp?content=security.htm",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/survey_questions.jsp",
+      "url": "http://testfire.net/survey_questions.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/status_check.jsp",
+      "url": "http://testfire.net/status_check.jsp",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     },
     {
       "method": "GET",
-      "url": "https://demo.testfire.net/swagger/index.html",
+      "url": "http://testfire.net/swagger/index.html",
       "headers": {
         "upgrade-insecure-requests": "1",
-        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36",
-        "sec-ch-ua": "\"Not)A;Brand\";v=\"8\", \"Chromium\";v=\"138\", \"HeadlessChrome\";v=\"138\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\""
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/138.0.7204.23 Safari/537.36"
       },
       "post_data": null
     }
