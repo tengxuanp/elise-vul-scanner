@@ -14,6 +14,7 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
     raw_params = endpoint.get("params", [])
     headers = endpoint.get("headers", {})
     post_data = endpoint.get("post_data", "")
+    is_login = endpoint.get("is_login", False)
 
     parsed_params = set(raw_params)
     parsed_params.update(extract_params_from_url(url))
@@ -72,7 +73,8 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "params": params,
         "categories": categories,
         "vuln_type_candidates": sorted(set(vuln_candidates)),
-        "tested": False
+        "tested": False,
+        "is_login": is_login
     }
 
 def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
