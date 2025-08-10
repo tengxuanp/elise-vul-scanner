@@ -29,6 +29,12 @@ def start_crawl(request: CrawlRequest):
         try:
             endpoints, captured_requests = crawl_site(request.target_url)
 
+            # Ensure all endpoint records carry the is_login flag
+            for ep in endpoints:
+                ep.setdefault("is_login", False)
+            for req in captured_requests:
+                req.setdefault("is_login", False)
+
             with open(CRAWL_RESULT_FILE, "w", encoding="utf-8") as f:
                 json.dump({
                     "endpoints": endpoints,
@@ -61,8 +67,14 @@ def get_crawl_result():
 
     with open(CRAWL_RESULT_FILE, encoding="utf-8") as f:
         result = json.load(f)
+        endpoints = result.get("endpoints", [])
+        captured_requests = result.get("captured_requests", [])
+        for ep in endpoints:
+            ep.setdefault("is_login", False)
+        for req in captured_requests:
+            req.setdefault("is_login", False)
         return {
             "status": "completed",
-            "endpoints": result.get("endpoints", []),
-            "captured_requests": result.get("captured_requests", [])
+            "endpoints": endpoints,
+            "captured_requests": captured_requests
         }
