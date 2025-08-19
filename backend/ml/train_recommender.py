@@ -1,26 +1,34 @@
-import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-import joblib
+import csv
 import os
+import pickle
+import sys
+from collections import defaultdict
 
-# === Paths ===
-DATA_FILE = "ml/train_xss.csv"
-MODEL_FILE = "ml/recommender_model.pkl"
+BASE_DIR = os.path.dirname(__file__)
+sys.path.append(BASE_DIR)
+from simple_model import SimpleModel
+DATA_FILE = os.path.join(BASE_DIR, "train_xss.csv")
+MODEL_FILE = os.path.join(BASE_DIR, "recommender_model.pkl")
 
 # === Load dataset ===
-# Expected format: f1..f17, label (integer)
-df = pd.read_csv(DATA_FILE)
+if not os.path.exists(DATA_FILE):
+    raise FileNotFoundError(f"Dataset not found: {DATA_FILE}")
 
-# === Input and target ===
-X = df.iloc[:, :17]           # First 17 features
-y = df["label"].astype(int)   # Target label column
+sums = defaultdict(lambda: [0.0] * 17)
+counts = defaultdict(int)
+with open(DATA_FILE) as f:
+    reader = csv.reader(f)
+    next(reader)  # header part 1
+    next(reader)  # header part 2
+    for row in reader:
+        features = list(map(int, row[:17]))
+        label = int(row[17])
+        sums[label] = [s + v for s, v in zip(sums[label], features)]
+        counts[label] += 1
+        
+centroids = {lbl: [v / counts[lbl] for v in sums[lbl]] for lbl in sums}
+model = SimpleModel(centroids)
 
-# === Train model ===
-model = RandomForestClassifier(n_estimators=100, random_state=42)
-model.fit(X, y)
-
-# === Save model ===
 os.makedirs("ml", exist_ok=True)
-joblib.dump(model, MODEL_FILE)
-
-print(f"✅ Model trained and saved to {MODEL_FILE}")
+with open(MODEL_FILE, "wb") as f:
+    pickle.dump(model, f)

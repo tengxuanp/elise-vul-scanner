@@ -51,17 +51,30 @@ def crawl_site(target_url, max_depth=2):
             page.goto(url, timeout=15000, wait_until="networkidle")
             soup = BeautifulSoup(page.content(), "html.parser")
 
-            # Capture form actions
+            # Capture form actions and detect potential login forms
             for form in soup.find_all("form"):
                 action = form.get("action") or url
                 method = form.get("method", "GET").upper()
                 full_action_url = urljoin(url, action)
                 if not is_static_resource(full_action_url):
-                    form_params = [i.get("name") for i in form.find_all("input") if i.get("name")]
+                    inputs = form.find_all("input")
+                    form_params = [i.get("name") for i in inputs if i.get("name")]
+
+                    # Heuristics to flag login forms
+                    is_login = False
+                    login_keywords = {"user", "username", "email", "pass", "password"}
+                    for inp in inputs:
+                        name = (inp.get("name") or "").lower()
+                        input_type = (inp.get("type") or "").lower()
+                        if input_type == "password" or any(k in name for k in login_keywords):
+                            is_login = True
+                            break
+
                     raw_endpoints.append({
                         "url": full_action_url,
                         "method": method,
-                        "params": form_params or []
+                        "params": form_params or [],
+                        "is_login": is_login
                     })
 
             # Capture <a href> links and click them
@@ -79,7 +92,8 @@ def crawl_site(target_url, max_depth=2):
                         raw_endpoints.append({
                             "url": full_url,
                             "method": "GET",
-                            "params": param_names or []
+                            "params": param_names or [],
+                            "is_login": False
                         })
                     except Exception as e:
                         print(f"[WARN] Could not load client-side route {full_url}: {e}")
@@ -88,7 +102,8 @@ def crawl_site(target_url, max_depth=2):
                     raw_endpoints.append({
                         "url": full_url,
                         "method": "GET",
-                        "params": get_params or []
+                        "params": get_params or [],
+                        "is_login": False
                     })
                     crawl(full_url, depth + 1, browser)
 
