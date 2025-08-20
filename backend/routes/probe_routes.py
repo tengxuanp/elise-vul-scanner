@@ -2,7 +2,7 @@ from fastapi import APIRouter
 from pathlib import Path
 import json
 
-from modules.feature_extractor import FeatureExtractor
+from ..modules.feature_extractor import FeatureExtractor
 
 router = APIRouter()
 fe = FeatureExtractor()
