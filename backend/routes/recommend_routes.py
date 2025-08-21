@@ -3,8 +3,8 @@ from pydantic import BaseModel
 from pathlib import Path
 import json
 
-from modules.feature_extractor import FeatureExtractor
-from modules.recommender import Recommender
+from ..modules.feature_extractor import FeatureExtractor
+from ..modules.recommender import Recommender
 
 router = APIRouter()
 fe = FeatureExtractor()
