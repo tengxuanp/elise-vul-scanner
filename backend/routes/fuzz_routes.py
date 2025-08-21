@@ -44,7 +44,7 @@ def create_payload_file(payload: str, directory: Optional[Path] = None) -> Path:
 def _fallback_payloads() -> List[str]:
     return [
         "' OR 1=1--",
-        "\"/><script>alert(1)</script>",
+        "\"/><script>console.log('ELISE_XSS_MARK')</script>",
         "';WAITFOR DELAY '0:0:5'--",
     ]
 
@@ -52,7 +52,7 @@ def _guess_label(payload: str) -> str:
     s = payload.lower()
     if "or 1=1" in s or "--" in s or "waitfor delay" in s or "';" in s:
         return "sqli"
-    if "<script" in s or "onerror=" in s or "onload=" in s:
+    if "<script" in s or "onerror=" in s or "onload=" in s or "elise_xss_mark" in s:
         return "xss"
     return "benign"
 
@@ -64,6 +64,16 @@ def _derive_confidence(base_conf: float, match_count: int) -> float:
         return float(base_conf)
     return min(1.0, 0.2 + 0.2 * match_count)
 
+def _merge_headers(h1: Optional[Dict[str, str]], h2: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """
+    Merge headers with h2 overriding h1 on key collisions.
+    """
+    out: Dict[str, str] = {}
+    for src in (h1 or {}), (h2 or {}):
+        for k, v in src.items():
+            out[k] = v
+    return out
+
 
 # -------- dependencies --------
 def get_recommender(request: Request) -> Optional[Recommender]:
@@ -72,13 +82,11 @@ def get_recommender(request: Request) -> Optional[Recommender]:
     if obj is not None:
         return obj
 
-    # Try to construct it (old eager class may raise FileNotFoundError here)
     try:
         r = Recommender()
     except FileNotFoundError:
         return None
 
-    # If the class supports lazy loading, load it now; otherwise assume eager-loaded
     load = getattr(r, "load", None)
     if callable(load):
         try:
@@ -97,7 +105,7 @@ class FuzzTarget(BaseModel):
     method: str = "GET"
     job_id: Optional[str] = None
     headers: Dict[str, str] = Field(default_factory=dict)  # optional passthrough
-    meta: Dict[str, Any] = Field(default_factory=dict)
+    meta: Dict[str, Any] = Field(default_factory=dict)     # should contain body/body_type if POST
 
 
 # -------- endpoints --------
@@ -109,7 +117,7 @@ def fuzz_many(
     results: List[Dict[str, Any]] = []
 
     for t in targets:
-        # 1) Feature extraction (guarded)
+        # 1) Feature extraction (best-effort; do not block fuzzing)
         try:
             base_payload = "' OR 1=1 --"
             feats = fe.extract_features(
@@ -117,23 +125,11 @@ def fuzz_many(
             )
         except Exception as e:
             logging.exception("feature_extractor failed for %s %s", t.url, t.param)
-            results.append({
-                "url": t.url, "param": t.param, "method": t.method,
-                "status": "error", "stage": "feature_extraction", "error": str(e),
-                "meta": t.meta,
-            })
-            continue
-
-        if feats is None:
-            results.append({
-                "url": t.url, "param": t.param, "method": t.method,
-                "status": "skip", "reason": "not reflected", "meta": t.meta,
-            })
-            continue
+            feats = None
 
         # 2) Payload selection (ML or fallback)
         try:
-            if reco is not None:
+            if reco is not None and feats is not None:
                 pairs = reco.recommend(feats, top_n=3, threshold=0.2)  # [(payload, prob), ...]
                 candidates = [(p, float(conf)) for p, conf in pairs]
             else:
@@ -142,16 +138,25 @@ def fuzz_many(
             logging.exception("recommender failed; falling back")
             candidates = [(p, 0.0) for p in _fallback_payloads()]
 
-        # 3) Execute ffuf per candidate and (optionally) persist evidence
+        # 3) Build request context from target.meta (headers/body/body_type)
+        meta = t.meta or {}
+        meta_headers: Dict[str, str] = meta.get("headers") or {}
+        meta_body = meta.get("body")
+        meta_body_type = meta.get("body_type")  # "json" | "form" | None
+        eff_headers = _merge_headers(meta_headers, t.headers)
+
+        # 4) Execute ffuf per candidate and (optionally) persist evidence
         for payload, base_conf in candidates:
             payload_file = create_payload_file(payload)
             try:
                 ffuf_out = run_ffuf(
-                    t.url,
-                    t.param,
+                    url=t.url,
+                    param=t.param,
                     payload_file=str(payload_file),
                     method=t.method,
-                    headers=t.headers or None,
+                    headers=eff_headers or None,
+                    body=meta_body,
+                    body_type=meta_body_type,
                     output_dir=str(DATA_DIR),
                 )
 
@@ -174,6 +179,10 @@ def fuzz_many(
                 # Persist evidence if job_id provided
                 if t.job_id:
                     try:
+                        # Decide param location for bookkeeping
+                        param_in_body = isinstance(meta_body, dict) and t.param in meta_body
+                        param_locs = {"body": [t.param]} if (t.method.upper() != "GET" and param_in_body) else {"query": [t.param]}
+
                         signals = {
                             "ffuf_match_count": len(matches),
                             "ffuf_first_three": [
@@ -192,7 +201,8 @@ def fuzz_many(
                             "url": t.url,
                             "param": t.param,
                             "payload_path": ffuf_out.get("payload_file") or str(payload_file),
-                            "headers": t.headers,
+                            "headers": eff_headers,
+                            "body_type": meta_body_type,
                         }
                         response_meta = {
                             "elapsed_ms": ffuf_out.get("elapsed_ms"),
@@ -207,7 +217,7 @@ def fuzz_many(
                             job_id=t.job_id,
                             method=t.method,
                             url=t.url,
-                            param_locs={"query": [t.param]},
+                            param_locs=param_locs,
                             param=t.param,
                             family=label,
                             payload_id="auto",

@@ -1,0 +1,3 @@
+"><img src=x onerror=alert(1)>
+"><img src=x onerror=console.log("ELISE_XSS_MARK")>
+"><script>console.log('ELISE_XSS_MARK')</script>
