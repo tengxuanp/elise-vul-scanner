@@ -1,139 +1,90 @@
+// src/app/api/api.js
 import axios from 'axios';
 
-// Axios instance with baseURL
-const api = axios.create({
-  baseURL: 'http://localhost:8000/api',  // Adjust if needed
-  timeout: 0,
-  // timeout: 50000,
+// Base URL comes from env in dev/prod; hardcoded fallback is only for local.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api';
+
+export const api = axios.create({
+  baseURL: API_BASE,
+  timeout: 0, // don't fight long scans with client timeouts
 });
 
-// Global Response Interceptor
+// Global response interceptor (cleaner error logs)
 api.interceptors.response.use(
-  (response) => response,
+  (res) => res,
   (error) => {
-    console.error('API Error:', error);
+    const payload = error?.response?.data;
+    const msg = payload?.detail || payload?.message || error.message || 'Unknown API error';
+    console.error('API Error:', msg, payload);
     return Promise.reject(error);
   }
 );
 
-// === Proxy-Based Crawl API ===
+/* ===================== Jobs ===================== */
+export const startJob = async ({ target, notes = '' }) =>
+  (await api.post('/job/start', { target, notes })).data; // -> { job_id }
 
-// 🟢 Start Proxy-Based Crawl with Target Domains
-export const crawlTarget = async ({ target_url }) => {
-  try {
-    const res = await api.post('/crawl', { target_url });  // ✅ uses target_url now
-    return res.data;
-  } catch (err) {
-    console.error('Crawl failed:', err);
-    throw err;
-  }
+/* ===================== Crawl ===================== */
+// auth: {mode:'none'} | {mode:'cookie', cookie} | {mode:'bearer', bearer_token} | {mode:'form', login_url, username, password, username_selector, password_selector, submit_selector}
+export const crawlTarget = async ({ job_id, target_url, auth }) =>
+  (await api.post('/crawl', { job_id, target_url, auth })).data;
+
+export const getCrawlStatus = async (job_id) =>
+  (await api.get(`/crawl/status/${job_id}`)).data; // -> { status }
+
+export const getCrawlResult = async (job_id) =>
+  (await api.get(`/crawl/result/${job_id}`)).data; // -> { endpoints, captured_requests }
+
+/* ========== Categorization (still target-scoped) ========== */
+export const getCategorizedEndpoints = async (target_url) =>
+  (await api.get('/categorized-endpoints', { params: { target_url } })).data;
+
+/* ===================== Fuzzing ===================== */
+export const fuzzByJob = async (job_id) =>
+  (await api.post(`/fuzz/by_job/${job_id}`)).data; // ffuf summary/evidence
+
+// Send only chosen endpoint shapes to the backend
+export const fuzzSelected = async (job_id, selection /* array of {method,url,params?,body_keys?} */) =>
+  (await api.post(`/fuzz/by_job/${job_id}`, { selection })).data;
+
+// If you expose a pollable results route per job, keep this. If not, remove it.
+export const getFuzzResultByJob = async (job_id) =>
+  (await api.get(`/fuzz/result/${job_id}`)).data;
+
+/* ============ Probe & Recommendations (job-scoped) ============ */
+export const startProbe = async (job_id) =>
+  (await api.post(`/probe/${job_id}`)).data;
+
+export const getRecommendations = async (job_id) =>
+  (await api.get(`/recommend_probed/${job_id}`)).data;
+
+/* ===================== Exploitation ===================== */
+// If your backend isn’t job-scoped for exploit, change to POST /exploit with body.
+export const exploitTarget = async (job_id, tool, endpoint_url, options = {}) =>
+  (await api.post(`/exploit/${job_id}`, { tool, endpoint_url, options })).data;
+
+/* ===================== Reporting ===================== */
+export const getReport = async (job_id) =>
+  (await api.get(`/report/${job_id}`, { responseType: 'blob' })).data;
+
+/* ===================== Utilities ===================== */
+export const setAuthHeader = (key, value) => {
+  if (!value) delete api.defaults.headers.common[key];
+  else api.defaults.headers.common[key] = value;
 };
 
-
-// 🟢 Poll for Crawl Results
-export const getCrawlResult = async () => {
-  try {
-    const res = await api.get('/crawl/result');
-    return res.data;
-  } catch (err) {
-    console.error('Get Crawl Result failed:', err);
-    throw err;
-  }
-};
-
-// === Categorized Endpoint API ===
-
-export const getCategorizedEndpoints = async (targetUrl) => {
-  try {
-    const res = await api.get('/categorized-endpoints', {
-      params: { target_url: targetUrl }
-    });
-    return res.data;
-  } catch (err) {
-    console.error('Get Categorized Endpoints failed:', err);
-    throw err;
-  }
-};
-
-
-// === Fuzzing API ===
-
-export const startFuzz = async ({ url, param }) => {
-  try {
-    const res = await api.post('/fuzz', [ { url, param } ]); // ✅ wrap in array
-    return res.data;
-  } catch (err) {
-    console.error('Start Fuzzing failed:', err);
-    throw err;
-  }
-};
-
-
-
-export const getFuzzResult = async () => {
-  try {
-    const res = await api.get('/fuzz/result');
-    return res.data;
-  } catch (err) {
-    console.error('Get Fuzz Result failed:', err);
-    throw err;
-  }
-};
-
-export const fuzzMultipleEndpoints = async (endpoints = []) => {
-  try {
-    const res = await api.post('/fuzz', { endpoints });
-    return res.data;
-  } catch (err) {
-    console.error('Mass Fuzzing failed:', err);
-    throw err;
-  }
-};
-
-export const fuzzEndpoint = async (endpoint_url, method, payloads = []) => {
-  try {
-    const res = await api.post('/fuzz', {
-      endpoint_url,
-      method,
-      payloads,
-    });
-    return res.data;
-  } catch (err) {
-    console.error('Fuzzing failed:', err);
-    throw err;
-  }
-};
-
-// === Probe & Recommender API ===
-
-export const startProbe = async () => {
-  try {
-    const res = await api.post('/probe');
-    return res.data;
-  } catch (err) {
-    console.error('Probe failed:', err);
-    throw err;
-  }
-};
-
-export const getRecommendations = async () => {
-  try {
-    const res = await api.get('/recommend_probed');
-    return res.data;
-  } catch (err) {
-    console.error('Recommendation failed:', err);
-    throw err;
-  }
-};
-
-// === Exploit API ===
-
-export const exploitTarget = (tool, endpoint_url, options = {}) => {
-  return api.post('/exploit', { tool, endpoint_url, options });
-};
-
-// === Reporting API ===
-
-export const getReport = () => {
-  return api.get('/report', { responseType: 'blob' });
+export default {
+  api,
+  startJob,
+  crawlTarget,
+  getCrawlStatus,
+  getCrawlResult,
+  getCategorizedEndpoints,
+  fuzzByJob,
+  getFuzzResultByJob,
+  startProbe,
+  getRecommendations,
+  exploitTarget,
+  getReport,
+  setAuthHeader,
 };
