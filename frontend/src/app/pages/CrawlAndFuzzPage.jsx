@@ -4,6 +4,20 @@ import CrawlForm from "../components/CrawlForm";
 import { fuzzByJob, fuzzSelected, getReport } from "../api/api";
 import { toast } from "react-toastify";
 
+/** === Normalize raw endpoint into a consistent shape for UI/selection === */
+const normalizeEndpoint = (ep) => {
+  const url = ep.url || "";
+  const method = (ep.method || "GET").toUpperCase();
+  const pl = ep.param_locs || {};
+  // Prefer canonical param_locs
+  const q = Array.isArray(pl.query) ? pl.query : Array.isArray(ep.params) ? ep.params : [];
+  const b =
+    Array.isArray(pl.body) ? pl.body
+    : Array.isArray(ep.body_keys) ? ep.body_keys
+    : (ep.body_parsed && typeof ep.body_parsed === "object") ? Object.keys(ep.body_parsed) : [];
+  return { ...ep, method, url, params: q, body_keys: b };
+};
+
 /** === Stable key per endpoint SHAPE (method + url + params + body_keys) === */
 const shapeKey = (ep) => {
   const method = (ep.method || "GET").toUpperCase();
@@ -22,13 +36,11 @@ const guessFamily = (ep) => {
       (p) => pset.has(p)
     ) ||
     path.includes("redirect")
-  )
-    return "redirect";
+  ) return "redirect";
   if (
-    ["q", "search", "comment", "message", "content"].some((p) => pset.has(p)) &&
+    ["q", "search", "comment", "message", "content", "text", "title", "name"].some((p) => pset.has(p)) &&
     (path.endsWith(".html") || !path.includes("/api/"))
-  )
-    return "xss";
+  ) return "xss";
   return "sqli";
 };
 
@@ -44,7 +56,6 @@ const uiPriority = (ep) => {
 };
 
 /** Small helpers */
-const pct = (x) => (x * 100).toFixed(1) + "%";
 const cn = (...xs) => xs.filter(Boolean).join(" ");
 
 export default function CrawlAndFuzzPage() {
@@ -57,12 +68,14 @@ export default function CrawlAndFuzzPage() {
   const [filter, setFilter] = useState("");
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [familyFilter, setFamilyFilter] = useState("all"); // all | sqli | xss | redirect
+  const [fuzzBearer, setFuzzBearer] = useState(""); // optional bearer for core engine
 
   /** De-dup endpoints by shape; annotate with UI-only family/priority */
   const endpoints = useMemo(() => {
     const seen = new Set();
     const out = [];
-    for (const ep of endpointsRaw || []) {
+    for (const raw of endpointsRaw || []) {
+      const ep = normalizeEndpoint(raw);
       const k = shapeKey(ep);
       if (seen.has(k)) continue;
       seen.add(k);
@@ -89,9 +102,7 @@ export default function CrawlAndFuzzPage() {
         ep.url || "",
         ...(ep.params || []),
         ...(ep.body_keys || []),
-      ]
-        .join(" ")
-        .toLowerCase();
+      ].join(" ").toLowerCase();
       return hay.includes(q);
     });
   }, [endpoints, filter, familyFilter]);
@@ -110,8 +121,8 @@ export default function CrawlAndFuzzPage() {
   const onResults = ({ job_id, target_url, endpoints, captured_requests }) => {
     setJobId(job_id);
     setTargetUrl(target_url);
-    setEndpointsRaw(endpoints || []);
-    setCaptured(captured_requests || []);
+    setEndpointsRaw(Array.isArray(endpoints) ? endpoints : []);
+    setCaptured(Array.isArray(captured_requests) ? captured_requests : []);
     setSelectedKeys(new Set());
     setFuzzSummary(null);
   };
@@ -140,14 +151,14 @@ export default function CrawlAndFuzzPage() {
   };
   const clearSelection = () => setSelectedKeys(new Set());
 
-  /** Actions */
+  /** Actions (force core engine) */
   const runFuzzAll = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     setLoadingFuzz(true);
     try {
-      const data = await fuzzByJob(jobId); // backend defaults top_n/threshold
+      const data = await fuzzByJob(jobId, { engine: "core", bearer_token: fuzzBearer || undefined });
       setFuzzSummary(data);
-      toast.success("Fuzzed all endpoints");
+      toast.success("Fuzzed all endpoints (core engine)");
     } catch (e) {
       console.error(e);
       toast.error("Fuzz ALL failed");
@@ -170,9 +181,9 @@ export default function CrawlAndFuzzPage() {
           params,
           body_keys,
         }));
-      const data = await fuzzSelected(jobId, selection); // POST /fuzz/by_job/{job_id} with {selection}
+      const data = await fuzzSelected(jobId, selection, { engine: "core", bearer_token: fuzzBearer || undefined });
       setFuzzSummary(data);
-      toast.success(`Fuzzed ${selection.length} selected endpoint(s)`);
+      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (core engine)`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz Selected failed");
@@ -212,9 +223,9 @@ export default function CrawlAndFuzzPage() {
         "px-2 py-0.5 rounded text-xs",
         v >= 0.8 ? "bg-green-600 text-white" : v >= 0.5 ? "bg-amber-500 text-white" : "bg-gray-300 text-gray-900"
       )}
-      title={`confidence ${v.toFixed(2)}`}
+      title={`confidence ${Number(v || 0).toFixed(2)}`}
     >
-      {v.toFixed(2)}
+      {Number(v || 0).toFixed(2)}
     </span>
   );
 
@@ -234,7 +245,7 @@ export default function CrawlAndFuzzPage() {
     const bits = [];
     if (d.status_changed) bits.push("status");
     if (typeof d.len_delta === "number") bits.push(`Δlen ${d.len_delta}`);
-    if (typeof d.len_ratio === "number" && isFinite(d.len_ratio)) bits.push(`×${d.len_ratio.toFixed(2)}`);
+    if (typeof d.len_ratio === "number" && isFinite(d.len_ratio)) bits.push(`×${Number(d.len_ratio).toFixed(2)}`);
     return <span>{bits.join(" · ") || "—"}</span>;
   };
 
@@ -257,9 +268,16 @@ export default function CrawlAndFuzzPage() {
       <CrawlForm onJobReady={setJobId} onResults={onResults} />
 
       {jobId && (
-        <div className="text-sm text-gray-600">
-          <span className="font-mono">job_id:</span>{" "}
+        <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
+          <span className="font-mono">job_id:</span>
           <span className="font-mono">{jobId}</span>
+          <span className="ml-4 text-gray-500">Core engine uses cookies from crawl and optional bearer:</span>
+          <input
+            className="border p-1 rounded min-w-[260px]"
+            placeholder="Optional bearer token for fuzz (Authorization: Bearer ...)"
+            value={fuzzBearer}
+            onChange={(e)=>setFuzzBearer(e.target.value)}
+          />
         </div>
       )}
 
@@ -294,14 +312,14 @@ export default function CrawlAndFuzzPage() {
           onClick={runFuzzAll}
           disabled={!jobId || loadingFuzz}
         >
-          {loadingFuzz ? "Fuzzing…" : "Fuzz ALL"}
+          {loadingFuzz ? "Fuzzing…" : "Fuzz ALL (core)"}
         </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
           onClick={runFuzzSelected}
           disabled={!jobId || loadingFuzz || selectedKeys.size === 0}
         >
-          Fuzz Selected
+          Fuzz Selected (core)
         </button>
         <button
           className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60"
@@ -417,9 +435,13 @@ export default function CrawlAndFuzzPage() {
                 <div className="font-mono text-sm break-all">
                   {(r.method || "").toUpperCase()} {r.url}
                 </div>
-                {r.post_data ? (
+                {r.body_parsed ? (
                   <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
-                    {JSON.stringify(r.post_data, null, 2)}
+                    {JSON.stringify(r.body_parsed, null, 2)}
+                  </pre>
+                ) : r.post_data ? (
+                  <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
+                    {typeof r.post_data === "string" ? r.post_data : JSON.stringify(r.post_data, null, 2)}
                   </pre>
                 ) : null}
               </div>
@@ -452,7 +474,7 @@ export default function CrawlAndFuzzPage() {
                     <td className="p-2 font-mono">{(one.method || "").toUpperCase()}</td>
                     <td className="p-2 font-mono break-all">{one.url}</td>
                     <td className="p-2 font-mono">{one.param}</td>
-                    <td className="p-2"><FamilyBadge fam={one.family} /></td>
+                    <td className="p-2"><FamilyBadge fam={one.family || one.signals?.type} /></td>
                     <td className="p-2"><ConfBadge v={Number(one.confidence || 0)} /></td>
                     <td className="p-2"><DeltaCell d={one.delta} /></td>
                     <td className="p-2"><RedirectCell one={one} /></td>

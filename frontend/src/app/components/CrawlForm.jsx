@@ -32,6 +32,7 @@ function AuthFields({ mode, values, onChange }) {
         <input className="border p-2 rounded" placeholder="Username"
                value={values.username || ''} onChange={(e)=>onChange({ ...values, username: e.target.value })}/>
         <input className="border p-2 rounded" placeholder="Password"
+               type="password"
                value={values.password || ''} onChange={(e)=>onChange({ ...values, password: e.target.value })}/>
         <input className="border p-2 rounded" placeholder="Username selector (e.g. input[name=email])"
                value={values.username_selector || ''} onChange={(e)=>onChange({ ...values, username_selector: e.target.value })}/>
@@ -42,12 +43,27 @@ function AuthFields({ mode, values, onChange }) {
       </div>
     );
   }
+  if (mode === 'manual') {
+    return (
+      <div className="grid grid-cols-2 gap-2 w-full">
+        <input className="border p-2 rounded" placeholder="Login URL (optional)"
+               value={values.login_url || ''} onChange={(e)=>onChange({ ...values, login_url: e.target.value })}/>
+        <input className="border p-2 rounded" placeholder="Wait after login (ms, default 1500)"
+               type="number" min={0}
+               value={values.wait_after_ms ?? ''} onChange={(e)=>onChange({ ...values, wait_after_ms: Number(e.target.value) })}/>
+        <div className="col-span-2 text-xs text-gray-600">
+          Manual opens a headful browser window (if server allows). Use it to log in, then we capture the session.
+        </div>
+      </div>
+    );
+  }
   return null;
 }
 
 export default function CrawlForm({ onResults, onJobReady }) {
   const [url, setUrl] = useState('');
-  const [authMode, setAuthMode] = useState('none'); // none|cookie|bearer|form
+  const [maxDepth, setMaxDepth] = useState(2);
+  const [authMode, setAuthMode] = useState('none'); // none|cookie|bearer|form|manual
   const [authValues, setAuthValues] = useState({});
   const [loading, setLoading] = useState(false);
 
@@ -73,23 +89,27 @@ export default function CrawlForm({ onResults, onJobReady }) {
         password: authValues.password || '',
         username_selector: authValues.username_selector || '',
         password_selector: authValues.password_selector || '',
-        submit_selector: authValues.submit_selector || ''
+        submit_selector: authValues.submit_selector || '',
+        wait_after_ms: authValues.wait_after_ms ?? 1500
+      };
+      else if (authMode === 'manual') auth = {
+        mode: 'manual',
+        login_url: authValues.login_url || '',
+        wait_after_ms: authValues.wait_after_ms ?? 1500
       };
       else auth = { mode: 'none' };
 
-      // 3) Trigger crawl
-      await crawlTarget({ job_id, target_url, auth });
+      // 3) Trigger crawl (pass max_depth!)
+      await crawlTarget({ job_id, target_url, auth, max_depth: Number(maxDepth) || 2 });
       toast.info('Crawl started');
 
       // 4) Poll status
       let status = 'running';
-      while (status === 'running') {
+      while (status === 'running' || status === 'starting') {
         await new Promise(r => setTimeout(r, 1200));
         status = (await getCrawlStatus(job_id)).status || 'unknown';
       }
-      if (status !== 'completed') {
-        toast.warn(`Crawl ended with status: ${status}`);
-      }
+      if (status !== 'completed') toast.warn(`Crawl ended with status: ${status}`);
 
       // 5) Fetch result
       const res = await getCrawlResult(job_id);
@@ -110,20 +130,33 @@ export default function CrawlForm({ onResults, onJobReady }) {
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-3">
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         <input
           className="border p-2 rounded flex-1"
           placeholder="http://localhost:8082"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
         />
-        <select className="border p-2 rounded"
-                value={authMode}
-                onChange={(e)=>{ setAuthMode(e.target.value); setAuthValues({}); }}>
+        <input
+          className="border p-2 rounded w-28"
+          type="number"
+          min={0}
+          max={5}
+          title="Max crawl depth"
+          value={maxDepth}
+          onChange={(e)=>setMaxDepth(e.target.value)}
+        />
+        <select
+          className="border p-2 rounded"
+          value={authMode}
+          onChange={(e)=>{ setAuthMode(e.target.value); setAuthValues({}); }}
+          title="Authentication mode"
+        >
           <option value="none">No auth</option>
           <option value="cookie">Cookie</option>
           <option value="bearer">Bearer</option>
           <option value="form">Form login</option>
+          <option value="manual">Manual (headful)</option>
         </select>
         <button className="bg-blue-600 text-white px-4 py-2 rounded" disabled={loading}>
           {loading ? 'Crawling…' : 'Start Crawl'}

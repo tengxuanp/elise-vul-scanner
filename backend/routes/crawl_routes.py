@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import json
 import threading
-import inspect
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Literal
+from typing import Dict, Any, List, Optional, Literal, Tuple
 from urllib.parse import urlparse, parse_qs, parse_qsl
 
 from fastapi import APIRouter, HTTPException
@@ -26,7 +25,7 @@ JOBS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Track status per job (not a global mutex)
-_job_status: Dict[str, str] = {}  # job_id -> "running|completed|error"
+_job_status: Dict[str, str] = {}  # job_id -> "starting|running|completed|error"
 
 # -------------------- models --------------------
 
@@ -47,12 +46,47 @@ class AuthConfig(BaseModel):
 class CrawlRequest(BaseModel):
     job_id: str
     target_url: str
+    max_depth: int = 2
     auth: Optional[AuthConfig] = None
 
 
 # -------------------- helpers --------------------
 
-def _infer_param_locs(
+def _map_param_locs_from_crawler(req: Dict[str, Any]) -> Optional[Dict[str, List[str]]]:
+    """
+    If the crawler provided canonical param_locs (query/body) and (optionally) content_type,
+    map them into the DB's schema (query/form/json). Return None if not available.
+    """
+    pl = req.get("param_locs")
+    if not isinstance(pl, dict):
+        return None
+    query_keys: List[str] = sorted(set((pl.get("query") or [])))
+    body_keys: List[str] = sorted(set((pl.get("body") or [])))
+    if not query_keys and not body_keys:
+        return {"query": [], "form": [], "json": []}
+
+    # Prefer explicit content_type; fallback to headers or body_type
+    ct = (req.get("content_type") or "").lower()
+    if not ct:
+        hdrs = req.get("headers") or {}
+        ct = (hdrs.get("content-type") or hdrs.get("Content-Type") or "").lower()
+    if not ct:
+        ct = (req.get("body_type") or "").lower()  # "json" | "form" | "" -> map below
+
+    form_keys: List[str] = []
+    json_keys: List[str] = []
+
+    if "json" in ct:
+        json_keys = body_keys
+    elif "x-www-form-urlencoded" in ct or "form" in ct or (ct == "" and body_keys):
+        form_keys = body_keys
+    else:
+        # unknown → treat as form by default (safer for DB/UI)
+        form_keys = body_keys
+
+    return {"query": query_keys, "form": form_keys, "json": json_keys}
+
+def _infer_param_locs_fallback(
     method: str,
     url: str,
     headers: Optional[Dict[str, str]] = None,
@@ -91,15 +125,26 @@ def _infer_param_locs(
     # prune empties
     return {k: v for k, v in out.items() if v}
 
+def _derive_param_locs(req: Dict[str, Any]) -> Dict[str, List[str]]:
+    """
+    Prefer the crawler's canonical param_locs mapping; otherwise infer heuristically.
+    """
+    mapped = _map_param_locs_from_crawler(req)
+    if mapped is not None:
+        return mapped
+    return _infer_param_locs_fallback(
+        method=(req.get("method") or "GET"),
+        url=(req.get("url") or ""),
+        headers=(req.get("headers") or {}),
+        post_data=req.get("post_data"),
+    )
+
 def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
     """Upsert Endpoint and create planned TestCase rows per param for this job."""
     method = (req.get("method") or "GET").upper()
     url = req.get("url") or ""
-    headers: Dict[str, str] = req.get("headers") or {}
-    post_data = req.get("post_data")
 
-    # prefer explicit param_locs if provided by crawler, else infer
-    param_locs: Dict[str, List[str]] = req.get("param_locs") or _infer_param_locs(method, url, headers, post_data)
+    param_locs: Dict[str, List[str]] = _derive_param_locs(req)
 
     with SessionLocal() as db:
         ep = (
@@ -112,7 +157,7 @@ def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
             db.add(ep)
             db.flush()
         else:
-            # merge newly inferred params into existing record
+            # merge newly derived params into existing record
             merged = dict(ep.param_locs or {})
             for k, v in (param_locs or {}).items():
                 merged.setdefault(k, [])
@@ -156,6 +201,19 @@ def _write_job_crawl(job_id: str, payload: Dict[str, Any]) -> Path:
     out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return out
 
+def _write_status(job_id: str, phase: str, extra: Optional[Dict[str, Any]] = None) -> None:
+    _job_status[job_id] = phase
+    job_dir = JOBS_DIR / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    p = job_dir / "status_crawl.json"
+    blob = {"phase": phase}
+    if extra:
+        blob.update(extra)
+    try:
+        p.write_text(json.dumps(blob, indent=2), "utf-8")
+    except Exception:
+        pass
+
 
 # -------------------- routes --------------------
 
@@ -169,13 +227,14 @@ def start_crawl(body: CrawlRequest):
     job_id = body.job_id
     target = body.target_url
     auth  = body.auth.dict() if body.auth else None
+    max_depth = int(body.max_depth or 2)
 
     if _job_status.get(job_id) == "running":
         raise HTTPException(status_code=400, detail=f"Job {job_id} crawl already running.")
 
-    _job_status[job_id] = "running"
+    _write_status(job_id, "starting")
 
-    # set job phase -> discovery
+    # set job phase -> discovery (best-effort)
     try:
         with SessionLocal() as db:
             row = db.query(ScanJob).filter_by(job_id=job_id).first()
@@ -187,26 +246,21 @@ def start_crawl(body: CrawlRequest):
 
     def run_crawl():
         try:
-            # Robust call: pass auth/job_dir only if crawler supports them
-            kwargs: Dict[str, Any] = {}
-            sig = inspect.signature(crawl_site)
-            if "auth" in sig.parameters and auth:
-                # pass job_dir to let crawler persist storage_state.json if it wishes
-                kwargs["auth"] = {**auth, "job_dir": str(JOBS_DIR / job_id)}
-            if "job_dir" in sig.parameters:
-                kwargs["job_dir"] = str(JOBS_DIR / job_id)
+            _write_status(job_id, "running")
 
-            result = crawl_site(target, **kwargs)  # type: ignore[arg-type]
-            # Support (endpoints, captured_requests) or (endpoints, captured_requests, extras)
-            if isinstance(result, tuple) and len(result) >= 2:
-                endpoints, captured_requests = result[0], result[1]
-            else:
-                raise RuntimeError("crawl_site returned unexpected result")
+            # Run crawler with proper kwargs
+            endpoints, captured_requests = crawl_site(
+                target_url=target,
+                max_depth=max_depth,
+                auth=auth,
+                job_dir=str(JOBS_DIR / job_id),
+            )
 
             # Ensure minimal fields for endpoints
             for ep in endpoints:
                 ep.setdefault("method", "GET")
-                ep.setdefault("param_locs", {})  # builder may fill this later
+                # crawler gives param_locs {"query","body"}; leave as-is here, we map when persisting to DB
+                ep.setdefault("param_locs", {})
 
             # Persist raw crawl (job-scoped)
             blob = {
@@ -233,21 +287,21 @@ def start_crawl(body: CrawlRequest):
                 # don't let categorization failure kill crawl
                 pass
 
-            # Persist plans from forms/endpoints
+            # Persist plans from endpoints
             for ep in endpoints:
                 try:
                     _persist_endpoint_and_plan(job_id, ep)
                 except Exception as e:
                     print(f"[WARN] persist endpoint failed: {e}")
 
-            # Persist plans from concrete captured requests (richer: headers/body_type/body_parsed)
+            # Persist plans from captured requests (richer: headers/body_type/body_parsed)
             for req in captured_requests or []:
                 try:
                     _persist_endpoint_and_plan(job_id, req)
                 except Exception as e:
                     print(f"[WARN] persist request failed: {e}")
 
-            _job_status[job_id] = "completed"
+            _write_status(job_id, "completed")
 
             # advance phase → fuzzing (next step in pipeline)
             try:
@@ -260,16 +314,24 @@ def start_crawl(body: CrawlRequest):
                 pass
 
         except Exception as e:
-            _job_status[job_id] = "error"
+            _write_status(job_id, "error", {"error": str(e)})
             print(f"[ERROR] Crawl failed for {job_id}: {e}")
 
     threading.Thread(target=run_crawl, daemon=True).start()
-    return {"status": "started", "job_id": job_id, "target_url": target, "auth_mode": (auth["mode"] if auth else "none")}
+    return {"status": "started", "job_id": job_id, "target_url": target, "auth_mode": (auth["mode"] if auth else "none"), "max_depth": max_depth}
 
 
 @router.get("/crawl/status/{job_id}")
 def crawl_status(job_id: str):
     status = _job_status.get(job_id) or "unknown"
+    # Prefer persisted status if present
+    p = JOBS_DIR / job_id / "status_crawl.json"
+    if p.exists():
+        try:
+            blob = json.loads(p.read_text("utf-8"))
+            status = blob.get("phase", status)
+        except Exception:
+            pass
     return {"job_id": job_id, "status": status}
 
 

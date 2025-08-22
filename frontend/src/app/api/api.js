@@ -6,7 +6,8 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api'
 
 export const api = axios.create({
   baseURL: API_BASE,
-  timeout: 0, // don't fight long scans with client timeouts
+  // Don't fight long scans with client timeouts
+  timeout: 0,
 });
 
 // Global response interceptor (cleaner error logs)
@@ -40,12 +41,63 @@ export const getCategorizedEndpoints = async (target_url) =>
   (await api.get('/categorized-endpoints', { params: { target_url } })).data;
 
 /* ===================== Fuzzing ===================== */
-export const fuzzByJob = async (job_id) =>
-  (await api.post(`/fuzz/by_job/${job_id}`)).data; // ffuf summary/evidence
+/**
+ * Run fuzzing for a job.
+ * opts = {
+ *   engine: 'core' | 'ffuf' | 'hybrid' (default 'core'),
+ *   selection: [{ method, url, params?, body_keys? }] | null,
+ *   bearerToken: string | null,           // passed to backend; auto-prefixed 'Bearer ' if missing
+ *   topN: number (ffuf only),
+ *   threshold: number (ffuf only)
+ * }
+ */
+export const fuzzByJob = async (
+  job_id,
+  opts = {}
+) => {
+  const {
+    engine = 'core',
+    selection = null,
+    bearerToken = null,
+    topN = 3,
+    threshold = 0.2,
+  } = opts;
 
-// Send only chosen endpoint shapes to the backend
-export const fuzzSelected = async (job_id, selection /* array of {method,url,params?,body_keys?} */) =>
-  (await api.post(`/fuzz/by_job/${job_id}`, { selection })).data;
+  const body = {
+    engine,
+    selection,
+    top_n: topN,
+    threshold,
+  };
+
+  if (bearerToken) body.bearer_token = bearerToken;
+
+  return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
+};
+
+// Convenience: send only chosen endpoint shapes to the backend (defaults to core engine)
+export const fuzzSelected = async (
+  job_id,
+  selection,              // array of { method, url, params?, body_keys? }
+  opts = {}               // same shape as fuzzByJob opts (you can pass bearerToken/engine here)
+) => {
+  const {
+    engine = 'core',
+    bearerToken = null,
+    topN = 3,
+    threshold = 0.2,
+  } = opts;
+
+  const body = {
+    engine,
+    selection,
+    top_n: topN,
+    threshold,
+  };
+  if (bearerToken) body.bearer_token = bearerToken;
+
+  return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
+};
 
 // If you expose a pollable results route per job, keep this. If not, remove it.
 export const getFuzzResultByJob = async (job_id) =>
@@ -73,6 +125,14 @@ export const setAuthHeader = (key, value) => {
   else api.defaults.headers.common[key] = value;
 };
 
+// Convenience for UI: normalize a raw token into a proper Authorization header
+export const setBearerAuth = (token) => {
+  if (!token) return setAuthHeader('Authorization', undefined);
+  const trimmed = token.trim();
+  const val = trimmed.toLowerCase().startsWith('bearer ') ? trimmed : `Bearer ${trimmed}`;
+  setAuthHeader('Authorization', val);
+};
+
 export default {
   api,
   startJob,
@@ -81,10 +141,12 @@ export default {
   getCrawlResult,
   getCategorizedEndpoints,
   fuzzByJob,
+  fuzzSelected,
   getFuzzResultByJob,
   startProbe,
   getRecommendations,
   exploitTarget,
   getReport,
   setAuthHeader,
+  setBearerAuth,
 };
