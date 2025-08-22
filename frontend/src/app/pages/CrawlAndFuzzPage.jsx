@@ -44,6 +44,19 @@ const guessFamily = (ep) => {
   return "sqli";
 };
 
+/** Infer family from signals if available (preferred over path/param guess) */
+const familyFromSignals = (sig) => {
+  const s = sig || {};
+  const redir = s.open_redirect || {};
+  const refl = s.reflection || {};
+  if (redir.open_redirect) return "redirect";
+  if (refl.raw || refl.js_context) return "xss";
+  if (s.sql_error === true || s.type === "sqli") return "sqli";
+  if ((s.login || {}).login_success) return "sqli"; // likely SQLi-driven bypass
+  if (typeof s.type === "string" && ["redirect","xss","sqli"].includes(s.type)) return s.type;
+  return null;
+};
+
 /** Lightweight priority score for UI sort/selection (server has ML; this is a hint) */
 const uiPriority = (ep) => {
   const params = (ep.params || []).map((x) => x.toLowerCase());
@@ -57,6 +70,67 @@ const uiPriority = (ep) => {
 
 /** Small helpers */
 const cn = (...xs) => xs.filter(Boolean).join(" ");
+
+/** Derive a stable "row" shape from heterogeneous fuzzer outputs */
+const normalizeResultRow = (one = {}) => {
+  const req = one.request || {};
+  const sig = one.signals || {};
+  const method = (one.method || req.method || "GET").toUpperCase();
+  const url = one.url || req.url || "";
+  const param = one.param || one.target_param || req.param || "";
+  const confidence = Number(one.confidence || 0);
+  // deltas (core engine usually returns these)
+  const statusDelta = typeof one.status_delta === "number" ? one.status_delta : undefined;
+  const lenDelta = typeof one.len_delta === "number" ? one.len_delta : undefined;
+  const msDelta = typeof one.latency_ms_delta === "number" ? one.latency_ms_delta : undefined;
+
+  // redirect bits
+  const redir = sig.open_redirect || {};
+  const location = redir.location || (one.response_headers || {}).location || (sig.verify || {}).location;
+  const external = redir.open_redirect || sig.external_redirect || false;
+  const locationHost = redir.location_host || (sig.redirect_host) || null;
+
+  // login bits
+  const login = sig.login || {};
+  const loginSuccess = !!login.login_success;
+  const tokenPresent = !!login.token_present;
+
+  // xss bits
+  const refl = sig.reflection || {};
+  const xssReflected = !!(refl.raw || refl.js_context);
+
+  // sqli bits
+  const sqlErr = sig.sql_error === true;
+  const verify = sig.verify || {};
+
+  // payload
+  const payload = one.payload || (req.payload) || "";
+
+  // family
+  const fam = familyFromSignals(sig) || one.family || (one.signals && one.signals.type) || null;
+
+  return {
+    method, url, param, confidence, payload,
+    family: fam,
+    delta: {
+      status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
+      len_delta: lenDelta,
+      len_ratio: (typeof lenDelta === "number" && typeof one.baseline_len === "number" && one.baseline_len > 0)
+        ? (one.baseline_len + lenDelta) / one.baseline_len : undefined,
+      ms_delta: msDelta,
+    },
+    signals: {
+      sql_error: sqlErr,
+      xss_reflected: xssReflected,
+      login_success: loginSuccess,
+      token_present: tokenPresent,
+      external_redirect: !!external,
+      location,
+      location_host: locationHost,
+      verify,
+    },
+  };
+};
 
 export default function CrawlAndFuzzPage() {
   const [jobId, setJobId] = useState(null);
@@ -211,11 +285,15 @@ export default function CrawlAndFuzzPage() {
   };
 
   /** Render helpers for fuzz summary */
-  const results = useMemo(() => {
-    // API may return { results: [...] } or { job_id, results: [...] }
-    const r = (fuzzSummary && (fuzzSummary.results || fuzzSummary)) || [];
-    return Array.isArray(r) ? r : [];
+  const rawResults = useMemo(() => {
+    // API may return { results: [...] } or { job_id, results: [...] } or an array
+    if (!fuzzSummary) return [];
+    if (Array.isArray(fuzzSummary)) return fuzzSummary;
+    if (Array.isArray(fuzzSummary.results)) return fuzzSummary.results;
+    return [];
   }, [fuzzSummary]);
+
+  const results = useMemo(() => rawResults.map(normalizeResultRow), [rawResults]);
 
   const ConfBadge = ({ v }) => (
     <span
@@ -245,20 +323,52 @@ export default function CrawlAndFuzzPage() {
     const bits = [];
     if (d.status_changed) bits.push("status");
     if (typeof d.len_delta === "number") bits.push(`Δlen ${d.len_delta}`);
+    if (typeof d.ms_delta === "number") bits.push(`Δms ${d.ms_delta}`);
     if (typeof d.len_ratio === "number" && isFinite(d.len_ratio)) bits.push(`×${Number(d.len_ratio).toFixed(2)}`);
-    return <span>{bits.join(" · ") || "—"}</span>;
+    return bits.length ? <span>{bits.join(" · ")}</span> : <span className="text-gray-400">—</span>;
   };
 
-  const RedirectCell = ({ one }) => {
-    const ext = one?.signals?.external_redirect;
-    const loc = one?.verify?.location;
-    if (!ext) return <span className="text-gray-400">—</span>;
+  const RedirectCell = ({ row }) => {
+    const ext = row?.signals?.external_redirect;
+    const loc = row?.signals?.location;
+    const host = row?.signals?.location_host;
+    if (!ext && !loc) return <span className="text-gray-400">—</span>;
     return (
       <span className="inline-flex items-center gap-2">
-        <span className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-900">external</span>
-        <code className="text-xs break-all">{loc || ""}</code>
+        {ext ? <span className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-900">external</span> : null}
+        {host ? <span className="px-2 py-0.5 rounded text-xs bg-purple-50 text-purple-900">{host}</span> : null}
+        {loc ? <code className="text-xs break-all">{loc}</code> : null}
       </span>
     );
+  };
+
+  const SqlCell = ({ row }) => {
+    const s = row?.signals || {};
+    if (s.sql_error) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">sql error</span>;
+    const ms = row?.delta?.ms_delta;
+    const len = row?.delta?.len_delta;
+    if (typeof ms === "number" && ms >= 1500) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">timing Δ{ms}ms</span>;
+    if (typeof len === "number" && Math.abs(len) >= 200) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">boolean Δlen {len}</span>;
+    return <span className="text-gray-400">—</span>;
+  };
+
+  const XssCell = ({ row }) => {
+    return row?.signals?.xss_reflected
+      ? <span className="px-2 py-0.5 rounded text-xs bg-pink-100 text-pink-900">reflected</span>
+      : <span className="text-gray-400">—</span>;
+  };
+
+  const LoginCell = ({ row }) => {
+    const s = row?.signals || {};
+    if (s.login_success || s.token_present) {
+      return (
+        <span className="inline-flex items-center gap-2">
+          {s.login_success ? <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-900">bypass</span> : null}
+          {s.token_present ? <span className="px-2 py-0.5 rounded text-xs bg-green-50 text-green-900">token</span> : null}
+        </span>
+      );
+    }
+    return <span className="text-gray-400">—</span>;
   };
 
   return (
@@ -463,23 +573,29 @@ export default function CrawlAndFuzzPage() {
                   <th className="p-2">Param</th>
                   <th className="p-2">Family</th>
                   <th className="p-2">Confidence</th>
-                  <th className="p-2">Delta</th>
+                  <th className="p-2">Δ</th>
+                  <th className="p-2">SQLi</th>
+                  <th className="p-2">XSS</th>
+                  <th className="p-2">Login</th>
                   <th className="p-2">Redirect</th>
                   <th className="p-2">Payload</th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((one, i) => (
-                  <tr key={`${one.method}-${one.url}-${one.param}-${i}`} className="border-t align-top">
-                    <td className="p-2 font-mono">{(one.method || "").toUpperCase()}</td>
-                    <td className="p-2 font-mono break-all">{one.url}</td>
-                    <td className="p-2 font-mono">{one.param}</td>
-                    <td className="p-2"><FamilyBadge fam={one.family || one.signals?.type} /></td>
-                    <td className="p-2"><ConfBadge v={Number(one.confidence || 0)} /></td>
-                    <td className="p-2"><DeltaCell d={one.delta} /></td>
-                    <td className="p-2"><RedirectCell one={one} /></td>
+                {results.map((row, i) => (
+                  <tr key={`${row.method}-${row.url}-${row.param}-${i}`} className="border-t align-top">
+                    <td className="p-2 font-mono">{row.method}</td>
+                    <td className="p-2 font-mono break-all">{row.url}</td>
+                    <td className="p-2 font-mono">{row.param}</td>
+                    <td className="p-2"><FamilyBadge fam={row.family || "sqli"} /></td>
+                    <td className="p-2"><ConfBadge v={Number(row.confidence || 0)} /></td>
+                    <td className="p-2"><DeltaCell d={row.delta} /></td>
+                    <td className="p-2"><SqlCell row={row} /></td>
+                    <td className="p-2"><XssCell row={row} /></td>
+                    <td className="p-2"><LoginCell row={row} /></td>
+                    <td className="p-2"><RedirectCell row={row} /></td>
                     <td className="p-2">
-                      <code className="text-xs break-all">{one.payload}</code>
+                      <code className="text-xs break-all">{row.payload || ""}</code>
                     </td>
                   </tr>
                 ))}
