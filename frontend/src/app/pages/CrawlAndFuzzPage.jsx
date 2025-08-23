@@ -4,17 +4,37 @@ import CrawlForm from "../components/CrawlForm";
 import { fuzzByJob, fuzzSelected, getReport } from "../api/api";
 import { toast } from "react-toastify";
 
+/** === helpers === */
+const isNonEmptyArray = (v) => Array.isArray(v) && v.length > 0;
+const cn = (...xs) => xs.filter(Boolean).join(" ");
+
 /** === Normalize raw endpoint into a consistent shape for UI/selection === */
 const normalizeEndpoint = (ep) => {
   const url = ep.url || "";
   const method = (ep.method || "GET").toUpperCase();
   const pl = ep.param_locs || {};
-  // Prefer canonical param_locs
-  const q = Array.isArray(pl.query) ? pl.query : Array.isArray(ep.params) ? ep.params : [];
+
+  // Infer query keys from URL (works for ?q= blank values too)
+  let qFromUrl = [];
+  try {
+    const u = new URL(url);
+    qFromUrl = Array.from(new Set([...u.searchParams.keys()])).filter(Boolean);
+  } catch {}
+
+  // Prefer non-empty param_locs.query, else legacy ep.params, else URL inference
+  const q =
+    (isNonEmptyArray(pl.query) && pl.query) ||
+    (isNonEmptyArray(ep.params) && ep.params) ||
+    qFromUrl;
+
+  // Prefer non-empty param_locs.body, else legacy body_keys, else from parsed body
   const b =
-    Array.isArray(pl.body) ? pl.body
-    : Array.isArray(ep.body_keys) ? ep.body_keys
-    : (ep.body_parsed && typeof ep.body_parsed === "object") ? Object.keys(ep.body_parsed) : [];
+    (isNonEmptyArray(pl.body) && pl.body) ||
+    (isNonEmptyArray(ep.body_keys) && ep.body_keys) ||
+    (ep.body_parsed && typeof ep.body_parsed === "object"
+      ? Object.keys(ep.body_parsed)
+      : []);
+
   return { ...ep, method, url, params: q, body_keys: b };
 };
 
@@ -22,25 +42,35 @@ const normalizeEndpoint = (ep) => {
 const shapeKey = (ep) => {
   const method = (ep.method || "GET").toUpperCase();
   const url = ep.url || "";
-  const p = ep.params?.length ? [...ep.params].sort().join(",") : "_";
-  const b = ep.body_keys?.length ? [...ep.body_keys].sort().join(",") : "_";
+  const p = isNonEmptyArray(ep.params) ? [...ep.params].sort().join(",") : "_";
+  const b = isNonEmptyArray(ep.body_keys) ? [...ep.body_keys].sort().join(",") : "_";
   return `${method} ${url} |p:${p}|b:${b}`;
 };
 
 /** Family guess for UI-only grouping (backend has its own router) */
 const guessFamily = (ep) => {
-  const pset = new Set((ep.params || []).map((s) => s.toLowerCase()));
+  const pset = new Set((ep.params || []).map((s) => String(s).toLowerCase()));
   const path = (ep.url || "").toLowerCase();
+
   if (
     ["to", "return_to", "redirect", "url", "next", "callback", "continue"].some(
       (p) => pset.has(p)
     ) ||
     path.includes("redirect")
-  ) return "redirect";
+  )
+    return "redirect";
+
+  if (["q", "query", "search"].some((p) => pset.has(p))) {
+    return path.includes("/api/") || path.includes("/rest/") ? "sqli" : "xss";
+  }
+
   if (
-    ["q", "search", "comment", "message", "content", "text", "title", "name"].some((p) => pset.has(p)) &&
-    (path.endsWith(".html") || !path.includes("/api/"))
-  ) return "xss";
+    ["comment", "message", "content", "text", "title", "name"].some((p) =>
+      pset.has(p)
+    )
+  )
+    return "xss";
+
   return "sqli";
 };
 
@@ -52,8 +82,9 @@ const familyFromSignals = (sig) => {
   if (redir.open_redirect) return "redirect";
   if (refl.raw || refl.js_context) return "xss";
   if (s.sql_error === true || s.type === "sqli") return "sqli";
-  if ((s.login || {}).login_success) return "sqli"; // likely SQLi-driven bypass
-  if (typeof s.type === "string" && ["redirect","xss","sqli"].includes(s.type)) return s.type;
+  if ((s.login || {}).login_success) return "sqli";
+  if (typeof s.type === "string" && ["redirect", "xss", "sqli"].includes(s.type))
+    return s.type;
   return null;
 };
 
@@ -62,14 +93,30 @@ const uiPriority = (ep) => {
   const params = (ep.params || []).map((x) => x.toLowerCase());
   const url = (ep.url || "").toLowerCase();
   let s = 0;
-  if (params.some((p) => ["id", "uid", "pid", "productid", "user", "q", "search", "query", "to", "return_to", "redirect", "url"].includes(p))) s += 0.6;
-  if (/(^|\/)(login|auth|admin|search|redirect|report|download)(\/|$)/.test(url)) s += 0.2;
+  if (
+    params.some((p) =>
+      [
+        "id",
+        "uid",
+        "pid",
+        "productid",
+        "user",
+        "q",
+        "search",
+        "query",
+        "to",
+        "return_to",
+        "redirect",
+        "url",
+      ].includes(p)
+    )
+  )
+    s += 0.6;
+  if (/(^|\/)(login|auth|admin|search|redirect|report|download)(\/|$)/.test(url))
+    s += 0.2;
   if ((ep.method || "GET").toUpperCase() === "GET") s += 0.1;
   return Math.min(1, s);
 };
-
-/** Small helpers */
-const cn = (...xs) => xs.filter(Boolean).join(" ");
 
 /** Derive a stable "row" shape from heterogeneous fuzzer outputs */
 const normalizeResultRow = (one = {}) => {
@@ -79,44 +126,53 @@ const normalizeResultRow = (one = {}) => {
   const url = one.url || req.url || "";
   const param = one.param || one.target_param || req.param || "";
   const confidence = Number(one.confidence || 0);
-  // deltas (core engine usually returns these)
-  const statusDelta = typeof one.status_delta === "number" ? one.status_delta : undefined;
+
+  const statusDelta =
+    typeof one.status_delta === "number" ? one.status_delta : undefined;
   const lenDelta = typeof one.len_delta === "number" ? one.len_delta : undefined;
-  const msDelta = typeof one.latency_ms_delta === "number" ? one.latency_ms_delta : undefined;
+  const msDelta =
+    typeof one.latency_ms_delta === "number" ? one.latency_ms_delta : undefined;
 
-  // redirect bits
   const redir = sig.open_redirect || {};
-  const location = redir.location || (one.response_headers || {}).location || (sig.verify || {}).location;
+  const location =
+    redir.location ||
+    (one.response_headers || {}).location ||
+    (sig.verify || {}).location;
   const external = redir.open_redirect || sig.external_redirect || false;
-  const locationHost = redir.location_host || (sig.redirect_host) || null;
+  const locationHost = redir.location_host || sig.redirect_host || null;
 
-  // login bits
   const login = sig.login || {};
   const loginSuccess = !!login.login_success;
   const tokenPresent = !!login.token_present;
 
-  // xss bits
   const refl = sig.reflection || {};
   const xssReflected = !!(refl.raw || refl.js_context);
 
-  // sqli bits
   const sqlErr = sig.sql_error === true;
   const verify = sig.verify || {};
 
-  // payload
-  const payload = one.payload || (req.payload) || "";
+  const payload = one.payload || req.payload || "";
 
-  // family
-  const fam = familyFromSignals(sig) || one.family || (one.signals && one.signals.type) || null;
+  const fam =
+    familyFromSignals(sig) || one.family || (one.signals && one.signals.type) || null;
 
   return {
-    method, url, param, confidence, payload,
+    method,
+    url,
+    param,
+    confidence,
+    payload,
     family: fam,
     delta: {
-      status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
+      status_changed:
+        typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
       len_delta: lenDelta,
-      len_ratio: (typeof lenDelta === "number" && typeof one.baseline_len === "number" && one.baseline_len > 0)
-        ? (one.baseline_len + lenDelta) / one.baseline_len : undefined,
+      len_ratio:
+        typeof lenDelta === "number" &&
+        typeof one.baseline_len === "number" &&
+        one.baseline_len > 0
+          ? (one.baseline_len + lenDelta) / one.baseline_len
+          : undefined,
       ms_delta: msDelta,
     },
     signals: {
@@ -156,12 +212,16 @@ export default function CrawlAndFuzzPage() {
       out.push({
         ...ep,
         _shape: k,
-        _family: guessFamily(ep),
+        _family: familyFromSignals(raw?.signals) || guessFamily(ep),
         _priority: uiPriority(ep),
       });
     }
-    // sort by priority (desc) then method/url for stability
-    out.sort((a, b) => (b._priority || 0) - (a._priority || 0) || String(a.method).localeCompare(String(b.method)) || String(a.url).localeCompare(String(b.url)));
+    out.sort(
+      (a, b) =>
+        (b._priority || 0) - (a._priority || 0) ||
+        String(a.method).localeCompare(String(b.method)) ||
+        String(a.url).localeCompare(String(b.url))
+    );
     return out;
   }, [endpointsRaw]);
 
@@ -176,7 +236,9 @@ export default function CrawlAndFuzzPage() {
         ep.url || "",
         ...(ep.params || []),
         ...(ep.body_keys || []),
-      ].join(" ").toLowerCase();
+      ]
+        .join(" ")
+        .toLowerCase();
       return hay.includes(q);
     });
   }, [endpoints, filter, familyFilter]);
@@ -220,7 +282,9 @@ export default function CrawlAndFuzzPage() {
   };
   const selectFamilyVisible = (fam) => {
     const next = new Set(selectedKeys);
-    filtered.filter((ep) => ep._family === fam).forEach((ep) => next.add(ep._shape));
+    filtered
+      .filter((ep) => ep._family === fam)
+      .forEach((ep) => next.add(ep._shape));
     setSelectedKeys(next);
   };
   const clearSelection = () => setSelectedKeys(new Set());
@@ -230,7 +294,10 @@ export default function CrawlAndFuzzPage() {
     if (!jobId) return toast.error("No job. Crawl first.");
     setLoadingFuzz(true);
     try {
-      const data = await fuzzByJob(jobId, { engine: "core", bearer_token: fuzzBearer || undefined });
+      const data = await fuzzByJob(jobId, {
+        engine: "core",
+        bearer_token: fuzzBearer || undefined,
+      });
       setFuzzSummary(data);
       toast.success("Fuzzed all endpoints (core engine)");
     } catch (e) {
@@ -247,7 +314,7 @@ export default function CrawlAndFuzzPage() {
     setLoadingFuzz(true);
     try {
       const lookup = new Set(selectedKeys);
-      const selection = endpoints
+      const baseSelection = endpoints
         .filter((ep) => lookup.has(ep._shape))
         .map(({ method, url, params = [], body_keys = [] }) => ({
           method,
@@ -255,9 +322,36 @@ export default function CrawlAndFuzzPage() {
           params,
           body_keys,
         }));
-      const data = await fuzzSelected(jobId, selection, { engine: "core", bearer_token: fuzzBearer || undefined });
+
+      // Pre-send inference: if params/body are empty, try to infer from URL/body again
+      const selection = baseSelection.map((item) => {
+        let params = item.params || [];
+        if (!isNonEmptyArray(params) && item.url && item.url.includes("?")) {
+          try {
+            const u = new URL(item.url);
+            params = Array.from(new Set([...u.searchParams.keys()])).filter(Boolean);
+          } catch {}
+        }
+        return { ...item, params };
+      });
+
+      const allEmpty = selection.every(
+        (s) =>
+          (!isNonEmptyArray(s.params)) &&
+          (!isNonEmptyArray(s.body_keys))
+      );
+      if (allEmpty) {
+        toast.warn("Selected endpoints have no params/body keys to fuzz.");
+      }
+
+      const data = await fuzzSelected(jobId, selection, {
+        engine: "core",
+        bearer_token: fuzzBearer || undefined,
+      });
       setFuzzSummary(data);
-      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (core engine)`);
+      toast.success(
+        `Fuzzed ${selection.length} selected endpoint(s) (core engine)`
+      );
     } catch (e) {
       console.error(e);
       toast.error("Fuzz Selected failed");
@@ -286,7 +380,6 @@ export default function CrawlAndFuzzPage() {
 
   /** Render helpers for fuzz summary */
   const rawResults = useMemo(() => {
-    // API may return { results: [...] } or { job_id, results: [...] } or an array
     if (!fuzzSummary) return [];
     if (Array.isArray(fuzzSummary)) return fuzzSummary;
     if (Array.isArray(fuzzSummary.results)) return fuzzSummary.results;
@@ -386,7 +479,7 @@ export default function CrawlAndFuzzPage() {
             className="border p-1 rounded min-w-[260px]"
             placeholder="Optional bearer token for fuzz (Authorization: Bearer ...)"
             value={fuzzBearer}
-            onChange={(e)=>setFuzzBearer(e.target.value)}
+            onChange={(e) => setFuzzBearer(e.target.value)}
           />
         </div>
       )}
@@ -509,20 +602,24 @@ export default function CrawlAndFuzzPage() {
                       <span className="ml-auto flex items-center gap-2">
                         <span className="text-xs text-gray-500">prio:</span>
                         <span className="text-xs font-mono">{(ep._priority || 0).toFixed(2)}</span>
-                        <span className={cn(
-                          "px-2 py-0.5 rounded text-xs",
-                          ep._family === "redirect" ? "bg-purple-100 text-purple-900" :
-                          ep._family === "xss" ? "bg-pink-100 text-pink-900" :
-                          "bg-blue-100 text-blue-900"
-                        )}>
+                        <span
+                          className={cn(
+                            "px-2 py-0.5 rounded text-xs",
+                            ep._family === "redirect"
+                              ? "bg-purple-100 text-purple-900"
+                              : ep._family === "xss"
+                              ? "bg-pink-100 text-pink-900"
+                              : "bg-blue-100 text-blue-900"
+                          )}
+                        >
                           {ep._family}
                         </span>
                       </span>
                     </div>
-                    {ep.params?.length ? (
+                    {isNonEmptyArray(ep.params) ? (
                       <div className="text-xs text-gray-600">params: {ep.params.join(", ")}</div>
                     ) : null}
-                    {ep.body_keys?.length ? (
+                    {isNonEmptyArray(ep.body_keys) ? (
                       <div className="text-xs text-gray-600">body: {ep.body_keys.join(", ")}</div>
                     ) : null}
                   </div>
@@ -603,7 +700,6 @@ export default function CrawlAndFuzzPage() {
             </table>
           </div>
 
-          {/* Raw JSON dump (debug) */}
           <details className="border rounded p-3 bg-gray-50">
             <summary className="cursor-pointer text-sm text-gray-700">Raw JSON</summary>
             <pre className="overflow-auto text-xs">{JSON.stringify(fuzzSummary, null, 2)}</pre>
