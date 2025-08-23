@@ -79,6 +79,53 @@ def _artifact_path_from_row(row: Evidence) -> Optional[Path]:
     except Exception:
         return None
 
+def _classify_type(sig: Dict[str, Any]) -> str:
+    """
+    Normalize signal dicts from the fuzzer into a simple row type.
+    """
+    redir = (sig.get("open_redirect") or {})
+    login = (sig.get("login") or {})
+    if redir.get("open_redirect"):
+        return "open_redirect"
+    if login.get("login_success"):
+        return "login_bypass"
+    if sig.get("sql_error") is True:
+        return "sqli"
+    refl = (sig.get("reflection") or {})
+    if refl.get("raw") or refl.get("js_context"):
+        return "xss_reflection"
+    ver = (sig.get("verify") or {}).get("verdict") or {}
+    # If verification later labeled it explicitly, respect that
+    if ver.get("confirmed") and isinstance(ver, dict):
+        reason = (sig.get("verify") or {}).get("label")
+        if reason in {"open_redirect","login_bypass","sqli","xss"}:
+            return str(reason)
+    return "other"
+
+def _safe_get_request_url(req: Dict[str, Any]) -> Optional[str]:
+    # Prefer normalized fuzzer Core schema: request.url
+    if isinstance(req.get("request"), dict):
+        return req["request"].get("url") or req.get("url")
+    return req.get("url")
+
+def _safe_get_response_headers(row: Evidence) -> Dict[str, Any]:
+    # Prefer normalized fuzzer Core schema: response.headers
+    resp = row.response_meta or {}
+    headers = {}
+    if isinstance(resp.get("response"), dict) and isinstance(resp["response"].get("headers"), dict):
+        headers = resp["response"]["headers"]
+    else:
+        # Some writers store headers flat under response_meta
+        h = resp.get("headers")
+        if isinstance(h, dict):
+            headers = h
+    # Normalize case for a few keys
+    out = {}
+    for k in ("content-type", "Content-Type", "location", "Location", "set-cookie", "Set-Cookie"):
+        if k in headers:
+            out[k.lower()] = headers[k]
+    return out
+
 
 # ---------- Create (idempotent) ----------
 @router.post("/evidence/record")
@@ -156,7 +203,7 @@ def record_evidence(item: EvidenceIn, db: Session = Depends(get_db)):
 @router.get("/evidence/by_job/{job_id}")
 def list_evidence(
     job_id: str,
-    label: Optional[str] = Query(None, description="Filter by label (e.g., xss, sqli, benign)"),
+    label: Optional[str] = Query(None, description="Filter by label (e.g., xss, sqli, open_redirect, login_bypass, benign)"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
@@ -169,20 +216,53 @@ def list_evidence(
     out = []
     for r in rows:
         s = r.signals or {}
+        # backward-compat ffuf info
         match_count = s.get("ffuf_match_count")
         if match_count is None:
             match_count = len(s.get("ffuf_matches", []))
+
+        # canonicalized highlights
+        row_type = _classify_type(s)
+        req = r.request_meta or {}
+        req_url = _safe_get_request_url(req)
+        req_param = (req.get("param") or (req.get("request") or {}).get("param"))
+        # popular oracles
+        redir = (s.get("open_redirect") or {})
+        login = (s.get("login") or {})
+        verify = (s.get("verify") or {})
+        refl = (s.get("reflection") or {})
+
+        # response headers of interest
+        hdrs = _safe_get_response_headers(r)
+        location = hdrs.get("location")
+        token_present = bool(login.get("token_present"))
+
         out.append({
             "id": r.id,
             "test_case_id": r.test_case_id,
             "confidence": r.confidence,
             "label": r.label,
+            "type": row_type,
+            "request_url": req_url,
+            "request_param": req_param,
             "signals": {
+                "open_redirect": bool(redir.get("open_redirect")),
+                "redirect_host": redir.get("location_host"),
+                "login_bypass": bool(login.get("login_success")),
+                "token_present": token_present,
+                "sql_error": bool(s.get("sql_error")),
+                "xss_reflected": bool(refl.get("raw") or refl.get("js_context")),
+                "verify": verify,  # pass-through structured verdict if present
                 "ffuf_match_count": match_count,
                 "ffuf_first_three": (s.get("ffuf_first_three") or [])[:3],
                 "ffuf_errors": s.get("ffuf_errors", []),
             },
-            "response_meta": r.response_meta,
+            "response_headers": {
+                "content_type": hdrs.get("content-type"),
+                "location": location,
+                "set_cookie": hdrs.get("set-cookie"),
+            },
+            "response_meta": r.response_meta,  # full for deep dive
             "created_at": r.created_at.isoformat(),
         })
     return out
@@ -219,14 +299,41 @@ def get_evidence(evidence_id: int, db: Session = Depends(get_db)):
         except Exception:
             artifact = {"path": str(p), "error": "failed to parse artifact JSON"}
 
+    # normalize request/response highlights
+    s = r.signals or {}
+    req = r.request_meta or {}
+    req_url = _safe_get_request_url(req)
+    req_body = (req.get("request") or {}).get("body") or req.get("body")
+    req_headers = (req.get("request") or {}).get("headers") or req.get("headers") or {}
+
+    hdrs = _safe_get_response_headers(r)
+    redir = (s.get("open_redirect") or {})
+    login = (s.get("login") or {})
+    verify = (s.get("verify") or {})
+
     return {
         "id": r.id,
         "job_id": r.job_id,
         "test_case_id": r.test_case_id,
         "confidence": r.confidence,
         "label": r.label,
+        "type": _classify_type(s),
         "signals": r.signals,
+        "verify": verify,
+        "request_meta": {
+            "url": req_url,
+            "param": req.get("param") or (req.get("request") or {}).get("param"),
+            "method": req.get("method") or (req.get("request") or {}).get("method"),
+            "headers": req_headers,
+            "body": req_body,
+        },
         "response_meta": r.response_meta,
+        "response_headers": {
+            "content_type": hdrs.get("content-type"),
+            "location": hdrs.get("location"),
+            "set_cookie": hdrs.get("set-cookie"),
+            "redirect_host": redir.get("location_host"),
+        },
         "created_at": r.created_at.isoformat(),
         "artifact": artifact,
     }
@@ -257,21 +364,25 @@ def evidence_summary(job_id: str, db: Session = Depends(get_db)):
         return {"job_id": job_id, "total": 0, "by_label": {}, "top": []}
 
     by_label: Dict[str, int] = {}
+    by_type: Dict[str, int] = {}
     for r in rows:
         by_label[r.label] = by_label.get(r.label, 0) + 1
+        by_type[_classify_type(r.signals or {})] = by_type.get(_classify_type(r.signals or {}), 0) + 1
 
     top: List[Dict[str, Any]] = []
     for r in rows[:5]:
         s = r.signals or {}
-        match_count = s.get("ffuf_match_count")
-        if match_count is None:
-            match_count = len(s.get("ffuf_matches", []))
+        req_url = _safe_get_request_url(r.request_meta or {})
         top.append({
             "id": r.id,
             "label": r.label,
+            "type": _classify_type(s),
             "confidence": r.confidence,
-            "match_count": match_count,
-            "first_match": (s.get("ffuf_first_three") or [{}])[:1],
+            "request_url": req_url,
+            "redirect": (s.get("open_redirect") or {}).get("location"),
+            "login_bypass": (s.get("login") or {}).get("login_success"),
+            "sql_error": s.get("sql_error"),
+            "xss_reflected": (s.get("reflection") or {}).get("raw"),
             "artifact": (r.response_meta or {}).get("output_file"),
             "created_at": r.created_at.isoformat(),
         })
@@ -280,5 +391,6 @@ def evidence_summary(job_id: str, db: Session = Depends(get_db)):
         "job_id": job_id,
         "total": len(rows),
         "by_label": by_label,
+        "by_type": by_type,
         "top": top,
     }
