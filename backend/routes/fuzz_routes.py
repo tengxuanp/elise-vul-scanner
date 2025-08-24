@@ -79,11 +79,11 @@ class FuzzTarget(BaseModel):
 
 
 class EndpointShape(BaseModel):
-    """High-level endpoint selector from the UI."""
+    """High-level endpoint selector from the UI (method + exact URL)."""
     method: str
     url: str
-    params: Optional[List[str]] = None     # if provided, restrict to these param names
-    body_keys: Optional[List[str]] = None  # informational; we match by param
+    # If provided, restrict to these parameter names across ANY location (query|form|json)
+    params: Optional[List[str]] = None
 
 
 class FuzzByJobPayload(BaseModel):
@@ -118,14 +118,18 @@ def _filter_endpoints_by_selection(
     endpoints: List[Dict[str, Any]],
     selection: Optional[List[EndpointShape]],
 ) -> List[Dict[str, Any]]:
-    """Filter merged endpoints (from crawler) by method+url and optional param list (affects param_locs)."""
+    """
+    Filter merged endpoints (from crawler) by method+url and optional param list.
+    If params are provided, trim param_locs to those names across query|form|json.
+    """
     if not selection:
         return endpoints
-    # Build a map of (METHOD URL)-> allowed params set or None (means all)
+
+    # Map "METHOD URL" -> allowed set (None = all params)
     allow: Dict[str, Optional[set]] = {}
     for s in selection:
         key = _key(s.method, s.url)
-        allow[key] = set(s.params) if s.params else None
+        allow[key] = set([p for p in (s.params or []) if p]) if s.params else None
 
     filtered: List[Dict[str, Any]] = []
     for ep in endpoints:
@@ -136,17 +140,33 @@ def _filter_endpoints_by_selection(
         if allowed is None:
             filtered.append(ep)
             continue
-        # Shallow copy and trim param_locs/query/body keys to allowed set
+
+        # Shallow copy and trim unified ParamLocs
         ep2 = dict(ep)
         locs = dict(ep2.get("param_locs") or {})
-        q = [p for p in (locs.get("query") or []) if p in allowed]
-        b = [p for p in (locs.get("body") or []) if p in allowed]
-        if not q and not b:
+        q = [p for p in (locs.get("query") or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
+        f = [p for p in (locs.get("form")  or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
+        j = [p for p in (locs.get("json")  or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
+
+        # Normalize to plain names if items are dicts
+        def _names(items):
+            out = []
+            for it in items:
+                if isinstance(it, str): out.append(it)
+                elif isinstance(it, dict) and it.get("name"): out.append(it["name"])
+            return out
+
+        qn, fn, jn = _names(q), _names(f), _names(j)
+        if not (qn or fn or jn):
             continue
-        ep2["param_locs"] = {"query": q, "body": b, "header": [], "cookie": []}
-        ep2["query_keys"] = q
-        ep2["body_keys"] = b
+
+        ep2["param_locs"] = {"query": qn, "form": fn, "json": jn}
+        # legacy helpers for any old code paths
+        ep2["query_keys"] = qn
+        ep2["body_keys"]  = fn if fn else jn
+        ep2["content_type"] = ep.get("content_type_hint") or ep.get("content_type")
         filtered.append(ep2)
+
     return filtered
 
 
@@ -481,15 +501,22 @@ def _fuzz_targets_ffuf(
                 }
                 results.append(one)
 
-                # optional: persist to your evidence sink
+                # optional: persist to your evidence sink (unified locations)
                 if t.job_id:
                     try:
                         label = _guess_label(payload)
+                        body_type = (t.meta or {}).get("body_type")
+                        if body_type == "json":
+                            locs = {"json": [t.param]}
+                        elif body_type == "form":
+                            locs = {"form": [t.param]}
+                        else:
+                            locs = {"query": [t.param]}
                         persist_evidence(
                             job_id=t.job_id,
                             method=t.method,
                             url=t.url,
-                            param_locs={"body": [t.param]} if ((t.meta or {}).get("body_type") in {"json","form"}) else {"query": [t.param]},
+                            param_locs=locs,
                             param=t.param,
                             family=label,
                             payload_id="ffuf",
@@ -540,7 +567,9 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
     # Normalize bearer before handing to builder (builder will set header)
     norm = _normalize_bearer(bearer_token)
     # build_targets writes targets.json and returns its path
-    targets_path = build_targets(eps, job_dir, bearer_token=(norm.split(" ", 1)[1] if norm else None))  # pass raw token if builder expects it
+    # NOTE: builder expects raw token without the "Bearer " prefix
+    raw_token = norm.split(" ", 1)[1] if norm else None
+    targets_path = build_targets(eps, job_dir, bearer_token=raw_token)  # writes <job_dir>/targets.json
     evidence_path = run_fuzz(job_dir, targets_path, out_dir=job_dir / "results")
     return _read_evidence(evidence_path)
 
@@ -596,7 +625,7 @@ def fuzz_by_job(
     results: List[Dict[str, Any]] = []
 
     if engine in {"ffuf", "hybrid"}:
-        # Build legacy per-param targets from captured traffic (query-only fallback)
+        # Build legacy per-param targets from captured traffic (query-only fallback for ffuf simplicity)
         blob = _load_crawl(job_id)
         base_host = urlparse(blob.get("target") or blob.get("target_url") or "").netloc
         raw_targets = blob.get("captured_requests") or []

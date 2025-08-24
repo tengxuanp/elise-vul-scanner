@@ -8,7 +8,11 @@ import json
 import re
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qs
+
+from ..schemas import (
+    EndpointOut, ParamLocs, Param, AuthConfig, HTTPMethod
+)
 
 # === Heuristics / constants ===
 # IMPORTANT: do NOT block ".json" or ".txt" — many APIs legitimately end with those.
@@ -21,6 +25,8 @@ LOGIN_KEYWORDS = {"user", "username", "email", "pass", "password", "login"}
 CSRF_KEYS = ("csrf", "token", "authenticity", "_csrf", "__requestverificationtoken")
 HASH_ROUTE_RE = re.compile(r".*#/\S*")
 
+
+# ------------------------------- helpers ------------------------------------
 
 def is_static_resource(url: str) -> bool:
     try:
@@ -47,7 +53,7 @@ def default_port(scheme: Optional[str]) -> int:
 def scrub_headers(h: Dict[str, str]) -> Dict[str, str]:
     out = {}
     for k, v in (h or {}).items():
-        out[k] = "***redacted***" if k.lower() in SENSITIVE_HEADERS else v
+        out[k] = "***redacted***" if str(k).lower() in SENSITIVE_HEADERS else v
     return out
 
 
@@ -64,7 +70,7 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
     """
     ct = ""
     for k, v in (headers or {}).items():
-        if k.lower() == "content-type":
+        if str(k).lower() == "content-type":
             ct = (v or "").lower()
             break
 
@@ -81,8 +87,7 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
 
     if "application/x-www-form-urlencoded" in ct or "form" in ct:
         try:
-            # parse_qs returns {k: [v,...]}
-            parsed_qs = parse_qs(post_data)
+            parsed_qs = parse_qs(post_data)  # {k: [v,...]}
             parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_qs.items()}
             return {"type": "form", "parsed": parsed, "raw": post_data, "keys": sorted(parsed.keys())}
         except Exception:
@@ -91,13 +96,42 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
     return {"type": "other", "parsed": None, "raw": post_data, "keys": []}
 
 
-def endpoint_shape(method: str, url: str, query_keys: List[str], body_keys: List[str]) -> Tuple[str, str, Tuple[str, ...], Tuple[str, ...]]:
-    p = urlparse(url).path
-    return (method.upper(), p, tuple(sorted(query_keys)), tuple(sorted(body_keys)))
+def strip_fragment(u: str) -> str:
+    """Remove any #fragment from URL."""
+    try:
+        parts = list(urlparse(u))
+        parts[5] = ""  # fragment
+        return urlunparse(parts)
+    except Exception:
+        return u
 
 
-def build_param_locs(query_keys: List[str], body_keys: List[str]) -> Dict[str, List[str]]:
-    return {"query": sorted(query_keys or []), "body": sorted(body_keys or []), "header": [], "cookie": []}
+def endpoint_shape_key(
+    method: str,
+    path: str,
+    q_names: List[str],
+    f_names: List[str],
+    j_names: List[str],
+) -> Tuple[str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]]:
+    return (
+        method.upper(),
+        path or "/",
+        tuple(sorted(q_names or [])),
+        tuple(sorted(f_names or [])),
+        tuple(sorted(j_names or []))
+    )
+
+
+def make_paramlocs(
+    q_names: List[str],
+    f_names: List[str],
+    j_names: List[str]
+) -> ParamLocs:
+    return ParamLocs(
+        query=[Param(name=n) for n in sorted(q_names or [])],
+        form=[Param(name=n) for n in sorted(f_names or [])],
+        json=[Param(name=n) for n in sorted(j_names or [])],
+    )
 
 
 def form_is_login(inputs: List[Any]) -> bool:
@@ -121,37 +155,29 @@ def form_csrf_params(inputs: List[Any]) -> List[str]:
     return out
 
 
+# ------------------------------- main crawl ---------------------------------
+
 def crawl_site(
     target_url: str,
     max_depth: int = 2,
-    auth: Optional[Dict[str, str]] = None,
+    auth: Optional[Dict[str, Any]] = None,
     job_dir: Optional[str] = None,
     max_pages: int = 200,
-):
+) -> Tuple[List[EndpointOut], List[Dict[str, Any]]]:
     """
     Crawl a target and return:
-      - endpoints: merged, deduplicated canonical endpoints with method, param_locs, etc.
+      - endpoints: merged, deduplicated canonical EndpointOut objects
       - captured_requests: deduped network requests with redacted headers and parsed bodies
 
-    endpoints item shape:
-      {
-        "url": str,                       # absolute
-        "method": "GET"|"POST"|...,
-        "path": str,                      # URL path
-        "query_keys": [...],              # canonical (sorted)
-        "body_keys": [...],               # canonical (sorted)
-        "param_locs": {"query":[...], "body":[...], "header":[], "cookie":[]},
-        "content_type": "application/json"|"application/x-www-form-urlencoded"|None,
-        "is_login": bool,
-        "csrf_params": [...],
-        "source": "form"|"network"|"merged",
-        "form_template": [{"name":..., "example":""}, ...],   # if known
-        "body_template": {k: example_value, ...}               # if known (json/form)
-      }
     captured_requests item shape:
       {
         "method","url","headers","post_data","body_type","body_parsed","query_params"
       }
+
+    NOTES:
+    - Same-origin only.
+    - SPA hash routes are navigated to mine forms, but endpoints are emitted with fragments stripped.
+    - No socket.io endpoints; no static assets.
     """
     # === State ===
     visited: Set[Tuple[str, Tuple[str, ...]]] = set()
@@ -159,10 +185,12 @@ def crawl_site(
     raw_form_endpoints: List[Dict[str, Any]] = []
     captured_requests: List[Dict[str, Any]] = []
 
-    def normalize_url(url: str) -> Tuple[str, Tuple[str, ...]]:
-        parsed = urlparse(url)
+    def normalize_for_visit(url: str) -> Tuple[str, Tuple[str, ...]]:
+        """Normalize a page URL for visited-set: path + query key tuple (fragment stripped)."""
+        u = strip_fragment(url)
+        parsed = urlparse(u)
         params = sorted(parse_qs(parsed.query).keys())
-        return parsed.path, tuple(params)
+        return parsed.path or "/", tuple(params)
 
     def dedupe_requests(reqs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
@@ -178,107 +206,109 @@ def crawl_site(
             body_keys: Tuple[str, ...] = ()
             if isinstance(r.get("body_parsed"), dict):
                 body_keys = tuple(sorted(r["body_parsed"].keys()))
-            key = (r.get("method", "GET").upper(), parsed.path, q_keys, body_type, body_keys)
+            key = (str(r.get("method", "GET")).upper(), parsed.path, q_keys, body_type, body_keys)
             if key not in seen:
                 seen.add(key)
                 unique.append(r)
         return unique
 
     def endpoints_from_requests(reqs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out = []
+        out: List[Dict[str, Any]] = []
         for r in reqs:
-            url = r.get("url") or ""
+            url = strip_fragment(r.get("url") or "")
+            if not url:
+                continue
             # NOISE CUT: same-origin and no socket.io
             if not same_origin(url, target_url):
                 continue
             if "/socket.io/" in urlparse(url).path:
                 continue
 
-            method = (r.get("method") or "GET").upper()
-            q_keys = r.get("query_params") or []
+            method = str(r.get("method") or "GET").upper()
+            q_names = list(r.get("query_params") or [])
             b_type = r.get("body_type")
             parsed_body = r.get("body_parsed") if isinstance(r.get("body_parsed"), dict) else None
-            body_keys = sorted((parsed_body or {}).keys()) if parsed_body else []
 
-            content_type = None
+            f_names: List[str] = []
+            j_names: List[str] = []
+            content_type_hint: Optional[str] = None
+
             if b_type == "json":
-                content_type = "application/json"
+                j_names = sorted((parsed_body or {}).keys())
+                content_type_hint = "application/json"
             elif b_type == "form":
-                content_type = "application/x-www-form-urlencoded"
+                f_names = sorted((parsed_body or {}).keys())
+                content_type_hint = "application/x-www-form-urlencoded"
 
-            ep = {
+            out.append({
                 "url": url,
                 "method": method,
-                "path": urlparse(url).path,
-                "query_keys": sorted(q_keys),
-                "body_keys": body_keys,
-                "param_locs": build_param_locs(q_keys, body_keys),
-                "content_type": content_type,
-                "is_login": False,
-                "csrf_params": [],
+                "path": urlparse(url).path or "/",
+                "q_names": sorted(q_names),
+                "f_names": f_names,
+                "j_names": j_names,
+                "content_type_hint": content_type_hint,
                 "source": "network",
-                "form_template": [{"name": k, "example": ""} for k in (parsed_body or {}).keys()] if b_type == "form" else [],
-                "body_template": parsed_body if b_type == "json" else {},
-            }
-            out.append(ep)
+                "headers": {},  # baseline headers unknown/irrelevant at discovery
+            })
         return out
 
     def endpoints_from_forms(forms: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        out = []
+        out: List[Dict[str, Any]] = []
         for f in forms:
-            url = f["url"]
-            # NOISE CUT: same-origin and no socket.io
+            url = strip_fragment(f["url"])
             if not same_origin(url, target_url):
                 continue
             if "/socket.io/" in urlparse(url).path:
                 continue
 
-            method = f["method"]
-            body_keys = sorted(f.get("params") or [])
-            # Guess content type: respect enctype if present, else default to form-urlencoded for POST
-            content_type = f.get("enctype") or ("application/x-www-form-urlencoded" if method == "POST" else None)
-            ep = {
+            method = str(f["method"]).upper()
+            params = sorted(f.get("params") or [])
+            enctype = (f.get("enctype") or "").lower() or None
+
+            # Map to unified locations:
+            if method == "GET":
+                q_names = params
+                f_names: List[str] = []
+            else:
+                q_names = []
+                f_names = params  # default to form for non-GET
+
+            j_names: List[str] = []
+            if enctype and "json" in enctype:
+                # rare, but respect explicit json form enctype
+                j_names, f_names = f_names, []
+
+            out.append({
                 "url": url,
                 "method": method,
-                "path": urlparse(url).path,
-                "query_keys": [],  # form-derived endpoints don't imply query keys
-                "body_keys": body_keys if method != "GET" else [],  # don't invent GET body keys
-                "param_locs": build_param_locs([], body_keys if method != "GET" else []),
-                "content_type": content_type,
-                "is_login": bool(f.get("is_login", False)),
-                "csrf_params": f.get("csrf_params") or [],
+                "path": urlparse(url).path or "/",
+                "q_names": sorted(q_names),
+                "f_names": sorted(f_names),
+                "j_names": sorted(j_names),
+                "content_type_hint": ("application/json" if j_names else ("application/x-www-form-urlencoded" if f_names else None)),
                 "source": "form",
-                "form_template": [{"name": k, "example": ""} for k in body_keys] if method != "GET" else [],
-                "body_template": {},
-            }
-            out.append(ep)
+                "headers": {},
+            })
         return out
 
-    def merge_endpoints(form_eps: List[Dict[str, Any]], req_eps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def merge_endpoints(form_eps: List[Dict[str, Any]], req_eps: List[Dict[str, Any]]) -> List[EndpointOut]:
         """
-        Merge on canonical shape; prefer network-derived info for content_type/body_template.
-        If both exist, mark source as 'merged' and carry union of csrf/is_login flags.
+        Merge on canonical shape (METHOD|PATH|Q|F|J).
+        If duplicates exist from both form and network with same param names, keep one and
+        prefer non-None content_type_hint (network usually better).
         """
-        index: Dict[Tuple[str, str, Tuple[str, ...], Tuple[str, ...]], Dict[str, Any]] = {}
+        index: Dict[Tuple[str, str, Tuple[str, ...], Tuple[str, ...], Tuple[str, ...]], Dict[str, Any]] = {}
 
         def upsert(ep: Dict[str, Any]):
-            key = endpoint_shape(ep["method"], ep["url"], ep["query_keys"], ep["body_keys"])
+            key = endpoint_shape_key(ep["method"], ep["path"], ep["q_names"], ep["f_names"], ep["j_names"])
             if key not in index:
                 index[key] = ep.copy()
                 return
             cur = index[key]
-            # Merge flags and templates
-            cur["is_login"] = cur.get("is_login", False) or ep.get("is_login", False)
-            cur["csrf_params"] = sorted(set((cur.get("csrf_params") or []) + (ep.get("csrf_params") or [])))
-            # Prefer richer content_type/template from network
-            if cur.get("source") == "form" and ep.get("source") == "network":
-                cur["content_type"] = ep.get("content_type")
-                cur["body_template"] = ep.get("body_template") or {}
-                cur["form_template"] = ep.get("form_template") or cur.get("form_template") or []
-                cur["source"] = "merged"
-            elif cur.get("source") == "network" and ep.get("source") == "form":
-                # keep network content_type, but add csrf/is_login hints
-                cur["source"] = "merged"
+            # Prefer richer content_type_hint if current is None
+            if not cur.get("content_type_hint") and ep.get("content_type_hint"):
+                cur["content_type_hint"] = ep.get("content_type_hint")
             index[key] = cur
 
         for e in form_eps:
@@ -286,14 +316,22 @@ def crawl_site(
         for e in req_eps:
             upsert(e)
 
-        # Ensure param_locs consistent with final keys
-        final = []
+        # Materialize EndpointOut
+        final_eps: List[EndpointOut] = []
         for ep in index.values():
-            ep["param_locs"] = build_param_locs(ep.get("query_keys") or [], ep.get("body_keys") or [])
-            final.append(ep)
-        # Stable sort: network/merged first, then form-only
-        final.sort(key=lambda x: (0 if x["source"] != "form" else 1, x["method"], x["path"]))
-        return final
+            param_locs = make_paramlocs(ep["q_names"], ep["f_names"], ep["j_names"])
+            final_eps.append(
+                EndpointOut(
+                    method=HTTPMethod(ep["method"]),
+                    url=ep["url"],
+                    headers=ep.get("headers") or {},
+                    param_locs=param_locs,
+                    content_type_hint=ep.get("content_type_hint")
+                )
+            )
+        # Stable sort by method then path
+        final_eps.sort(key=lambda x: (x.method.value, x.path))
+        return final_eps
 
     def capture_request(request):
         try:
@@ -313,7 +351,7 @@ def crawl_site(
 
             captured_requests.append({
                 "method": request.method,
-                "url": url,
+                "url": strip_fragment(url),
                 "headers": scrub_headers(req_headers),  # safe to persist
                 "post_data": body_info["raw"],
                 "body_type": body_info["type"],         # "json" | "form" | "other" | None
@@ -346,15 +384,15 @@ def crawl_site(
                 "url": full_action_url,
                 "method": method,
                 "params": [p for p in form_params if p],
-                "is_login": form_is_login(inputs),
-                "csrf_params": form_csrf_params(inputs),
+                "is_login": form_is_login(inputs),        # currently unused; reserved
+                "csrf_params": form_csrf_params(inputs),  # currently unused; reserved
                 "enctype": enctype
             })
 
     def crawl(url: str, depth: int, context):
         if depth > max_depth:
             return
-        norm = normalize_url(url)
+        norm = normalize_for_visit(url)
         if norm in visited:
             return
         if page_budget[0] >= max_pages:
@@ -407,14 +445,13 @@ def crawl_site(
 
                 # Same-origin regular links: record GET endpoint & recurse
                 if same_origin(full_url, target_url):
-                    # skip socket.io links entirely
                     if "/socket.io/" in urlparse(full_url).path:
                         continue
-                    # Record GET endpoint truthfully (query keys only)
+                    # Record GET "discoveries" (query keys only; do not invent body params)
                     raw_form_endpoints.append({
-                        "url": full_url,
+                        "url": strip_fragment(full_url),
                         "method": "GET",
-                        "params": [],  # do not invent body params for GET
+                        "params": [],
                         "is_login": False,
                         "csrf_params": [],
                         "enctype": None
@@ -432,14 +469,14 @@ def crawl_site(
                 pass
 
     # --- Playwright bootstrap (with optional auth) ---
-    headful = bool(auth and auth.get("mode") == "manual")
+    headful = bool(auth and str(auth.get("mode", "none")).lower() == "manual")
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=not headful)
         context = browser.new_context()
 
         # Optional auth bootstrap
-        if auth and auth.get("mode", "none") != "none":
-            mode = auth.get("mode")
+        if auth and str(auth.get("mode", "none")).lower() != "none":
+            mode = str(auth.get("mode")).lower()
             try:
                 if mode == "cookie" and auth.get("cookie"):
                     u = urlparse(target_url)
@@ -464,7 +501,6 @@ def crawl_site(
                             if auth.get("username_selector"):
                                 lp.fill(auth["username_selector"], auth.get("username", ""))
                             else:
-                                # fallback multi-selector attempt
                                 for sel in ["input[type=email]", "#email", "input[name=email]", "input[name=username]"]:
                                     try:
                                         lp.fill(sel, auth.get("username", ""))
@@ -481,7 +517,10 @@ def crawl_site(
                                     except Exception:
                                         pass
                             if auth.get("submit_selector"):
-                                lp.click(auth["submit_selector"])
+                                try:
+                                    lp.click(auth["submit_selector"])
+                                except Exception:
+                                    pass
                             else:
                                 for sel in ["button[type=submit]", "button#loginButton", "button[name=login]"]:
                                     try:

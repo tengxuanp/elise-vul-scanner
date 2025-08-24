@@ -4,10 +4,11 @@ from __future__ import annotations
 import json
 import threading
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Literal, Tuple
+from typing import Dict, Any, List, Optional, Literal
 from urllib.parse import urlparse, parse_qs, parse_qsl
 
 from fastapi import APIRouter, HTTPException
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field
 
 from ..modules.playwright_crawler import crawl_site
@@ -52,39 +53,73 @@ class CrawlRequest(BaseModel):
 
 # -------------------- helpers --------------------
 
+def _as_plain(x: Any) -> Any:
+    """Coerce Pydantic models (v1/v2) to plain dicts; pass dicts and other types through."""
+    if isinstance(x, BaseModel):
+        return x.model_dump() if hasattr(x, "model_dump") else x.dict()
+    if hasattr(x, "model_dump"):  # pydantic v2 objects
+        try:
+            return x.model_dump()
+        except Exception:
+            pass
+    if hasattr(x, "dict"):  # pydantic v1 objects
+        try:
+            return x.dict()
+        except Exception:
+            pass
+    return x
+
+def _canon_method(v: Any) -> str:
+    """Accept enums/strings like 'HTTPMETHOD.GET' and return 'GET'."""
+    s = str(v or "GET")
+    if "." in s:
+        s = s.rsplit(".", 1)[-1]
+    return s.upper()
+
+def _names(xs) -> List[str]:
+    """Extract parameter names from a list of strings or {name:...} dicts."""
+    out: List[str] = []
+    for x in (xs or []):
+        if isinstance(x, str):
+            if x:
+                out.append(x)
+        elif isinstance(x, dict) and x.get("name"):
+            out.append(str(x["name"]))
+    return out
+
 def _map_param_locs_from_crawler(req: Dict[str, Any]) -> Optional[Dict[str, List[str]]]:
     """
-    If the crawler provided canonical param_locs (query/body) and (optionally) content_type,
+    If the crawler provided canonical param_locs (query/form/json/body) and (optionally) content_type,
     map them into the DB's schema (query/form/json). Return None if not available.
     """
     pl = req.get("param_locs")
     if not isinstance(pl, dict):
         return None
-    query_keys: List[str] = sorted(set((pl.get("query") or [])))
-    body_keys: List[str] = sorted(set((pl.get("body") or [])))
-    if not query_keys and not body_keys:
-        return {"query": [], "form": [], "json": []}
+
+    q = sorted(set(_names(pl.get("query"))))
+    f = sorted(set(_names(pl.get("form"))))
+    j = sorted(set(_names(pl.get("json"))))
+    legacy_body = sorted(set(_names(pl.get("body"))))
 
     # Prefer explicit content_type; fallback to headers or body_type
-    ct = (req.get("content_type") or "").lower()
+    ct = (req.get("content_type") or req.get("content_type_hint") or "").lower()
     if not ct:
         hdrs = req.get("headers") or {}
         ct = (hdrs.get("content-type") or hdrs.get("Content-Type") or "").lower()
     if not ct:
         ct = (req.get("body_type") or "").lower()  # "json" | "form" | "" -> map below
 
-    form_keys: List[str] = []
-    json_keys: List[str] = []
+    # If only legacy body is present, place it based on content-type hints
+    if legacy_body:
+        if "json" in ct:
+            j = sorted(set(j or legacy_body))
+        elif "x-www-form-urlencoded" in ct or "form" in ct:
+            f = sorted(set(f or legacy_body))
+        else:
+            # unknown → treat as form by default (safer for DB/UI)
+            f = sorted(set(f) | set(legacy_body))
 
-    if "json" in ct:
-        json_keys = body_keys
-    elif "x-www-form-urlencoded" in ct or "form" in ct or (ct == "" and body_keys):
-        form_keys = body_keys
-    else:
-        # unknown → treat as form by default (safer for DB/UI)
-        form_keys = body_keys
-
-    return {"query": query_keys, "form": form_keys, "json": json_keys}
+    return {"query": q, "form": f, "json": j}
 
 def _infer_param_locs_fallback(
     method: str,
@@ -133,7 +168,7 @@ def _derive_param_locs(req: Dict[str, Any]) -> Dict[str, List[str]]:
     if mapped is not None:
         return mapped
     return _infer_param_locs_fallback(
-        method=(req.get("method") or "GET"),
+        method=_canon_method(req.get("method")),
         url=(req.get("url") or ""),
         headers=(req.get("headers") or {}),
         post_data=req.get("post_data"),
@@ -141,8 +176,8 @@ def _derive_param_locs(req: Dict[str, Any]) -> Dict[str, List[str]]:
 
 def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
     """Upsert Endpoint and create planned TestCase rows per param for this job."""
-    method = (req.get("method") or "GET").upper()
-    url = req.get("url") or ""
+    method = _canon_method(req.get("method"))
+    url = str(req.get("url") or "")
 
     param_locs: Dict[str, List[str]] = _derive_param_locs(req)
 
@@ -160,8 +195,9 @@ def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
             # merge newly derived params into existing record
             merged = dict(ep.param_locs or {})
             for k, v in (param_locs or {}).items():
-                merged.setdefault(k, [])
-                merged[k] = sorted(set(merged[k]) | set(v))
+                if k not in merged or not isinstance(merged[k], list):
+                    merged[k] = []
+                merged[k] = sorted(set((merged[k] or [])) | set(v or []))
             ep.param_locs = merged
 
         def _ensure_tc(param: str, family: str = "plan", payload_id: str = "n/a"):
@@ -194,12 +230,19 @@ def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
 
         db.commit()
 
+def _write_json(path: Path, payload: Any) -> Path:
+    """
+    JSON writer that won't choke on Pydantic types (e.g., HttpUrl, UUID).
+    """
+    enc = jsonable_encoder(payload)
+    path.write_text(json.dumps(enc, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+    return path
+
 def _write_job_crawl(job_id: str, payload: Dict[str, Any]) -> Path:
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
     out = job_dir / "crawl_result.json"
-    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    return out
+    return _write_json(out, payload)
 
 def _write_status(job_id: str, phase: str, extra: Optional[Dict[str, Any]] = None) -> None:
     _job_status[job_id] = phase
@@ -210,7 +253,7 @@ def _write_status(job_id: str, phase: str, extra: Optional[Dict[str, Any]] = Non
     if extra:
         blob.update(extra)
     try:
-        p.write_text(json.dumps(blob, indent=2), "utf-8")
+        _write_json(p, blob)
     except Exception:
         pass
 
@@ -226,7 +269,7 @@ def start_crawl(body: CrawlRequest):
     """
     job_id = body.job_id
     target = body.target_url
-    auth  = body.auth.dict() if body.auth else None
+    auth  = (body.auth.model_dump() if getattr(body.auth, "model_dump", None) else body.auth.dict()) if body.auth else None
     max_depth = int(body.max_depth or 2)
 
     if _job_status.get(job_id) == "running":
@@ -249,18 +292,48 @@ def start_crawl(body: CrawlRequest):
             _write_status(job_id, "running")
 
             # Run crawler with proper kwargs
-            endpoints, captured_requests = crawl_site(
+            endpoints_raw, captured_raw = crawl_site(
                 target_url=target,
                 max_depth=max_depth,
                 auth=auth,
                 job_dir=str(JOBS_DIR / job_id),
             )
 
-            # Ensure minimal fields for endpoints
-            for ep in endpoints:
-                ep.setdefault("method", "GET")
-                # crawler gives param_locs {"query","body"}; leave as-is here, we map when persisting to DB
-                ep.setdefault("param_locs", {})
+            # --- Coerce to plain dicts and normalize without mutating models ---
+            endpoints: List[Dict[str, Any]] = []
+            for ep in (endpoints_raw or []):
+                epd = _as_plain(ep)
+                if not isinstance(epd, dict):
+                    # last-ditch: JSON round-trip, else skip
+                    try:
+                        epd = json.loads(json.dumps(epd, default=str))
+                    except Exception:
+                        continue
+
+                # canonicalize method
+                epd["method"] = _canon_method(epd.get("method"))
+
+                # keep original param_locs shape (may contain dict objects with "name")
+                pl = epd.get("param_locs")
+                epd["param_locs"] = pl if isinstance(pl, dict) else {}
+
+                # lightweight defaults
+                epd["csrf_params"] = [p for p in (epd.get("csrf_params") or []) if p]
+                epd["is_login"] = bool(epd.get("is_login", False))
+
+                endpoints.append(epd)
+
+            captured_requests: List[Dict[str, Any]] = []
+            for r in (captured_raw or []):
+                rd = _as_plain(r)
+                if isinstance(rd, dict):
+                    captured_requests.append(rd)
+                else:
+                    try:
+                        captured_requests.append(json.loads(json.dumps(rd, default=str)))
+                    except Exception:
+                        # skip non-serializable
+                        pass
 
             # Persist raw crawl (job-scoped)
             blob = {

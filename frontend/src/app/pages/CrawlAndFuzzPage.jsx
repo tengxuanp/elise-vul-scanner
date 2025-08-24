@@ -1,3 +1,4 @@
+// frontend/app/pages/CrawlAndFuzzPage.jsx
 "use client";
 import { useState, useMemo } from "react";
 import CrawlForm from "../components/CrawlForm";
@@ -7,6 +8,23 @@ import { toast } from "react-toastify";
 /** === helpers === */
 const isNonEmptyArray = (v) => Array.isArray(v) && v.length > 0;
 const cn = (...xs) => xs.filter(Boolean).join(" ");
+
+/** Extract plain names from arrays that can contain strings or {name: "..."} dicts */
+const namesFrom = (xs) => {
+  if (!Array.isArray(xs)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const it of xs) {
+    let n = "";
+    if (typeof it === "string") n = it;
+    else if (it && typeof it === "object") n = it.name || it.param || it.key || "";
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push(String(n));
+    }
+  }
+  return out;
+};
 
 /** === Normalize raw endpoint into a consistent shape for UI/selection === */
 const normalizeEndpoint = (ep) => {
@@ -21,21 +39,37 @@ const normalizeEndpoint = (ep) => {
     qFromUrl = Array.from(new Set([...u.searchParams.keys()])).filter(Boolean);
   } catch {}
 
-  // Prefer non-empty param_locs.query, else legacy ep.params, else URL inference
-  const q =
-    (isNonEmptyArray(pl.query) && pl.query) ||
-    (isNonEmptyArray(ep.params) && ep.params) ||
-    qFromUrl;
+  // param_locs can be strings or {name:"…"}
+  const qParamLocs = namesFrom(pl.query);
+  const formParamLocs = namesFrom(pl.form);
+  const jsonParamLocs = namesFrom(pl.json);
 
-  // Prefer non-empty param_locs.body, else legacy body_keys, else from parsed body
-  const b =
-    (isNonEmptyArray(pl.body) && pl.body) ||
-    (isNonEmptyArray(ep.body_keys) && ep.body_keys) ||
-    (ep.body_parsed && typeof ep.body_parsed === "object"
-      ? Object.keys(ep.body_parsed)
-      : []);
+  // Legacy fallbacks
+  const legacyQuery = isNonEmptyArray(ep.query_keys) ? ep.query_keys : isNonEmptyArray(ep.params) ? ep.params : [];
+  const legacyBody = isNonEmptyArray(ep.body_keys) ? ep.body_keys : (ep.body_parsed && typeof ep.body_parsed === "object" ? Object.keys(ep.body_parsed) : []);
 
-  return { ...ep, method, url, params: q, body_keys: b };
+  // Prefer new schema; then legacy; then URL inference
+  const queryParams = isNonEmptyArray(qParamLocs) ? qParamLocs : isNonEmptyArray(legacyQuery) ? legacyQuery : qFromUrl;
+
+  // Body params = form ∪ json (new schema) else legacy body hints
+  const formParams = formParamLocs;
+  const jsonParams = jsonParamLocs;
+  const bodyParams = isNonEmptyArray(formParams) || isNonEmptyArray(jsonParams) ? [...new Set([...(formParams || []), ...(jsonParams || [])])] : legacyBody;
+
+  // For selection, the backend trims across all locations → send union
+  const allParams = [...new Set([...(queryParams || []), ...(bodyParams || [])])];
+
+  return {
+    ...ep,
+    method,
+    url,
+    // keep original breakdown for display (UI uses .params and .body_keys below)
+    params: queryParams,
+    body_keys: bodyParams,
+    _form_params: formParams,
+    _json_params: jsonParams,
+    _all_params: allParams,
+  };
 };
 
 /** === Stable key per endpoint SHAPE (method + url + params + body_keys) === */
@@ -49,7 +83,9 @@ const shapeKey = (ep) => {
 
 /** Family guess for UI-only grouping (backend has its own router) */
 const guessFamily = (ep) => {
-  const pset = new Set((ep.params || []).map((s) => String(s).toLowerCase()));
+  const pset = new Set(
+    (ep._all_params || ep.params || []).map((s) => String(s).toLowerCase())
+  );
   const path = (ep.url || "").toLowerCase();
 
   if (
@@ -90,7 +126,7 @@ const familyFromSignals = (sig) => {
 
 /** Lightweight priority score for UI sort/selection (server has ML; this is a hint) */
 const uiPriority = (ep) => {
-  const params = (ep.params || []).map((x) => x.toLowerCase());
+  const params = (ep._all_params || ep.params || []).map((x) => x.toLowerCase());
   const url = (ep.url || "").toLowerCase();
   let s = 0;
   if (
@@ -156,6 +192,17 @@ const normalizeResultRow = (one = {}) => {
   const fam =
     familyFromSignals(sig) || one.family || (one.signals && one.signals.type) || null;
 
+  // derive a severity that’s easier for humans to scan
+  const severityScore =
+    (external ? 0.4 : 0) +
+    (sqlErr ? 0.4 : 0) +
+    (xssReflected ? 0.4 : 0) +
+    Math.min(0.5, confidence / 2);
+
+  let severity = "low";
+  if (severityScore >= 0.8) severity = "high";
+  else if (severityScore >= 0.5) severity = "med";
+
   return {
     method,
     url,
@@ -163,6 +210,7 @@ const normalizeResultRow = (one = {}) => {
     confidence,
     payload,
     family: fam,
+    severity,
     delta: {
       status_changed:
         typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
@@ -188,6 +236,99 @@ const normalizeResultRow = (one = {}) => {
   };
 };
 
+/** Small UI bits */
+const Badge = ({ children, tone = "default", title }) => {
+  const map = {
+    default: "bg-gray-100 text-gray-900",
+    blue: "bg-blue-100 text-blue-900",
+    pink: "bg-pink-100 text-pink-900",
+    purple: "bg-purple-100 text-purple-900",
+    green: "bg-green-100 text-green-900",
+    amber: "bg-amber-100 text-amber-900",
+    red: "bg-red-100 text-red-900",
+  };
+  return (
+    <span className={cn("px-2 py-0.5 rounded text-xs", map[tone] || map.default)} title={title}>
+      {children}
+    </span>
+  );
+};
+
+const ConfBadge = ({ v }) => (
+  <span
+    className={cn(
+      "px-2 py-0.5 rounded text-xs font-mono",
+      v >= 0.8 ? "bg-green-600 text-white" : v >= 0.5 ? "bg-amber-500 text-white" : "bg-gray-300 text-gray-900"
+    )}
+    title={`confidence ${Number(v || 0).toFixed(2)}`}
+  >
+    {Number(v || 0).toFixed(2)}
+  </span>
+);
+
+const FamilyBadge = ({ fam }) => (
+  <Badge tone={fam === "redirect" ? "purple" : fam === "xss" ? "pink" : "blue"}>
+    {fam || "—"}
+  </Badge>
+);
+
+const SeverityBadge = ({ sev }) => {
+  const map = { high: ["red", "High"], med: ["amber", "Medium"], low: ["green", "Low"] };
+  const [tone, label] = map[sev] || map.low;
+  return <Badge tone={tone}>{label}</Badge>;
+};
+
+const DeltaCell = ({ d }) => {
+  if (!d) return <span className="text-gray-400">—</span>;
+  const bits = [];
+  if (d.status_changed) bits.push("status");
+  if (typeof d.len_delta === "number") bits.push(`Δlen ${d.len_delta}`);
+  if (typeof d.ms_delta === "number") bits.push(`Δms ${d.ms_delta}`);
+  if (typeof d.len_ratio === "number" && isFinite(d.len_ratio)) bits.push(`×${Number(d.len_ratio).toFixed(2)}`);
+  return bits.length ? <span>{bits.join(" · ")}</span> : <span className="text-gray-400">—</span>;
+};
+
+const RedirectBits = ({ row }) => {
+  const ext = row?.signals?.external_redirect;
+  const loc = row?.signals?.location;
+  const host = row?.signals?.location_host;
+  if (!ext && !loc) return <span className="text-gray-400">—</span>;
+  return (
+    <span className="inline-flex items-center gap-2">
+      {ext ? <Badge tone="purple">external</Badge> : null}
+      {host ? <Badge tone="purple">{host}</Badge> : null}
+      {loc ? <code className="text-xs break-all">{loc}</code> : null}
+    </span>
+  );
+};
+
+const SqlBits = ({ row }) => {
+  const s = row?.signals || {};
+  if (s.sql_error) return <Badge tone="blue">sql error</Badge>;
+  const ms = row?.delta?.ms_delta;
+  const len = row?.delta?.len_delta;
+  if (typeof ms === "number" && ms >= 1500) return <Badge tone="blue">timing Δ{ms}ms</Badge>;
+  if (typeof len === "number" && Math.abs(len) >= 200) return <Badge tone="blue">boolean Δlen {len}</Badge>;
+  return <span className="text-gray-400">—</span>;
+};
+
+const XssBits = ({ row }) => {
+  return row?.signals?.xss_reflected ? <Badge tone="pink">reflected</Badge> : <span className="text-gray-400">—</span>;
+};
+
+const LoginBits = ({ row }) => {
+  const s = row?.signals || {};
+  if (s.login_success || s.token_present) {
+    return (
+      <span className="inline-flex items-center gap-2">
+        {s.login_success ? <Badge tone="green">bypass</Badge> : null}
+        {s.token_present ? <Badge tone="green">token</Badge> : null}
+      </span>
+    );
+  }
+  return <span className="text-gray-400">—</span>;
+};
+
 export default function CrawlAndFuzzPage() {
   const [jobId, setJobId] = useState(null);
   const [targetUrl, setTargetUrl] = useState("");
@@ -197,8 +338,17 @@ export default function CrawlAndFuzzPage() {
   const [loadingFuzz, setLoadingFuzz] = useState(false);
   const [filter, setFilter] = useState("");
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
-  const [familyFilter, setFamilyFilter] = useState("all"); // all | sqli | xss | redirect
-  const [fuzzBearer, setFuzzBearer] = useState(""); // optional bearer for core engine
+  const [fuzzBearer, setFuzzBearer] = useState("");
+
+  // New UX state
+  const [familiesSelected, setFamiliesSelected] = useState(new Set(["sqli", "xss", "redirect"]));
+  const [minConf, setMinConf] = useState(0.0);
+  const [onlySqlError, setOnlySqlError] = useState(false);
+  const [onlyXssRef, setOnlyXssRef] = useState(false);
+  const [onlyExtRedir, setOnlyExtRedir] = useState(false);
+  const [onlyWithDelta, setOnlyWithDelta] = useState(false);
+  const [sortBy, setSortBy] = useState("conf_desc"); // conf_desc | sev_conf | len_abs | url_asc
+  const [expanded, setExpanded] = useState(() => new Set()); // row expand toggles
 
   /** De-dup endpoints by shape; annotate with UI-only family/priority */
   const endpoints = useMemo(() => {
@@ -225,11 +375,11 @@ export default function CrawlAndFuzzPage() {
     return out;
   }, [endpointsRaw]);
 
-  /** Filtering */
+  /** Filtering of endpoints list */
   const filtered = useMemo(() => {
     const q = filter.toLowerCase().trim();
     return endpoints.filter((ep) => {
-      if (familyFilter !== "all" && ep._family !== familyFilter) return false;
+      if (!familiesSelected.has(ep._family)) return false;
       if (!q) return true;
       const hay = [
         ep.method || "",
@@ -241,7 +391,7 @@ export default function CrawlAndFuzzPage() {
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [endpoints, filter, familyFilter]);
+  }, [endpoints, filter, familiesSelected]);
 
   const counts = useMemo(
     () => ({
@@ -316,14 +466,14 @@ export default function CrawlAndFuzzPage() {
       const lookup = new Set(selectedKeys);
       const baseSelection = endpoints
         .filter((ep) => lookup.has(ep._shape))
-        .map(({ method, url, params = [], body_keys = [] }) => ({
+        .map(({ method, url, _all_params = [], params = [], body_keys = [] }) => ({
           method,
           url,
-          params,
-          body_keys,
+          // Backend trims across all locations; provide best union.
+          params: isNonEmptyArray(_all_params) ? _all_params : [...new Set([...(params || []), ...(body_keys || [])])],
         }));
 
-      // Pre-send inference: if params/body are empty, try to infer from URL/body again
+      // Pre-send inference: if params empty, try to infer from URL again
       const selection = baseSelection.map((item) => {
         let params = item.params || [];
         if (!isNonEmptyArray(params) && item.url && item.url.includes("?")) {
@@ -335,13 +485,9 @@ export default function CrawlAndFuzzPage() {
         return { ...item, params };
       });
 
-      const allEmpty = selection.every(
-        (s) =>
-          (!isNonEmptyArray(s.params)) &&
-          (!isNonEmptyArray(s.body_keys))
-      );
+      const allEmpty = selection.every((s) => !isNonEmptyArray(s.params));
       if (allEmpty) {
-        toast.warn("Selected endpoints have no params/body keys to fuzz.");
+        toast.warn("Selected endpoints have no parameters to fuzz.");
       }
 
       const data = await fuzzSelected(jobId, selection, {
@@ -388,80 +534,122 @@ export default function CrawlAndFuzzPage() {
 
   const results = useMemo(() => rawResults.map(normalizeResultRow), [rawResults]);
 
-  const ConfBadge = ({ v }) => (
-    <span
-      className={cn(
-        "px-2 py-0.5 rounded text-xs",
-        v >= 0.8 ? "bg-green-600 text-white" : v >= 0.5 ? "bg-amber-500 text-white" : "bg-gray-300 text-gray-900"
-      )}
-      title={`confidence ${Number(v || 0).toFixed(2)}`}
-    >
-      {Number(v || 0).toFixed(2)}
-    </span>
-  );
+  // === New: filtered + sorted results for user-friendly review ===
+  const filteredResults = useMemo(() => {
+    const fams = familiesSelected;
+    const out = results.filter((r) => {
+      if (r.confidence < minConf) return false;
+      if (!fams.has(r.family || "sqli")) return false;
+      if (onlySqlError && !r.signals.sql_error) return false;
+      if (onlyXssRef && !r.signals.xss_reflected) return false;
+      if (onlyExtRedir && !r.signals.external_redirect) return false;
+      if (onlyWithDelta) {
+        const d = r.delta || {};
+        const hasDelta =
+          d.status_changed ||
+          (typeof d.len_delta === "number" && d.len_delta !== 0) ||
+          (typeof d.ms_delta === "number" && d.ms_delta !== 0);
+        if (!hasDelta) return false;
+      }
+      return true;
+    });
 
-  const FamilyBadge = ({ fam }) => (
-    <span
-      className={cn(
-        "px-2 py-0.5 rounded text-xs",
-        fam === "redirect" ? "bg-purple-600 text-white" : fam === "xss" ? "bg-pink-600 text-white" : "bg-blue-600 text-white"
-      )}
-    >
-      {fam || "—"}
-    </span>
-  );
+    const byLenAbs = (r) => Math.abs(r?.delta?.len_delta || 0);
+    const bySev = (r) => (r.severity === "high" ? 2 : r.severity === "med" ? 1 : 0);
 
-  const DeltaCell = ({ d }) => {
-    if (!d) return <span className="text-gray-400">—</span>;
-    const bits = [];
-    if (d.status_changed) bits.push("status");
-    if (typeof d.len_delta === "number") bits.push(`Δlen ${d.len_delta}`);
-    if (typeof d.ms_delta === "number") bits.push(`Δms ${d.ms_delta}`);
-    if (typeof d.len_ratio === "number" && isFinite(d.len_ratio)) bits.push(`×${Number(d.len_ratio).toFixed(2)}`);
-    return bits.length ? <span>{bits.join(" · ")}</span> : <span className="text-gray-400">—</span>;
-  };
+    out.sort((a, b) => {
+      if (sortBy === "len_abs") return byLenAbs(b) - byLenAbs(a) || (b.confidence - a.confidence);
+      if (sortBy === "url_asc") return String(a.url).localeCompare(String(b.url)) || (b.confidence - a.confidence);
+      if (sortBy === "sev_conf") return bySev(b) - bySev(a) || (b.confidence - a.confidence);
+      // default conf_desc
+      return b.confidence - a.confidence || byLenAbs(b) - byLenAbs(a);
+    });
 
-  const RedirectCell = ({ row }) => {
-    const ext = row?.signals?.external_redirect;
-    const loc = row?.signals?.location;
-    const host = row?.signals?.location_host;
-    if (!ext && !loc) return <span className="text-gray-400">—</span>;
-    return (
-      <span className="inline-flex items-center gap-2">
-        {ext ? <span className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-900">external</span> : null}
-        {host ? <span className="px-2 py-0.5 rounded text-xs bg-purple-50 text-purple-900">{host}</span> : null}
-        {loc ? <code className="text-xs break-all">{loc}</code> : null}
-      </span>
-    );
-  };
+    return out;
+  }, [results, familiesSelected, minConf, onlySqlError, onlyXssRef, onlyExtRedir, onlyWithDelta, sortBy]);
 
-  const SqlCell = ({ row }) => {
-    const s = row?.signals || {};
-    if (s.sql_error) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">sql error</span>;
-    const ms = row?.delta?.ms_delta;
-    const len = row?.delta?.len_delta;
-    if (typeof ms === "number" && ms >= 1500) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">timing Δ{ms}ms</span>;
-    if (typeof len === "number" && Math.abs(len) >= 200) return <span className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-900">boolean Δlen {len}</span>;
-    return <span className="text-gray-400">—</span>;
-  };
-
-  const XssCell = ({ row }) => {
-    return row?.signals?.xss_reflected
-      ? <span className="px-2 py-0.5 rounded text-xs bg-pink-100 text-pink-900">reflected</span>
-      : <span className="text-gray-400">—</span>;
-  };
-
-  const LoginCell = ({ row }) => {
-    const s = row?.signals || {};
-    if (s.login_success || s.token_present) {
-      return (
-        <span className="inline-flex items-center gap-2">
-          {s.login_success ? <span className="px-2 py-0.5 rounded text-xs bg-green-100 text-green-900">bypass</span> : null}
-          {s.token_present ? <span className="px-2 py-0.5 rounded text-xs bg-green-50 text-green-900">token</span> : null}
-        </span>
-      );
+  // Summary tiles
+  const summary = useMemo(() => {
+    const total = results.length;
+    const famCounts = { sqli: 0, xss: 0, redirect: 0 };
+    const signals = { sql: 0, xss: 0, redir: 0 };
+    let hi = 0;
+    for (const r of results) {
+      const fam = r.family || "sqli";
+      if (fam in famCounts) famCounts[fam]++;
+      if (r.signals.sql_error) signals.sql++;
+      if (r.signals.xss_reflected) signals.xss++;
+      if (r.signals.external_redirect) signals.redir++;
+      if (r.confidence >= 0.8) hi++;
     }
-    return <span className="text-gray-400">—</span>;
+    return { total, famCounts, signals, hi };
+  }, [results]);
+
+  // Export helpers
+  const copyJson = async () => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(filteredResults, null, 2));
+      toast.success("Copied filtered results JSON");
+    } catch {
+      toast.error("Copy failed");
+    }
+  };
+  const downloadCsv = () => {
+    const rows = [
+      ["method", "url", "param", "family", "severity", "confidence", "status_changed", "len_delta", "ms_delta", "sql_error", "xss_reflected", "external_redirect", "location", "payload"],
+      ...filteredResults.map((r) => [
+        r.method,
+        r.url,
+        r.param,
+        r.family || "",
+        r.severity || "",
+        r.confidence,
+        r?.delta?.status_changed ? "1" : "0",
+        r?.delta?.len_delta ?? "",
+        r?.delta?.ms_delta ?? "",
+        r.signals.sql_error ? "1" : "0",
+        r.signals.xss_reflected ? "1" : "0",
+        r.signals.external_redirect ? "1" : "0",
+        r.signals.location || "",
+        (r.payload || "").replace(/\n/g, "\\n"),
+      ]),
+    ];
+    const csv = rows.map((row) =>
+      row
+        .map((cell) => {
+          const s = String(cell ?? "");
+          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        })
+        .join(",")
+    ).join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `fuzz_results_filtered.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  // UI toggles
+  const toggleFamily = (fam) => {
+    const next = new Set(familiesSelected);
+    if (next.has(fam)) next.delete(fam);
+    else next.add(fam);
+    if (next.size === 0) {
+      // prevent all-off
+      toast.warn("At least one family should be selected");
+      return;
+    }
+    setFamiliesSelected(next);
+  };
+
+  const toggleExpand = (key) => {
+    const next = new Set(expanded);
+    next.has(key) ? next.delete(key) : next.add(key);
+    setExpanded(next);
   };
 
   return (
@@ -533,51 +721,125 @@ export default function CrawlAndFuzzPage() {
         </button>
 
         <div className="ml-auto flex items-center gap-2">
+          {/* Family filters */}
+          <div className="flex items-center gap-1">
+            <label className="text-xs text-gray-500">Family:</label>
+            <button
+              className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("sqli") ? "bg-blue-50 border-blue-200" : "bg-white")}
+              onClick={() => toggleFamily("sqli")}
+              title="Toggle SQLi rows"
+            >
+              SQLi
+            </button>
+            <button
+              className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("xss") ? "bg-pink-50 border-pink-200" : "bg-white")}
+              onClick={() => toggleFamily("xss")}
+              title="Toggle XSS rows"
+            >
+              XSS
+            </button>
+            <button
+              className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("redirect") ? "bg-purple-50 border-purple-200" : "bg-white")}
+              onClick={() => toggleFamily("redirect")}
+              title="Toggle Redirect rows"
+            >
+              Redirect
+            </button>
+          </div>
+
+          {/* Confidence slider */}
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-gray-500">Min conf:</label>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.05"
+              value={minConf}
+              onChange={(e) => setMinConf(Number(e.target.value))}
+              className="w-28"
+            />
+            <span className="text-xs font-mono">{minConf.toFixed(2)}</span>
+          </div>
+
+          {/* Signal toggles */}
+          <div className="flex items-center gap-1">
+            <label className="text-xs text-gray-500">Signals:</label>
+            <label className="text-xs flex items-center gap-1">
+              <input type="checkbox" checked={onlySqlError} onChange={(e) => setOnlySqlError(e.target.checked)} /> SQL err
+            </label>
+            <label className="text-xs flex items-center gap-1">
+              <input type="checkbox" checked={onlyXssRef} onChange={(e) => setOnlyXssRef(e.target.checked)} /> XSS refl
+            </label>
+            <label className="text-xs flex items-center gap-1">
+              <input type="checkbox" checked={onlyExtRedir} onChange={(e) => setOnlyExtRedir(e.target.checked)} /> Ext redir
+            </label>
+            <label className="text-xs flex items-center gap-1">
+              <input type="checkbox" checked={onlyWithDelta} onChange={(e) => setOnlyWithDelta(e.target.checked)} /> Has Δ
+            </label>
+          </div>
+
+          {/* Sort */}
           <select
-            className="border p-2 rounded"
-            value={familyFilter}
-            onChange={(e) => setFamilyFilter(e.target.value)}
-            title="Filter by inferred family"
+            className="border p-2 rounded text-sm"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            title="Sort results"
           >
-            <option value="all">All families</option>
-            <option value="sqli">SQLi</option>
-            <option value="xss">XSS</option>
-            <option value="redirect">Redirect</option>
+            <option value="conf_desc">Sort: Confidence ↓</option>
+            <option value="sev_conf">Sort: Severity → Confidence</option>
+            <option value="len_abs">Sort: |Δlen| ↓</option>
+            <option value="url_asc">Sort: URL ↑</option>
           </select>
+
+          {/* Free-text filter */}
           <input
             className="border p-2 rounded min-w-[220px]"
             placeholder="Filter (method, path, params)"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
-          <button className="border px-3 py-2 rounded" onClick={selectAllVisible}>
-            Select all (visible)
+
+          {/* Export */}
+          <button className="border px-3 py-2 rounded" onClick={copyJson} title="Copy filtered JSON">
+            Copy JSON
           </button>
-          <button
-            className="border px-3 py-2 rounded"
-            onClick={() => selectTopNVisible(20)}
-            title="Select top 20 visible by priority"
-          >
-            Select top 20
-          </button>
-          <button className="border px-3 py-2 rounded" onClick={() => selectFamilyVisible("redirect")}>
-            Select redirects
-          </button>
-          <button className="border px-3 py-2 rounded" onClick={() => selectFamilyVisible("xss")}>
-            Select XSS
-          </button>
-          <button className="border px-3 py-2 rounded" onClick={() => selectFamilyVisible("sqli")}>
-            Select SQLi
-          </button>
-          <button className="border px-3 py-2 rounded" onClick={clearSelection}>
-            Clear
+          <button className="border px-3 py-2 rounded" onClick={downloadCsv} title="Download filtered CSV">
+            CSV
           </button>
         </div>
       </div>
 
-      {/* Endpoint list with checkboxes */}
+      {/* Endpoint selection list */}
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Endpoints</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-semibold">Endpoints</h2>
+          <div className="flex items-center gap-2">
+            <button className="border px-3 py-1.5 rounded" onClick={selectAllVisible}>
+              Select all (visible)
+            </button>
+            <button
+              className="border px-3 py-1.5 rounded"
+              onClick={() => selectTopNVisible(20)}
+              title="Select top 20 visible by priority"
+            >
+              Select top 20
+            </button>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("redirect")}>
+              Select redirects
+            </button>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("xss")}>
+              Select XSS
+            </button>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("sqli")}>
+              Select SQLi
+            </button>
+            <button className="border px-3 py-1.5 rounded" onClick={clearSelection}>
+              Clear
+            </button>
+          </div>
+        </div>
+
         <div className="border rounded max-h-80 overflow-auto">
           {filtered.length === 0 ? (
             <div className="p-3 text-gray-500">No endpoints</div>
@@ -598,28 +860,25 @@ export default function CrawlAndFuzzPage() {
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-sm">{(ep.method || "").toUpperCase()}</span>
-                      <span className="font-mono text-sm break-all">{ep.url}</span>
+                      <a href={ep.url} target="_blank" rel="noreferrer" className="font-mono text-sm break-all underline decoration-dotted">
+                        {ep.url}
+                      </a>
                       <span className="ml-auto flex items-center gap-2">
                         <span className="text-xs text-gray-500">prio:</span>
                         <span className="text-xs font-mono">{(ep._priority || 0).toFixed(2)}</span>
-                        <span
-                          className={cn(
-                            "px-2 py-0.5 rounded text-xs",
-                            ep._family === "redirect"
-                              ? "bg-purple-100 text-purple-900"
-                              : ep._family === "xss"
-                              ? "bg-pink-100 text-pink-900"
-                              : "bg-blue-100 text-blue-900"
-                          )}
-                        >
-                          {ep._family}
-                        </span>
+                        <FamilyBadge fam={ep._family} />
                       </span>
                     </div>
                     {isNonEmptyArray(ep.params) ? (
-                      <div className="text-xs text-gray-600">params: {ep.params.join(", ")}</div>
+                      <div className="text-xs text-gray-600">query: {ep.params.join(", ")}</div>
                     ) : null}
-                    {isNonEmptyArray(ep.body_keys) ? (
+                    {isNonEmptyArray(ep._form_params) ? (
+                      <div className="text-xs text-gray-600">form: {ep._form_params.join(", ")}</div>
+                    ) : null}
+                    {isNonEmptyArray(ep._json_params) ? (
+                      <div className="text-xs text-gray-600">json: {ep._json_params.join(", ")}</div>
+                    ) : null}
+                    {isNonEmptyArray(ep.body_keys) && !(isNonEmptyArray(ep._form_params) || isNonEmptyArray(ep._json_params)) ? (
                       <div className="text-xs text-gray-600">body: {ep.body_keys.join(", ")}</div>
                     ) : null}
                   </div>
@@ -657,47 +916,195 @@ export default function CrawlAndFuzzPage() {
         </div>
       </section>
 
+      {/* Results summary strip */}
+      {results.length > 0 && (
+        <section className="space-y-2">
+          <div className="grid grid-cols-5 gap-3">
+            <div className="border rounded p-3">
+              <div className="text-gray-500">Results (total)</div>
+              <div className="text-xl font-semibold">{summary.total}</div>
+            </div>
+            <div className="border rounded p-3">
+              <div className="flex items-center justify-between text-gray-500">
+                <span>By family</span>
+              </div>
+              <div className="mt-1 text-sm flex gap-2 flex-wrap">
+                <Badge tone="blue">SQLi: {summary.famCounts.sqli}</Badge>
+                <Badge tone="pink">XSS: {summary.famCounts.xss}</Badge>
+                <Badge tone="purple">Redirect: {summary.famCounts.redirect}</Badge>
+              </div>
+            </div>
+            <div className="border rounded p-3">
+              <div className="text-gray-500">Signals</div>
+              <div className="mt-1 text-sm flex gap-2 flex-wrap">
+                <Badge tone="blue" title="Server error contains SQL error text">SQL err: {summary.signals.sql}</Badge>
+                <Badge tone="pink">XSS refl: {summary.signals.xss}</Badge>
+                <Badge tone="purple">Ext redir: {summary.signals.redir}</Badge>
+              </div>
+            </div>
+            <div className="border rounded p-3">
+              <div className="text-gray-500">High confidence (≥0.8)</div>
+              <div className="text-xl font-semibold">{summary.hi}</div>
+            </div>
+            <div className="border rounded p-3">
+              <div className="text-gray-500">Visible after filters</div>
+              <div className="text-xl font-semibold">{filteredResults.length}</div>
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Fuzz summary */}
       {results.length > 0 && (
         <section className="space-y-2">
           <h2 className="text-lg font-semibold">Fuzz Results</h2>
           <div className="overflow-auto border rounded">
             <table className="min-w-full text-sm">
-              <thead className="bg-gray-50">
+              <thead className="bg-gray-50 sticky top-0 z-10">
                 <tr className="text-left">
+                  <th className="p-2">Severity</th>
+                  <th className="p-2">Conf</th>
+                  <th className="p-2">Family</th>
                   <th className="p-2">Method</th>
                   <th className="p-2">URL</th>
                   <th className="p-2">Param</th>
-                  <th className="p-2">Family</th>
-                  <th className="p-2">Confidence</th>
                   <th className="p-2">Δ</th>
                   <th className="p-2">SQLi</th>
                   <th className="p-2">XSS</th>
-                  <th className="p-2">Login</th>
                   <th className="p-2">Redirect</th>
                   <th className="p-2">Payload</th>
+                  <th className="p-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((row, i) => (
-                  <tr key={`${row.method}-${row.url}-${row.param}-${i}`} className="border-t align-top">
-                    <td className="p-2 font-mono">{row.method}</td>
-                    <td className="p-2 font-mono break-all">{row.url}</td>
-                    <td className="p-2 font-mono">{row.param}</td>
-                    <td className="p-2"><FamilyBadge fam={row.family || "sqli"} /></td>
-                    <td className="p-2"><ConfBadge v={Number(row.confidence || 0)} /></td>
-                    <td className="p-2"><DeltaCell d={row.delta} /></td>
-                    <td className="p-2"><SqlCell row={row} /></td>
-                    <td className="p-2"><XssCell row={row} /></td>
-                    <td className="p-2"><LoginCell row={row} /></td>
-                    <td className="p-2"><RedirectCell row={row} /></td>
-                    <td className="p-2">
-                      <code className="text-xs break-all">{row.payload || ""}</code>
-                    </td>
-                  </tr>
-                ))}
+                {filteredResults.map((row, i) => {
+                  const key = `${row.method}-${row.url}-${row.param}-${i}`;
+                  const isOpen = expanded.has(key);
+                  return (
+                    <tr key={key} className="border-t align-top hover:bg-gray-50">
+                      <td className="p-2"><SeverityBadge sev={row.severity} /></td>
+                      <td className="p-2"><ConfBadge v={Number(row.confidence || 0)} /></td>
+                      <td className="p-2"><FamilyBadge fam={row.family || "sqli"} /></td>
+                      <td className="p-2 font-mono">{row.method}</td>
+                      <td className="p-2 font-mono break-all">
+                        <a href={row.url} target="_blank" rel="noreferrer" className="underline decoration-dotted">
+                          {row.url}
+                        </a>
+                      </td>
+                      <td className="p-2 font-mono">{row.param}</td>
+                      <td className="p-2"><DeltaCell d={row.delta} /></td>
+                      <td className="p-2"><SqlBits row={row} /></td>
+                      <td className="p-2"><XssBits row={row} /></td>
+                      <td className="p-2"><RedirectBits row={row} /></td>
+                      <td className="p-2">
+                        <code className="text-xs break-all">{row.payload || ""}</code>
+                      </td>
+                      <td className="p-2">
+                        <button
+                          className="text-xs border px-2 py-1 rounded"
+                          onClick={() => toggleExpand(key)}
+                          aria-expanded={isOpen}
+                        >
+                          {isOpen ? "Hide" : "Details"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
+            {filteredResults.length === 0 && (
+              <div className="p-4 text-sm text-gray-500">No results match the current filters.</div>
+            )}
+          </div>
+
+          {/* Expanded rows below the table for readability on narrow screens */}
+          <div className="space-y-2">
+            {filteredResults.map((row, i) => {
+              const key = `${row.method}-${row.url}-${row.param}-${i}`;
+              if (!expanded.has(key)) return null;
+              const v = row.signals?.verify || {};
+              return (
+                <div key={`detail-${key}`} className="border rounded p-3 bg-white">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="text-sm">
+                        <SeverityBadge sev={row.severity} /> <FamilyBadge fam={row.family || "sqli"} />{" "}
+                        <ConfBadge v={row.confidence} />
+                      </div>
+                      <div className="text-sm font-mono">
+                        {row.method} {row.url}
+                      </div>
+                      <div className="text-xs text-gray-600">param: <code>{row.param}</code></div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        className="text-xs border px-2 py-1 rounded"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(row.payload || "");
+                            toast.success("Payload copied");
+                          } catch {
+                            toast.error("Copy failed");
+                          }
+                        }}
+                      >
+                        Copy payload
+                      </button>
+                      <button
+                        className="text-xs border px-2 py-1 rounded"
+                        onClick={() => {
+                          const a = document.createElement("a");
+                          const blob = new Blob([JSON.stringify(row, null, 2)], { type: "application/json" });
+                          const url = URL.createObjectURL(blob);
+                          a.href = url;
+                          a.download = "fuzz_row.json";
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        }}
+                      >
+                        Save row
+                      </button>
+                      <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(key)}>
+                        Close
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Delta</div>
+                      <div className="text-sm"><DeltaCell d={row.delta} /></div>
+                    </div>
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Verify</div>
+                      <div className="text-xs space-y-1 font-mono">
+                        {"status" in v ? <div>status: {v.status}</div> : null}
+                        {"length" in v ? <div>length: {v.length}</div> : null}
+                        {"location" in v ? <div>location: <span className="break-all">{v.location}</span></div> : null}
+                      </div>
+                    </div>
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Signals</div>
+                      <div className="text-xs space-x-2">
+                        {row.signals.sql_error ? <Badge tone="blue">sql error</Badge> : null}
+                        {row.signals.xss_reflected ? <Badge tone="pink">xss reflected</Badge> : null}
+                        {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
+                        {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
+                        {row.signals.token_present ? <Badge tone="green">token present</Badge> : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3">
+                    <div className="text-xs text-gray-500 mb-1">Payload</div>
+                    <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">
+                      {row.payload || ""}
+                    </pre>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
           <details className="border rounded p-3 bg-gray-50">

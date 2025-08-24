@@ -3,15 +3,16 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional, Iterable
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 # ---- helpers ---------------------------------------------------------------
 
+# Do NOT include ".json" or ".txt" here; many legit APIs use those.
 STATIC_EXTENSIONS = (
     ".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
-    ".woff", ".woff2", ".ttf", ".map", ".json", ".txt", ".md"
+    ".woff", ".woff2", ".ttf", ".map", ".md"
 )
 
 REDIRECT_PARAM_NAMES = {"to", "url", "next", "dest", "redirect", "redirect_uri", "return", "continue"}
@@ -20,9 +21,10 @@ GRAPHQL_PATH_HINTS = {"/graphql"}
 GRAPHQL_BODY_KEYS = {"query", "operationName", "variables"}
 
 SQLI_HINTS = {"q", "query", "search", "id", "ids", "item", "product", "user", "uid", "order", "orderby", "sort"}
-XSS_HINTS = {"comment", "message", "content", "text", "name", "title", "feedback", "body", "desc", "description"}
+XSS_HINTS  = {"comment", "message", "content", "text", "name", "title", "feedback", "body", "desc", "description"}
 
 GQL_QUERY_RE = re.compile(r"\b(query|mutation|subscription)\b", re.I)
+
 
 def is_static_asset(url: str) -> bool:
     try:
@@ -30,42 +32,121 @@ def is_static_asset(url: str) -> bool:
     except Exception:
         return False
 
-def _safe_list(val) -> List[str]:
+
+def _safe_list(val: Any) -> List[Any]:
     return list(val) if isinstance(val, (list, tuple)) else []
 
-def extract_query_param_keys(ep: Dict[str, Any]) -> List[str]:
+
+def _as_plain(x: Any) -> Any:
+    """
+    Coerce Pydantic models (v1/v2) or other objects to plain dicts where possible.
+    Leave dicts and primitives unchanged.
+    """
+    if isinstance(x, dict):
+        return x
+    # pydantic v2
+    md = getattr(x, "model_dump", None)
+    if callable(md):
+        try:
+            return md()
+        except Exception:
+            pass
+    # pydantic v1
+    d = getattr(x, "dict", None)
+    if callable(d):
+        try:
+            return d()
+        except Exception:
+            pass
+    return x
+
+
+def _get(obj: Any, key: str, default: Any = None) -> Any:
+    """
+    Safe getter for dicts, Pydantic models, or plain objects.
+    """
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    # pydantic v2 BaseModel supports attribute access
+    if hasattr(obj, key):
+        try:
+            val = getattr(obj, key)
+            return val if val is not None else default
+        except Exception:
+            return default
+    # last-ditch: try item access
+    try:
+        return obj[key]  # type: ignore[index]
+    except Exception:
+        return default
+
+
+def _names_from_param_items(items: Iterable[Any]) -> List[str]:
+    """
+    Accepts a list of strings OR a list of dicts like {"name": "..."} (Pydantic export).
+    Returns normalized, unique names.
+    """
+    out: List[str] = []
+    seen = set()
+    for it in _safe_list(items):
+        if isinstance(it, str):
+            name = it.strip()
+        elif isinstance(it, dict):
+            name = str(it.get("name", "")).strip()
+        else:
+            # Unknown object; best-effort getattr
+            name = str(getattr(it, "name", "")).strip()
+        if name and name not in seen:
+            seen.add(name)
+            out.append(name)
+    return out
+
+
+# ------------------------ param extraction (unified) ------------------------
+
+def extract_query_param_keys(ep: Any) -> List[str]:
     """
     Preference order:
-      1) canonical 'query_keys' (from merged endpoints)
-      2) 'query_params' (from captured requests)
-      3) parse URL query
+      1) 'param_locs'.query (EndpointOut)
+      2) canonical 'query_keys' (legacy merged endpoints)
+      3) 'query_params' (captured request records)
+      4) parse URL query
     """
-    if isinstance(ep.get("query_keys"), list):
-        return sorted(set(_safe_list(ep.get("query_keys"))))
-    if isinstance(ep.get("query_params"), list):
-        return sorted(set(_safe_list(ep.get("query_params"))))
-    url = ep.get("url", "")
+    pl = _get(ep, "param_locs", None)
+    if isinstance(pl, dict) and isinstance(pl.get("query"), list):
+        return sorted(set(_names_from_param_items(pl["query"])))
+    qk = _get(ep, "query_keys")
+    if isinstance(qk, list):
+        return sorted(set(_safe_list(qk)))
+    qp = _get(ep, "query_params")
+    if isinstance(qp, list):
+        return sorted(set(_safe_list(qp)))
+    url = _get(ep, "url", "") or ""
     try:
         return sorted(set(parse_qs(urlparse(url).query).keys()))
     except Exception:
         return []
 
-def extract_body_param_keys(ep: Dict[str, Any]) -> List[str]:
+
+def extract_form_param_keys(ep: Any) -> List[str]:
     """
     Preference order:
-      1) canonical 'body_keys'
-      2) 'param_locs'.body
+      1) 'param_locs'.form (EndpointOut)
+      2) 'body_keys' (legacy)
       3) parsed dict keys from 'body_parsed'
       4) best-effort parse of 'post_data' (x-www-form-urlencoded)
     """
-    if isinstance(ep.get("body_keys"), list):
-        return sorted(set(_safe_list(ep.get("body_keys"))))
-    if isinstance(ep.get("param_locs"), dict) and isinstance(ep["param_locs"].get("body"), list):
-        return sorted(set(_safe_list(ep["param_locs"]["body"])))
-    bp = ep.get("body_parsed")
+    pl = _get(ep, "param_locs", None)
+    if isinstance(pl, dict) and isinstance(pl.get("form"), list):
+        return sorted(set(_names_from_param_items(pl["form"])))
+    bk = _get(ep, "body_keys")
+    if isinstance(bk, list):  # legacy form-urlencoded
+        return sorted(set(_safe_list(bk)))
+    bp = _get(ep, "body_parsed")
     if isinstance(bp, dict):
+        # Only treat as "form" here if content type suggests non-JSON (handled below by detect_content_type)
         return sorted(set(bp.keys()))
-    pd = ep.get("post_data")
+    pd = _get(ep, "post_data")
     if isinstance(pd, str) and pd:
         try:
             return sorted(set(parse_qs(pd).keys()))
@@ -73,32 +154,52 @@ def extract_body_param_keys(ep: Dict[str, Any]) -> List[str]:
             return []
     return []
 
-def detect_content_type(ep: Dict[str, Any]) -> str | None:
+
+def extract_json_param_keys(ep: Any) -> List[str]:
+    """
+    Preference order:
+      1) 'param_locs'.json (EndpointOut)
+      2) if 'body_parsed' is dict and content-type indicates json, use keys
+    """
+    pl = _get(ep, "param_locs", None)
+    if isinstance(pl, dict) and isinstance(pl.get("json"), list):
+        return sorted(set(_names_from_param_items(pl["json"])))
+    ct = detect_content_type(ep)
+    bp = _get(ep, "body_parsed")
+    if ct and "json" in ct and isinstance(bp, dict):
+        return sorted(set(bp.keys()))
+    return []
+
+
+# ------------------------ content type & signature --------------------------
+
+def detect_content_type(ep: Any) -> Optional[str]:
     """
     Normalize to one of: 'application/json', 'application/x-www-form-urlencoded',
-                         'multipart/form-data', None/other
+                         'multipart/form-data', or None/other.
     Preference:
-      - 'content_type' (from merged endpoints)
-      - map from 'body_type' (json|form)
-      - infer from 'enctype'
+      - EndpointOut 'content_type_hint'
+      - 'content_type' (legacy)
+      - map from 'body_type' (json|form) (captured requests)
+      - infer from 'enctype' (forms)
     """
-    ct = (ep.get("content_type") or "").lower().strip() or None
+    ct = (_get(ep, "content_type_hint") or _get(ep, "content_type") or "").lower().strip() or None
     if ct:
         if "json" in ct:
             return "application/json"
-        if "x-www-form-urlencoded" in ct or "form-urlencoded" in ct:
+        if "x-www-form-urlencoded" in ct or "form-urlencoded" in ct or ct == "application/x-www-form-urlencoded":
             return "application/x-www-form-urlencoded"
         if "multipart/form-data" in ct or "multipart" in ct:
             return "multipart/form-data"
         return ct
 
-    bt = (ep.get("body_type") or "").lower().strip()
+    bt = (_get(ep, "body_type") or "").lower().strip()
     if bt == "json":
         return "application/json"
     if bt == "form":
         return "application/x-www-form-urlencoded"
 
-    enctype = (ep.get("enctype") or "").lower().strip()
+    enctype = (_get(ep, "enctype") or "").lower().strip()
     if enctype:
         if "json" in enctype:
             return "application/json"
@@ -109,38 +210,45 @@ def detect_content_type(ep: Dict[str, Any]) -> str | None:
 
     return None
 
-def normalize_signature(ep: Dict[str, Any]) -> Tuple[str, str, Tuple[str, ...], str | None, Tuple[str, ...]]:
+
+def normalize_signature(ep: Any) -> Tuple[str, str, Tuple[str, ...], str | None, Tuple[str, ...], Tuple[str, ...]]:
     """
     Dedupe signature:
-      (METHOD, PATH, sorted(query_param_keys), content_type, sorted(body_param_keys))
+      (METHOD, PATH, sorted(query_param_keys), content_type, sorted(form_keys), sorted(json_keys))
     """
-    url = ep.get("url", "")
-    method = (ep.get("method") or "GET").upper()
+    url = _get(ep, "url", "") or ""
+    method = str((_get(ep, "method") or "GET")).upper()
     parsed = urlparse(url)
     q_keys = tuple(extract_query_param_keys(ep))
-    b_keys = tuple(extract_body_param_keys(ep))
+    f_keys = tuple(extract_form_param_keys(ep))
+    j_keys = tuple(extract_json_param_keys(ep))
     content_type = detect_content_type(ep)
-    return (method, parsed.path, q_keys, content_type, b_keys)
+    return (method, parsed.path or "/", q_keys, content_type, f_keys, j_keys)
 
-def smart_param_sources(ep: Dict[str, Any]) -> Dict[str, List[str]]:
+
+def smart_param_sources(ep: Any) -> Dict[str, List[str]]:
     """
-    Return a clean split of params by source. Prefer canonical param_locs if present.
+    Return a clean split of params by source. Prefer canonical ParamLocs if present.
     """
-    if isinstance(ep.get("param_locs"), dict):
-        locs = ep["param_locs"]
+    pl = _get(ep, "param_locs", None)
+    if isinstance(pl, dict):
         return {
-            "query": sorted(set(_safe_list(locs.get("query")))),
-            "body": sorted(set(_safe_list(locs.get("body")))),
+            "query": sorted(set(_names_from_param_items(pl.get("query", [])))),
+            "form":  sorted(set(_names_from_param_items(pl.get("form", [])))),
+            "json":  sorted(set(_names_from_param_items(pl.get("json", [])))),
         }
+    # legacy / captured-request fallback
     return {
         "query": extract_query_param_keys(ep),
-        "body": extract_body_param_keys(ep)
+        "form":  extract_form_param_keys(ep),
+        "json":  extract_json_param_keys(ep),
     }
 
-def looks_like_graphql(ep: Dict[str, Any], path: str, body_keys: List[str], body_parsed: Dict[str, Any] | None) -> bool:
+
+def looks_like_graphql(ep: Any, path: str, json_keys: List[str], body_parsed: Dict[str, Any] | None) -> bool:
     if any(path.endswith(p) for p in GRAPHQL_PATH_HINTS):
         return True
-    if set(body_keys) & GRAPHQL_BODY_KEYS:
+    if set(json_keys) & GRAPHQL_BODY_KEYS:
         q = ""
         try:
             q = (body_parsed or {}).get("query", "")
@@ -150,27 +258,31 @@ def looks_like_graphql(ep: Dict[str, Any], path: str, body_keys: List[str], body
             return True
     return False
 
-def is_upload_endpoint(content_type: str | None, body_keys: List[str]) -> bool:
+
+def is_upload_endpoint(content_type: Optional[str], form_keys: List[str]) -> bool:
     if content_type and "multipart/form-data" in content_type:
         return True
-    return any(k.lower() in UPLOAD_PARAM_HINTS for k in body_keys)
+    return any(k.lower() in UPLOAD_PARAM_HINTS for k in form_keys)
+
 
 # ---- categorization --------------------------------------------------------
 
-def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
-    url: str = endpoint.get("url", "")
-    method: str = (endpoint.get("method") or "GET").upper()
-    path: str = urlparse(url).path
-    is_login: bool = bool(endpoint.get("is_login", False))
-    csrf_params: List[str] = [p for p in (endpoint.get("csrf_params") or []) if p]
+def categorize_endpoint(endpoint: Any) -> Dict[str, Any]:
+    ep = _as_plain(endpoint)
+    url: str = (_get(ep, "url", "") or "")
+    method: str = str((_get(ep, "method") or "GET")).upper()
+    path: str = urlparse(url).path or "/"
+    is_login: bool = bool(_get(ep, "is_login", False))
+    csrf_params: List[str] = [p for p in (_get(ep, "csrf_params", []) or []) if p]
 
     # param sources (prefer canonical)
-    param_sources = smart_param_sources(endpoint)
-    params_all = sorted(set(param_sources["query"]) | set(param_sources["body"]))
+    param_sources = smart_param_sources(ep)
+    params_all = sorted(set(param_sources["query"]) | set(param_sources["form"]) | set(param_sources["json"]))
 
-    content_type = detect_content_type(endpoint)
-    body_parsed = endpoint.get("body_parsed") if isinstance(endpoint.get("body_parsed"), dict) else None
-    body_keys = param_sources["body"]
+    content_type = detect_content_type(ep)
+    body_parsed = _get(ep, "body_parsed") if isinstance(_get(ep, "body_parsed"), dict) else None
+    form_keys = param_sources["form"]
+    json_keys = param_sources["json"]
 
     categories: List[str] = []
     vuln_candidates: List[str] = []
@@ -181,21 +293,22 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
 
     # Basic method/param/content-type shape
     if method == "GET":
-        categories.append("GET_with_params" if params_all else "GET_no_params")
+        categories.append("GET_with_params" if param_sources["query"] else "GET_no_params")
     elif method == "POST":
-        if is_upload_endpoint(content_type, body_keys):
+        if is_upload_endpoint(content_type, form_keys):
             categories.append("POST_Multipart_Upload")
         elif content_type == "application/json":
-            categories.append("POST_JSON_with_params" if body_keys else "POST_JSON_no_params")
+            categories.append("POST_JSON_with_params" if json_keys else "POST_JSON_no_params")
         elif content_type == "application/x-www-form-urlencoded" or content_type is None:
-            categories.append("POST_FORM_with_params" if body_keys else "POST_no_params")
+            categories.append("POST_FORM_with_params" if form_keys else "POST_no_params")
         else:
             categories.append("POST_other")
+    else:
+        categories.append(f"{method}_other")
 
     # GraphQL
-    if looks_like_graphql(endpoint, path, body_keys, body_parsed):
+    if looks_like_graphql(ep, path, json_keys, body_parsed):
         categories.append("GraphQL")
-        # GraphQL is less SQLi-prone at SQL layer but still can have injections in resolvers—don’t pre-judge.
 
     # Heuristics: likely vulns based on param names and path
     lower_params = [p.lower() for p in params_all]
@@ -230,7 +343,7 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         categories.append("Auth_Login")
 
     # Uploads → potential file handling vulns
-    if is_upload_endpoint(content_type, body_keys):
+    if is_upload_endpoint(content_type, form_keys):
         vuln_candidates.append("File_Upload")
 
     # Fallback categories
@@ -243,13 +356,20 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
     vuln_candidates = sorted(set(vuln_candidates))
     categories = sorted(set(categories))
 
+    # backward-compatible param_locs for downstream that still expects dict of lists
+    param_locs_out = {
+        "query": param_sources["query"],
+        "form":  param_sources["form"],
+        "json":  param_sources["json"],
+    }
+
     return {
         "url": url,
         "path": path,
         "method": method,
         "params": params_all,
-        "param_sources": param_sources,        # {"query": [...], "body": [...]}
-        "param_locs": endpoint.get("param_locs") if isinstance(endpoint.get("param_locs"), dict) else param_sources,
+        "param_sources": param_locs_out,        # unified
+        "param_locs": param_locs_out,          # alias for older code that reads 'param_locs'
         "content_type": content_type,
         "categories": categories,
         "vuln_type_candidates": vuln_candidates,
@@ -258,6 +378,7 @@ def categorize_endpoint(endpoint: Dict[str, Any]) -> Dict[str, Any]:
         "csrf_params": csrf_params
     }
 
+
 # ---- main processing -------------------------------------------------------
 
 def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
@@ -265,7 +386,9 @@ def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
     Reads crawl_result.json:
       - new shape: {"endpoints": [...], "captured_requests": [...]}
       - legacy shape: flat list of endpoints/requests
-    Keeps distinct endpoint *variants* by (method, path, query_keys, content_type, body_keys),
+
+    Keeps distinct endpoint *variants* by:
+      (method, path, sorted(query_keys), content_type, sorted(form_keys), sorted(json_keys)),
     categorizes them, and writes grouped output per host.
     """
     if not input_path.exists():
@@ -274,7 +397,7 @@ def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
     with input_path.open("r", encoding="utf-8") as infile:
         data = json.load(infile)
 
-    # normalize the raw list
+    # normalize raw list
     if isinstance(data, list):
         raw_items = data
     elif isinstance(data, dict):
@@ -285,9 +408,12 @@ def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
 
     # dedupe by rich signature
     seen = set()
-    deduped: List[Dict[str, Any]] = []
+    deduped: List[Any] = []
     for ep in raw_items:
-        if not ep or not ep.get("url"):
+        if not ep:
+            continue
+        url = _get(ep, "url", "")
+        if not url:
             continue
         sig = normalize_signature(ep)
         if sig in seen:
