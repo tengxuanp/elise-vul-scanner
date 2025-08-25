@@ -1,0 +1,10 @@
+backend/venv            export-ignore
+backend/data            export-ignore
+data                    export-ignore
+frontend/node_modules   export-ignore
+**/__pycache__/         export-ignore
+*.pyc                   export-ignore
+.env                    export-ignore
+.next                   export-ignore
+dist                    export-ignore
+build                   export-ignore

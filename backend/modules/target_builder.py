@@ -56,6 +56,16 @@ try:
         _PP = None
 except Exception:
     _PP = None
+
+# ---- optional family router (non-fatal if missing) -------------------------
+try:
+    from .family_router import choose_family  # type: ignore
+    _HAS_FAMILY_ROUTER = True
+except Exception:
+    _HAS_FAMILY_ROUTER = False
+    def choose_family(_: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
+        return {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
 # ---------------------------------------------------------------------------
 
 # Payload families (seed lists; fuzzer will extend context-aware)
@@ -112,6 +122,15 @@ PAYLOADS = {
         "https://allowed.com.evil.com",
     ],
     "base": ["__X__", "__X1__", "__X2__"],  # generic reflection probes
+}
+
+# Mapping to keep names consistent across modules (detectors use "redirect")
+FAM_ALIASES = {
+    "redirect": "redir",
+    "redir": "redir",
+    "xss": "xss",
+    "sqli": "sqli",
+    "base": "base",
 }
 
 def _rand_control(prefix="ctrl") -> str:
@@ -209,6 +228,38 @@ def _payload_plan(param_name: str, method: str, content_type: Optional[str], pat
     # dedupe while preserving order
     seen, out = set(), []
     for p in plan:
+        if p not in seen:
+            seen.add(p); out.append(p)
+    return out
+
+def _plan_from_family(
+    family: str,
+    param_name: str,
+    method: str,
+    content_type: Optional[str],
+    path: str
+) -> List[str]:
+    """
+    Prioritize payloads for a given family (from family_router).
+    Always append a couple of base probes for reflection coverage.
+    """
+    fam = FAM_ALIASES.get((family or "").lower(), "base")
+    seeds = []
+    if fam == "xss":
+        seeds = PAYLOADS["xss"]
+    elif fam == "sqli":
+        seeds = PAYLOADS["sqli"]
+    elif fam == "redir":
+        seeds = PAYLOADS["redir"]
+    else:
+        # If router doesn't know, fall back to heuristic plan
+        return _payload_plan(param_name, method, content_type, path)
+
+    # Family-first, then a small base tail
+    merged = list(seeds) + PAYLOADS["base"]
+    # Dedupe
+    seen, out = set(), []
+    for p in merged:
         if p not in seen:
             seen.add(p); out.append(p)
     return out
@@ -369,7 +420,11 @@ def build_targets(
                   "control_value": str,
                   "payloads": [str, ...],
                   "timeout": float,
-                  "priority": float
+                  "priority": float,
+                  # --- NEW (optional, for transparency / UI) ---
+                  "family_hint": "xss|sqli|redirect|base",
+                  "family_confidence": float,
+                  "family_reason": str
                 }, ...
             ]}
     """
@@ -508,6 +563,20 @@ def build_targets(
         for p in q_params:
             ctrl = _rand_control()
             base_url = _inject_query(url, p, ctrl)  # ensure target param is present with control value
+
+            # Family recommendation (query)
+            fam_info = choose_family({
+                "url": url,
+                "method": method,
+                "in": "query",
+                "target_param": p,
+                "content_type": None,
+                "control_value": ctrl,
+            }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
+            family = fam_info.get("family") or "base"
+            payloads = _plan_from_family(family, p, method, None, path)
+
             key = _dedupe_key(method, base_url, "query", p, None)
             if key in seen:
                 continue
@@ -522,9 +591,13 @@ def build_targets(
                 "headers": dict(headers),
                 "body": None,
                 "control_value": ctrl,
-                "payloads": _payload_plan(p, method, ctype, path),
+                "payloads": payloads,
                 "timeout": float(timeout_s),
                 "priority": _priority_score(method, url, p),
+                # transparency
+                "family_hint": family,
+                "family_confidence": float(fam_info.get("confidence", 0.0)),
+                "family_reason": fam_info.get("reason") or "",
             }
             targets.append(t)
 
@@ -542,6 +615,18 @@ def build_targets(
                     body = "&".join(f"{k}={quote_plus(str(v))}" for k, v in ft.items())
                     headers_body = _merge_headers(headers, {"Content-Type": "application/x-www-form-urlencoded"})
 
+                    fam_info = choose_family({
+                        "url": url,
+                        "method": method,
+                        "in": "form",
+                        "target_param": p,
+                        "content_type": "application/x-www-form-urlencoded",
+                        "control_value": ctrl,
+                    }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
+                    family = fam_info.get("family") or "base"
+                    payloads = _plan_from_family(family, p, method, ctype, path)
+
                     key = _dedupe_key(method, url, "body", p, "application/x-www-form-urlencoded")
                     if key in seen:
                         continue
@@ -557,9 +642,12 @@ def build_targets(
                         "headers": headers_body,
                         "body": body,
                         "control_value": ctrl,
-                        "payloads": _payload_plan(p, method, ctype, path),
+                        "payloads": payloads,
                         "timeout": float(timeout_s),
                         "priority": _priority_score(method, url, p),
+                        "family_hint": family,
+                        "family_confidence": float(fam_info.get("confidence", 0.0)),
+                        "family_reason": fam_info.get("reason") or "",
                     }
                     targets.append(t)
 
@@ -569,6 +657,18 @@ def build_targets(
                     ctrl = _rand_control()
                     body = {**json_template, p: ctrl} if json_template else {p: ctrl}
                     headers_body = _merge_headers(headers, {"Content-Type": "application/json"})
+
+                    fam_info = choose_family({
+                        "url": url,
+                        "method": method,
+                        "in": "json",
+                        "target_param": p,
+                        "content_type": "application/json",
+                        "control_value": ctrl,
+                    }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
+                    family = fam_info.get("family") or "base"
+                    payloads = _plan_from_family(family, p, method, ctype, path)
 
                     key = _dedupe_key(method, url, "body", p, "application/json")
                     if key in seen:
@@ -585,9 +685,12 @@ def build_targets(
                         "headers": headers_body,
                         "body": body,
                         "control_value": ctrl,
-                        "payloads": _payload_plan(p, method, ctype, path),
+                        "payloads": payloads,
                         "timeout": float(timeout_s),
                         "priority": _priority_score(method, url, p),
+                        "family_hint": family,
+                        "family_confidence": float(fam_info.get("confidence", 0.0)),
+                        "family_reason": fam_info.get("reason") or "",
                     }
                     targets.append(t)
 

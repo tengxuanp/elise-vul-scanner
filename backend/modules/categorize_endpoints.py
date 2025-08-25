@@ -7,6 +7,15 @@ from typing import List, Dict, Any, Tuple, Optional, Iterable
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+# ---- optional family router (non-fatal if missing) --------------------------
+try:
+    from .family_router import choose_family  # noqa
+    _HAS_FAMILY_ROUTER = True
+except Exception:
+    _HAS_FAMILY_ROUTER = False
+    def choose_family(_: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[override]
+        return {"family": "base", "confidence": 0.0, "reason": "router_unavailable", "rules_matched": [], "scores": {}}
+
 # ---- helpers ---------------------------------------------------------------
 
 # Do NOT include ".json" or ".txt" here; many legit APIs use those.
@@ -15,13 +24,20 @@ STATIC_EXTENSIONS = (
     ".woff", ".woff2", ".ttf", ".map", ".md"
 )
 
-REDIRECT_PARAM_NAMES = {"to", "url", "next", "dest", "redirect", "redirect_uri", "return", "continue"}
-UPLOAD_PARAM_HINTS = {"file", "files", "upload", "image", "avatar", "photo", "filename"}
+REDIRECT_PARAM_NAMES = {"to", "url", "next", "dest", "redirect", "redirect_uri", "return", "continue", "callback", "return_to"}
+UPLOAD_PARAM_HINTS = {"file", "files", "upload", "image", "avatar", "photo", "filename", "attachment"}
 GRAPHQL_PATH_HINTS = {"/graphql"}
 GRAPHQL_BODY_KEYS = {"query", "operationName", "variables"}
 
-SQLI_HINTS = {"q", "query", "search", "id", "ids", "item", "product", "user", "uid", "order", "orderby", "sort"}
-XSS_HINTS  = {"comment", "message", "content", "text", "name", "title", "feedback", "body", "desc", "description"}
+# broader than before: include sort/order/dir and pagination ids seen in the wild
+SQLI_HINTS = {
+    "q", "query", "search", "term", "filter", "id", "ids", "item", "product", "user", "uid",
+    "order", "orderby", "sort", "dir", "page", "page_id", "cat", "category_id"
+}
+XSS_HINTS = {
+    "comment", "message", "content", "text", "name", "title", "feedback", "body", "desc", "description",
+    "bio", "notes", "subject"
+}
 
 GQL_QUERY_RE = re.compile(r"\b(query|mutation|subscription)\b", re.I)
 
@@ -163,7 +179,7 @@ def extract_json_param_keys(ep: Any) -> List[str]:
     """
     pl = _get(ep, "param_locs", None)
     if isinstance(pl, dict) and isinstance(pl.get("json"), list):
-        return sorted(set(_names_from_param_items(pl["json"])))
+        return sorted(set(_names_from_param_items(pl.get("json", []))))
     ct = detect_content_type(ep)
     bp = _get(ep, "body_parsed")
     if ct and "json" in ct and isinstance(bp, dict):
@@ -265,6 +281,45 @@ def is_upload_endpoint(content_type: Optional[str], form_keys: List[str]) -> boo
     return any(k.lower() in UPLOAD_PARAM_HINTS for k in form_keys)
 
 
+# ---- family recommendation --------------------------------------------------
+
+def _recommend_param_families(ep: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    For each parameter source (query/form/json), call family_router.choose_family
+    to propose a payload family with reason & confidence.
+    """
+    if not _HAS_FAMILY_ROUTER:
+        return []
+
+    recs: List[Dict[str, Any]] = []
+    url: str = (_get(ep, "url", "") or "")
+    method: str = str((_get(ep, "method") or "GET")).upper()
+    ct = detect_content_type(ep)
+    sources = smart_param_sources(ep)
+
+    for loc in ("query", "form", "json"):
+        for name in sources.get(loc, []):
+            info = choose_family({
+                "url": url,
+                "method": method,
+                "in": loc,
+                "target_param": name,
+                "content_type": ct,
+                "control_value": "FUZZ",
+            })
+            recs.append({
+                "param": name,
+                "in": loc,
+                "family": info.get("family", "base"),
+                "confidence": info.get("confidence", 0.0),
+                "reason": info.get("reason", ""),
+            })
+    # sort by confidence desc, then location priority (query>form>json)
+    loc_order = {"query": 0, "form": 1, "json": 2}
+    recs.sort(key=lambda r: (-(r.get("confidence") or 0.0), loc_order.get(r.get("in", ""), 9), r.get("param", "")))
+    return recs
+
+
 # ---- categorization --------------------------------------------------------
 
 def categorize_endpoint(endpoint: Any) -> Dict[str, Any]:
@@ -363,6 +418,9 @@ def categorize_endpoint(endpoint: Any) -> Dict[str, Any]:
         "json":  param_sources["json"],
     }
 
+    # optional per-param family recommendations
+    param_recommendations = _recommend_param_families(ep)
+
     return {
         "url": url,
         "path": path,
@@ -375,7 +433,8 @@ def categorize_endpoint(endpoint: Any) -> Dict[str, Any]:
         "vuln_type_candidates": vuln_candidates,
         "tested": False,
         "is_login": is_login,
-        "csrf_params": csrf_params
+        "csrf_params": csrf_params,
+        "param_recommendations": param_recommendations,  # NEW (safe to ignore downstream)
     }
 
 
@@ -475,6 +534,7 @@ def process_crawl_results(input_path: Path, output_dir: Path, target_url: str):
     output_payload = {
         "target": target_url,
         "total": total,
+        "family_router_available": _HAS_FAMILY_ROUTER,
         "summary_counts": summary_counts,
         "groups": grouped
     }

@@ -64,9 +64,18 @@ def parse_query(url: str) -> List[str]:
         return []
 
 
+def _looks_like_json_string(s: Optional[str]) -> bool:
+    if not s:
+        return False
+    ss = s.strip()
+    return (ss.startswith("{") and ss.endswith("}")) or (ss.startswith("[") and ss.endswith("]"))
+
+
 def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, Any]:
     """
-    Returns: {"type": "json"|"form"|"other"|None, "parsed": dict|None, "raw": str|None, "keys":[...]}
+    Returns: {"type": "json"|"form"|"multipart"|"other"|None, "parsed": dict|None, "raw": str|None, "keys":[...], "graphql": dict|None}
+    - Tries hard to infer JSON even if content-type is missing/misleading.
+    - Multipart: best-effort extraction of field names (no file content preserved).
     """
     ct = ""
     for k, v in (headers or {}).items():
@@ -75,25 +84,44 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
             break
 
     if not post_data:
-        return {"type": None, "parsed": None, "raw": None, "keys": []}
+        return {"type": None, "parsed": None, "raw": None, "keys": [], "graphql": None}
 
-    if "application/json" in ct:
+    # JSON
+    if "application/json" in ct or _looks_like_json_string(post_data):
+        parsed, keys, gql = None, [], None
         try:
             parsed = json.loads(post_data)
-            keys = sorted(parsed.keys()) if isinstance(parsed, dict) else []
-            return {"type": "json", "parsed": parsed if isinstance(parsed, dict) else None, "raw": post_data, "keys": keys}
+            if isinstance(parsed, dict):
+                keys = sorted(parsed.keys())
+                # GraphQL hint
+                if "query" in parsed:
+                    gql = {
+                        "has_graphql": True,
+                        "operationName": parsed.get("operationName"),
+                        "variables_keys": sorted((parsed.get("variables") or {}).keys()) if isinstance(parsed.get("variables"), dict) else [],
+                    }
         except Exception:
-            return {"type": "json", "parsed": None, "raw": post_data, "keys": []}
+            parsed = None
+        return {"type": "json", "parsed": parsed if isinstance(parsed, dict) else None, "raw": post_data, "keys": keys, "graphql": gql}
 
+    # Form-urlencoded
     if "application/x-www-form-urlencoded" in ct or "form" in ct:
         try:
             parsed_qs = parse_qs(post_data)  # {k: [v,...]}
             parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_qs.items()}
-            return {"type": "form", "parsed": parsed, "raw": post_data, "keys": sorted(parsed.keys())}
+            return {"type": "form", "parsed": parsed, "raw": post_data, "keys": sorted(parsed.keys()), "graphql": None}
         except Exception:
-            return {"type": "form", "parsed": None, "raw": post_data, "keys": []}
+            return {"type": "form", "parsed": None, "raw": post_data, "keys": [], "graphql": None}
 
-    return {"type": "other", "parsed": None, "raw": post_data, "keys": []}
+    # Multipart (best-effort names)
+    if "multipart/form-data" in ct:
+        # Pull out name="field" occurrences; do not keep contents
+        names = sorted(set(re.findall(r'name="([^"]+)"', post_data)))
+        parsed = {n: "<multipart>" for n in names}
+        return {"type": "multipart", "parsed": parsed if parsed else None, "raw": "<multipart redacted>", "keys": names, "graphql": None}
+
+    # Fallback
+    return {"type": "other", "parsed": None, "raw": post_data, "keys": [], "graphql": None}
 
 
 def strip_fragment(u: str) -> str:
@@ -171,7 +199,8 @@ def crawl_site(
 
     captured_requests item shape:
       {
-        "method","url","headers","post_data","body_type","body_parsed","query_params"
+        "method","url","headers","post_data","body_type","body_parsed","query_params",
+        "response_status","response_content_type","graphql","is_login_like"
       }
 
     NOTES:
@@ -184,6 +213,7 @@ def crawl_site(
     page_budget = [0]  # mutable counter
     raw_form_endpoints: List[Dict[str, Any]] = []
     captured_requests: List[Dict[str, Any]] = []
+    response_meta: Dict[str, Dict[str, Any]] = {}  # by stripped URL: {"status": int, "content-type": str}
 
     def normalize_for_visit(url: str) -> Tuple[str, Tuple[str, ...]]:
         """Normalize a page URL for visited-set: path + query key tuple (fragment stripped)."""
@@ -197,7 +227,7 @@ def crawl_site(
         Deduplicate by method + path + query param keys + body shape (type+keys).
         """
         seen = set()
-        unique = []
+        unique: List[Dict[str, Any]] = []
         for r in reqs:
             url = r.get("url", "")
             parsed = urlparse(url)
@@ -233,12 +263,21 @@ def crawl_site(
             j_names: List[str] = []
             content_type_hint: Optional[str] = None
 
-            if b_type == "json":
-                j_names = sorted((parsed_body or {}).keys())
-                content_type_hint = "application/json"
-            elif b_type == "form":
-                f_names = sorted((parsed_body or {}).keys())
-                content_type_hint = "application/x-www-form-urlencoded"
+            # Prefer observed response content-type as our hint if available
+            rmeta = response_meta.get(url)
+            if rmeta and rmeta.get("content-type"):
+                content_type_hint = rmeta["content-type"].split(";")[0].strip().lower()
+
+            if not content_type_hint:
+                if b_type == "json":
+                    j_names = sorted((parsed_body or {}).keys())
+                    content_type_hint = "application/json"
+                elif b_type == "form":
+                    f_names = sorted((parsed_body or {}).keys())
+                    content_type_hint = "application/x-www-form-urlencoded"
+                elif b_type == "multipart":
+                    f_names = sorted((parsed_body or {}).keys())
+                    content_type_hint = "multipart/form-data"
 
             out.append({
                 "url": url,
@@ -286,7 +325,7 @@ def crawl_site(
                 "q_names": sorted(q_names),
                 "f_names": sorted(f_names),
                 "j_names": sorted(j_names),
-                "content_type_hint": ("application/json" if j_names else ("application/x-www-form-urlencoded" if f_names else None)),
+                "content_type_hint": ("application/json" if j_names else ("multipart/form-data" if (enctype and "multipart" in enctype) else ("application/x-www-form-urlencoded" if f_names else None))),
                 "source": "form",
                 "headers": {},
             })
@@ -333,6 +372,7 @@ def crawl_site(
         final_eps.sort(key=lambda x: (x.method.value, x.path))
         return final_eps
 
+    # --- capture hooks --------------------------------------------------------
     def capture_request(request):
         try:
             url = request.url
@@ -344,22 +384,76 @@ def crawl_site(
             if "/socket.io/" in urlparse(url).path:
                 return
 
+            # Headers & body
             req_headers = dict(request.headers)
-            post_data = request.post_data
+            # Try both .post_data and .post_data_json if available
+            post_data = None
+            try:
+                post_data = request.post_data
+            except Exception:
+                post_data = None
+            if not post_data:
+                try:
+                    j = request.post_data_json  # playwright exposes property in some versions
+                    if j is not None:
+                        post_data = json.dumps(j)
+                except Exception:
+                    pass
+
             body_info = parse_body(req_headers, post_data)
             q_params = parse_query(url)
+            u = strip_fragment(url)
 
-            captured_requests.append({
+            is_login_like = False
+            if body_info["type"] == "json" and isinstance(body_info.get("parsed"), dict):
+                keys = set(k.lower() for k in body_info["parsed"].keys())
+                if "password" in keys or ("email" in keys and any(k in keys for k in ("user", "username", "login"))):
+                    is_login_like = True
+            if any(x in url.lower() for x in ("/login", "/signin")):
+                is_login_like = True
+
+            rec = {
                 "method": request.method,
-                "url": strip_fragment(url),
+                "url": u,
                 "headers": scrub_headers(req_headers),  # safe to persist
                 "post_data": body_info["raw"],
-                "body_type": body_info["type"],         # "json" | "form" | "other" | None
-                "body_parsed": body_info["parsed"],     # dict for json/form; else None
+                "body_type": body_info["type"],         # "json" | "form" | "multipart" | "other" | None
+                "body_parsed": body_info["parsed"],     # dict for json/form/multipart; else None
                 "query_params": q_params,
-            })
+                "response_status": None,
+                "response_content_type": None,
+                "graphql": body_info.get("graphql"),
+                "is_login_like": is_login_like,
+            }
+
+            if u in response_meta:
+                rec["response_status"] = response_meta[u].get("status")
+                rec["response_content_type"] = response_meta[u].get("content-type")
+
+            captured_requests.append(rec)
         except Exception as e:
             print(f"[WARN] capture_request error for {getattr(request, 'url', 'unknown')}: {e}")
+
+    def capture_response(response):
+        try:
+            url = response.url
+            if not same_origin(url, target_url):
+                return
+            if "/socket.io/" in urlparse(url).path:
+                return
+            u = strip_fragment(url)
+            # headers: dict[str,str]
+            try:
+                headers = response.headers
+            except Exception:
+                headers = {}
+            ct = (headers.get("content-type") or headers.get("Content-Type") or "").lower()
+            response_meta[u] = {
+                "status": response.status,
+                "content-type": ct,
+            }
+        except Exception:
+            pass
 
     def capture_forms_on_page(html: str, base_url: str):
         soup = BeautifulSoup(html, "html.parser")
@@ -384,8 +478,8 @@ def crawl_site(
                 "url": full_action_url,
                 "method": method,
                 "params": [p for p in form_params if p],
-                "is_login": form_is_login(inputs),        # currently unused; reserved
-                "csrf_params": form_csrf_params(inputs),  # currently unused; reserved
+                "is_login": form_is_login(inputs),        # now actually surfaced downstream
+                "csrf_params": form_csrf_params(inputs),  # now actually surfaced downstream
                 "enctype": enctype
             })
 
@@ -402,6 +496,21 @@ def crawl_site(
         page_budget[0] += 1
         page = context.new_page()
         page.on("request", capture_request)
+        page.on("response", capture_response)
+
+        # Also harvest forms on frame navigations (SPAs using pushState)
+        def _on_frame_nav(frame):
+            try:
+                if frame and frame.url and same_origin(frame.url, target_url):
+                    html2 = frame.content()
+                    capture_forms_on_page(html2, frame.url)
+            except Exception:
+                pass
+
+        try:
+            page.on("framenavigated", _on_frame_nav)
+        except Exception:
+            pass
 
         try:
             # First load
@@ -471,8 +580,25 @@ def crawl_site(
     # --- Playwright bootstrap (with optional auth) ---
     headful = bool(auth and str(auth.get("mode", "none")).lower() == "manual")
     with sync_playwright() as p:
+        # Reuse prior storage state if present (helps with auth continuity)
+        storage_state = None
+        try:
+            if job_dir:
+                state_path = Path(job_dir) / "storage_state.json"
+                if state_path.exists():
+                    storage_state = str(state_path)
+        except Exception:
+            storage_state = None
+
         browser = p.chromium.launch(headless=not headful)
-        context = browser.new_context()
+        context = browser.new_context(storage_state=storage_state)
+
+        # Extra headers passthrough (advanced users)
+        try:
+            if auth and isinstance(auth.get("extra_headers"), dict):
+                context.set_extra_http_headers(auth["extra_headers"])
+        except Exception:
+            pass
 
         # Optional auth bootstrap
         if auth and str(auth.get("mode", "none")).lower() != "none":
@@ -555,6 +681,15 @@ def crawl_site(
                 pass
 
     # === Build final outputs ===
+    # Enrich captured_requests with response_meta if any new arrivals happened after request hook
+    for rec in captured_requests:
+        u = rec.get("url")
+        if u and u in response_meta:
+            if rec.get("response_status") is None:
+                rec["response_status"] = response_meta[u].get("status")
+            if rec.get("response_content_type") is None:
+                rec["response_content_type"] = response_meta[u].get("content-type")
+
     deduped_reqs = dedupe_requests(captured_requests)
     eps_from_network = endpoints_from_requests(deduped_reqs)
     eps_from_forms = endpoints_from_forms(raw_form_endpoints)

@@ -13,8 +13,13 @@ from pydantic import BaseModel, Field
 
 from ..modules.playwright_crawler import crawl_site
 from ..modules.categorize_endpoints import process_crawl_results
-from ..db import SessionLocal
-from ..models import Endpoint, TestCase, ScanJob, JobPhase
+
+# --- DB (optional; do not hard-crash if absent) ---
+try:
+    from ..db import SessionLocal  # type: ignore
+    from ..models import Endpoint, TestCase, ScanJob, JobPhase  # type: ignore
+except Exception:  # pragma: no cover
+    SessionLocal, Endpoint, TestCase, ScanJob, JobPhase = None, None, None, None, None
 
 router = APIRouter()
 
@@ -77,7 +82,7 @@ def _canon_method(v: Any) -> str:
     return s.upper()
 
 def _names(xs) -> List[str]:
-    """Extract parameter names from a list of strings or {name:...} dicts."""
+    """Extract parameter names from a list of strings or {name:...} dicts or objects with .name."""
     out: List[str] = []
     for x in (xs or []):
         if isinstance(x, str):
@@ -85,6 +90,10 @@ def _names(xs) -> List[str]:
                 out.append(x)
         elif isinstance(x, dict) and x.get("name"):
             out.append(str(x["name"]))
+        else:
+            n = getattr(x, "name", None)
+            if n:
+                out.append(str(n))
     return out
 
 def _map_param_locs_from_crawler(req: Dict[str, Any]) -> Optional[Dict[str, List[str]]]:
@@ -176,6 +185,9 @@ def _derive_param_locs(req: Dict[str, Any]) -> Dict[str, List[str]]:
 
 def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
     """Upsert Endpoint and create planned TestCase rows per param for this job."""
+    if not (SessionLocal and Endpoint and TestCase):
+        return  # DB not available
+
     method = _canon_method(req.get("method"))
     url = str(req.get("url") or "")
 
@@ -197,7 +209,7 @@ def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
             for k, v in (param_locs or {}).items():
                 if k not in merged or not isinstance(merged[k], list):
                     merged[k] = []
-                merged[k] = sorted(set((merged[k] or [])) | set(v or []))
+                merged[k] = sorted(set((merged[k] or []) | set(v or [])))
             ep.param_locs = merged
 
         def _ensure_tc(param: str, family: str = "plan", payload_id: str = "n/a"):
@@ -278,14 +290,15 @@ def start_crawl(body: CrawlRequest):
     _write_status(job_id, "starting")
 
     # set job phase -> discovery (best-effort)
-    try:
-        with SessionLocal() as db:
-            row = db.query(ScanJob).filter_by(job_id=job_id).first()
-            if row:
-                row.phase = JobPhase.discovery
-                db.commit()
-    except Exception:
-        pass
+    if SessionLocal and ScanJob and JobPhase:
+        try:
+            with SessionLocal() as db:
+                row = db.query(ScanJob).filter_by(job_id=job_id).first()
+                if row:
+                    row.phase = JobPhase.discovery
+                    db.commit()
+        except Exception:
+            pass
 
     def run_crawl():
         try:
@@ -377,14 +390,15 @@ def start_crawl(body: CrawlRequest):
             _write_status(job_id, "completed")
 
             # advance phase → fuzzing (next step in pipeline)
-            try:
-                with SessionLocal() as db:
-                    row = db.query(ScanJob).filter_by(job_id=job_id).first()
-                    if row:
-                        row.phase = JobPhase.fuzzing
-                        db.commit()
-            except Exception:
-                pass
+            if SessionLocal and ScanJob and JobPhase:
+                try:
+                    with SessionLocal() as db:
+                        row = db.query(ScanJob).filter_by(job_id=job_id).first()
+                        if row:
+                            row.phase = JobPhase.fuzzing
+                            db.commit()
+                except Exception:
+                    pass
 
         except Exception as e:
             _write_status(job_id, "error", {"error": str(e)})
