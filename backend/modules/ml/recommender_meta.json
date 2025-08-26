@@ -1,0 +1,10 @@
+{
+  "feature_dim": 17,
+  "feature_names": null,
+  "note": "Rankers expect [endpoint_feature(17)] + [payload_desc(5)] at inference.",
+  "families_trained": [
+    "sqli",
+    "xss",
+    "redirect"
+  ]
+}

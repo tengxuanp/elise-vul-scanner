@@ -1,0 +1,77 @@
+{
+  "family": "xss",
+  "samples_train": 30,
+  "queries_train": 10,
+  "samples_val": 6,
+  "queries_val": 2,
+  "metrics": {
+    "NDCG@3": 1.0,
+    "Hit@1": 1.0,
+    "Hit@3": 1.0,
+    "Hit@5": 1.0,
+    "queries": 2
+  },
+  "reliability_bins": [
+    {
+      "bin": 0,
+      "p_mean": 0.05,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 1,
+      "p_mean": 0.15000000000000002,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 2,
+      "p_mean": 0.25,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 3,
+      "p_mean": 0.3333333333333333,
+      "emp_rate": 1.0,
+      "count": 6
+    },
+    {
+      "bin": 4,
+      "p_mean": 0.45,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 5,
+      "p_mean": 0.55,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 6,
+      "p_mean": 0.6500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 7,
+      "p_mean": 0.75,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 8,
+      "p_mean": 0.8500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 9,
+      "p_mean": 0.95,
+      "emp_rate": 0.0,
+      "count": 0
+    }
+  ],
+  "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
+}

@@ -1,0 +1,77 @@
+{
+  "family": "sqli",
+  "samples_train": 202,
+  "queries_train": 18,
+  "samples_val": 77,
+  "queries_val": 5,
+  "metrics": {
+    "NDCG@3": 1.0,
+    "Hit@1": 1.0,
+    "Hit@3": 1.0,
+    "Hit@5": 1.0,
+    "queries": 5
+  },
+  "reliability_bins": [
+    {
+      "bin": 0,
+      "p_mean": 0.03178348608798087,
+      "emp_rate": 0.8076923076923077,
+      "count": 52
+    },
+    {
+      "bin": 1,
+      "p_mean": 0.1237168244579037,
+      "emp_rate": 1.0,
+      "count": 23
+    },
+    {
+      "bin": 2,
+      "p_mean": 0.25088588044660437,
+      "emp_rate": 1.0,
+      "count": 2
+    },
+    {
+      "bin": 3,
+      "p_mean": 0.35000000000000003,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 4,
+      "p_mean": 0.45,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 5,
+      "p_mean": 0.55,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 6,
+      "p_mean": 0.6500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 7,
+      "p_mean": 0.75,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 8,
+      "p_mean": 0.8500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 9,
+      "p_mean": 0.95,
+      "emp_rate": 0.0,
+      "count": 0
+    }
+  ],
+  "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
+}

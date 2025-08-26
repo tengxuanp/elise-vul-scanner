@@ -1,9 +1,9 @@
 # backend/modules/family_router.py
 from __future__ import annotations
-
 """
 Lightweight, deterministic chooser for which payload *family* to attempt
-against a target parameter.
+against a target parameter — plus an optional ML classifier that outputs a
+calibrated distribution over families for Stage-A routing.
 
 Inputs (target dict) — best-effort (missing keys are tolerated):
 {
@@ -16,33 +16,75 @@ Inputs (target dict) — best-effort (missing keys are tolerated):
   "control_value": "123" | "" | None
 }
 
-Outputs:
-choose_family(t) -> {
-  "family": "xss" | "sqli" | "redirect" | "base",
-  "confidence": float in [0,1],
-  "reason": "R020 redirect param name (next, return, ...)",
-  "rules_matched": [
-     {"rule":"R020","family":"redirect","score":0.50,"detail":"param 'next' indicates redirect"},
-     ...
-  ]
-}
+Rule APIs (deterministic fallback kept for clarity/audits):
+  choose_family(t) -> {family, confidence, reason, rules_matched, scores}
+  rank_families(t) -> [ {family, raw_score, confidence, reason, rules_matched}, ... ]
 
-Also available:
-rank_families(t) -> list of the above objects for each family, sorted by score desc.
+ML API (preferred for Stage-A when a model exists):
+  FamilyClassifier().predict_proba(t) -> {"sqli":0.6,"xss":0.3,"redirect":0.1,"base":0.01}
+
+Also exposes canonical curated payload pools used in training & fallback:
+  payload_pool_for("sqli"|"xss"|"redirect") -> List[str]
 """
 
 import re
+import math
 from typing import Dict, Any, List, Tuple
 from urllib.parse import urlparse
+from pathlib import Path
 
-# ------------------------------- heuristics ----------------------------------
+# Optional dependency for loading models
+try:
+    import joblib  # type: ignore
+except Exception:
+    joblib = None  # type: ignore
+
+# ============================ Canonical payload pools =========================
+
+CANONICAL_PAYLOADS: Dict[str, List[str]] = {
+    "sqli": [
+        "' OR 1=1--",
+        "' OR 'a'='a' -- ",
+        "\" OR \"a\"=\"a\" -- ",
+        "1 OR 1=1 -- ",
+        ") OR (1=1) -- ",
+        "' UNION SELECT NULL-- ",
+        "'; WAITFOR DELAY '0:0:3'--",
+        "1)); SELECT pg_sleep(3)--",
+    ],
+    "xss": [
+        '"/><script>alert(1)</script>',
+        "<img src=x onerror=alert(1)>",
+        "<svg/onload=alert(1)>",
+        "<a href=javascript:alert(1)>x</a>",
+        "<details open ontoggle=alert(1)>",
+    ],
+    "redirect": [
+        "https://example.org/",
+        "//evil.tld",
+        "https:%2F%2Fevil.tld",
+        "/\\evil",
+        "///evil.tld",
+        "http://evil.com@allowed.com",
+    ],
+    # keep base empty (placeholder)
+    "base": [],
+}
+# Alias so trainers can import a stable name
+TRAINING_POOL: Dict[str, List[str]] = CANONICAL_PAYLOADS
+
+def payload_pool_for(family: str) -> List[str]:
+    """Return curated canonical payloads for a family (empty list if unknown)."""
+    return list(CANONICAL_PAYLOADS.get((family or "").lower(), []))
+
+
+# ================================ Heuristics =================================
 
 XSS_PARAM_HINTS = {
     "q", "query", "search", "s", "term", "keyword",
     "comment", "message", "msg", "content", "body", "desc", "description",
     "text", "title", "name", "nick", "username"
 }
-
 XSS_PATH_HINTS = {"search", "comment", "feedback", "review", "post", "message"}
 
 SQLI_PARAM_HINTS = {
@@ -50,20 +92,16 @@ SQLI_PARAM_HINTS = {
     "user_id", "product_id", "item_id", "post_id", "article_id",
     "order_id", "invoice_id", "page", "page_id", "cat", "category_id"
 }
-
 SQLI_PATH_HINTS = {"product", "item", "article", "post", "order", "invoice", "detail"}
 
 REDIRECT_PARAM_HINTS = {
     "next", "return", "return_to", "redirect", "redirect_uri",
     "callback", "url", "to", "continue", "dest", "destination"
 }
-
 REDIRECT_PATH_HINTS = {"redirect", "return"}
 
 LOGIN_PATH_HINTS = {"login", "signin", "sign-in", "authenticate", "auth"}
 ID_SUFFIX_RE = re.compile(r"(?:^|[_\-\.\[\{])id(?:$|[_\-\.\]\}])", re.I)
-
-# ------------------------------ rule runner ----------------------------------
 
 RuleResult = Tuple[str, str, float, str]  # (family, rule_id, score, detail)
 
@@ -181,13 +219,13 @@ def _aggregate_rules(t: Dict[str, Any]) -> Tuple[Dict[str, float], List[Dict[str
     scores = {f: 0.0 for f in families}
     matches: List[Dict[str, Any]] = []
 
-    for fam, rule_id, score, detail in (
+    for fam, rule_id, weight, detail in (
         _rules_xss(t) + _rules_sqli(t) + _rules_redirect(t) + _rules_base(t)
     ):
-        scores[fam] += score
-        matches.append({"rule": rule_id, "family": fam, "score": round(score, 3), "detail": detail})
+        scores[fam] += weight
+        matches.append({"rule": rule_id, "family": fam, "score": round(weight, 3), "detail": detail})
 
-    # Clamp negatives and sum floor at 0
+    # Clamp negatives
     for fam in scores:
         if scores[fam] < 0:
             scores[fam] = max(0.0, scores[fam])
@@ -200,14 +238,12 @@ def _normalize_confidence(raw_score: float) -> float:
     Map an unbounded positive score to [0,1].
     Our rule weights were designed so 0.65+ is a strong signal.
     """
-    # Simple squashing: 1 - exp(-k*x)
-    # Choose k so that ~1.0 at ~1.5 score
-    import math
+    # Simple squashing: 1 - exp(-k*x), ~1 at ~1.5
     k = 1.2
     return max(0.0, min(1.0, 1.0 - math.exp(-k * max(0.0, raw_score))))
 
 
-# ------------------------------ public API -----------------------------------
+# =============================== Rule-based API ===============================
 
 def choose_family(t: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -215,16 +251,13 @@ def choose_family(t: Dict[str, Any]) -> Dict[str, Any]:
     If no score exceeds a minimal threshold, fall back to 'base'.
     """
     scores, matches = _aggregate_rules(t)
-    # Sort families by score
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
     top_family, top_score = ranked[0]
 
-    # Minimal threshold to avoid over-eager classification
-    threshold = 0.25
+    threshold = 0.25  # minimal threshold to avoid over-eager classification
     family = top_family if top_score >= threshold else "base"
     confidence = _normalize_confidence(top_score if family != "base" else 0.05)
 
-    # Pick a representative reason among matches of that family (max per-rule score)
     fam_matches = [m for m in matches if m["family"] == family]
     reason = "no strong hints"
     if fam_matches:
@@ -261,3 +294,160 @@ def rank_families(t: Dict[str, Any]) -> List[Dict[str, Any]]:
             "rules_matched": fam_matches_sorted,
         })
     return out
+
+
+# ================================ ML Stage-A =================================
+
+MODEL_DIR = Path(__file__).resolve().parent / "ml"
+FAMILY_MODEL = MODEL_DIR / "family_model.joblib"   # optional (LightGBM/XGB)
+CALIBRATOR = MODEL_DIR / "family_platt.joblib"     # optional (per-class)
+
+class FamilyClassifier:
+    """
+    Optional multiclass family classifier with probability output.
+    - If model/calibrator are missing, falls back to normalized rule scores.
+    - Features are cheap, payload-agnostic, and stable across versions.
+    """
+
+    def __init__(self) -> None:
+        self.model = None
+        self.cal = None
+        if joblib is not None:
+            try:
+                if FAMILY_MODEL.exists():
+                    self.model = joblib.load(FAMILY_MODEL)
+            except Exception:
+                self.model = None
+            try:
+                if CALIBRATOR.exists():
+                    self.cal = joblib.load(CALIBRATOR)
+            except Exception:
+                self.cal = None
+
+    # ---------- public ----------
+
+    def predict_proba(self, t: Dict[str, Any]) -> Dict[str, float]:
+        """
+        Return calibrated P(family) over {'sqli','xss','redirect','base'}.
+        Fallback to rule normalization when model is unavailable.
+        """
+        fams = ["sqli", "xss", "redirect", "base"]
+
+        # Primary path: ML model
+        if self.model is not None:
+            try:
+                x = self._featurize_target(t)
+                raw = self._predict_model([x])  # -> [probabilities or scores]
+                if raw is not None and len(raw) == 4:  # already probabilities
+                    p = raw
+                else:
+                    # If model outputs logits/scores, softmax them
+                    p = self._softmax(raw or [1.0, 1.0, 1.0, 0.1])
+                # Optional per-class calibration
+                if self.cal is not None:
+                    try:
+                        p = self.cal.transform([p])[0]  # type: ignore
+                    except Exception:
+                        pass
+                prob = {f: float(p[i]) for i, f in enumerate(fams)}
+                # ensure base floor & renormalize
+                prob["base"] = max(prob.get("base", 0.0), 1e-3)
+                s = sum(prob.values()) or 1.0
+                return {k: v / s for k, v in prob.items()}
+            except Exception:
+                # fall through to rules
+                pass
+
+        # Fallback: normalize rule scores
+        ranked = rank_families(t)
+        # Gather raw scores with floor for base
+        rs = {r["family"]: float(r.get("raw_score", 0.0)) for r in ranked}
+        rs["base"] = max(rs.get("base", 0.0), 1e-3)
+        s = sum(max(0.0, v) for v in rs.values()) or 1.0
+        return {k: max(0.0, v) / s for k, v in rs.items()}
+
+    # ---------- internals ----------
+
+    def _predict_model(self, X: List[List[float]]) -> List[float]:
+        """
+        Try common scikit/GBM interfaces to get class probabilities or scores.
+        Expect 4 outputs ordered as [sqli, xss, redirect, base] if proba.
+        """
+        m = self.model
+        if m is None:
+            return []
+        # predict_proba preferred
+        if hasattr(m, "predict_proba"):
+            proba = m.predict_proba(X)  # type: ignore
+            try:
+                return [float(v) for v in proba[0]]
+            except Exception:
+                return [float(proba[0])]  # type: ignore
+        # decision_function/logits
+        if hasattr(m, "decision_function"):
+            df = m.decision_function(X)  # type: ignore
+            row = df[0] if isinstance(df, (list, tuple)) else df
+            # row may be vector (multi-class) or scalar; coerce to list
+            try:
+                return [float(x) for x in row]  # type: ignore
+            except Exception:
+                return [float(row)]  # type: ignore
+        # fallback
+        if hasattr(m, "predict"):
+            y = m.predict(X)  # type: ignore
+            row = y[0] if isinstance(y, (list, tuple)) else y
+            # one-hot-ish guess
+            out = [0.0, 0.0, 0.0, 0.0]
+            idx = {"sqli": 0, "xss": 1, "redirect": 2, "base": 3}.get(str(row).lower(), 3)
+            out[idx] = 1.0
+            return out
+        return []
+
+    def _featurize_target(self, t: Dict[str, Any]) -> List[float]:
+        """
+        Cheap, payload-agnostic endpoint vector.
+        Stable order; keep in sync with trainer.
+        """
+        method = (t.get("method") or "GET").upper()
+        loc = (t.get("in") or "query").lower()
+        ct = (t.get("content_type") or "").split(";")[0].lower()
+        param = (t.get("target_param") or "").lower()
+        url = t.get("url") or ""
+
+        def bucket(s: str, m: int = 32) -> int:
+            import hashlib
+            return int(hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:8], 16) % m
+
+        def depth(u: str) -> int:
+            try:
+                return sum(1 for seg in (urlparse(u).path or "").split("/") if seg)
+            except Exception:
+                return 0
+
+        onehot_method = [1.0 if method == x else 0.0 for x in ("GET", "POST", "PUT", "DELETE")]
+        onehot_loc = [1.0 if loc == x else 0.0 for x in ("query", "form", "json")]
+        ct_hint = [
+            1.0 if "json" in ct else 0.0,
+            1.0 if "html" in ct else 0.0,
+            1.0 if "x-www-form-urlencoded" in ct else 0.0,
+        ]
+        return onehot_method + onehot_loc + ct_hint + [float(depth(url)), float(bucket(param, 64))]
+
+    @staticmethod
+    def _softmax(xs: List[float]) -> List[float]:
+        if not xs:
+            return [0.25, 0.25, 0.25, 0.25]
+        m = max(xs)
+        exps = [math.exp(x - m) for x in xs]
+        s = sum(exps) or 1.0
+        return [x / s for x in exps]
+
+
+__all__ = [
+    "payload_pool_for",
+    "CANONICAL_PAYLOADS",
+    "TRAINING_POOL",
+    "choose_family",
+    "rank_families",
+    "FamilyClassifier",
+]

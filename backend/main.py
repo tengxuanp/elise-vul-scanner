@@ -1,3 +1,4 @@
+# backend/main.py
 from __future__ import annotations
 import os
 import logging
@@ -18,8 +19,7 @@ from .routes import (
     evidence_routes,
     verify_routes,
     report_routes,
-    # exploit_routes,
-    # report_routes,
+    ml_routes,  # ← Stage-A/Stage-B ML endpoints
 )
 
 @asynccontextmanager
@@ -36,7 +36,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Automated Web Vulnerability Assessment API",
-    description="Proxy-based crawling, fuzzing, active scanning, and exploitation endpoints.",
+    description="Proxy-based crawling, fuzzing, active scanning, and ML-driven payload recommendation.",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -59,6 +59,7 @@ app.include_router(fuzz_routes.router, prefix="/api", tags=["Fuzzing"])
 app.include_router(evidence_routes.router, prefix="/api", tags=["Evidence"])
 app.include_router(verify_routes.router, prefix="/api", tags=["Verify"])
 app.include_router(report_routes.router, prefix="/api", tags=["Report"])
+app.include_router(ml_routes.router, prefix="/api", tags=["ML"])  # ← /api/ml/*
 
 @app.get("/")
 def root():

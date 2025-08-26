@@ -150,7 +150,9 @@ const uiPriority = (ep) => {
   return Math.min(1, s);
 };
 
-/** Derive a stable "row" shape from heterogeneous fuzzer outputs */
+/** Derive a stable "row" shape from heterogeneous fuzzer outputs
+ *  Now surfaces payload_origin and ranker_meta ({ family_probs, family_chosen, ranker_score, model_ids })
+ */
 const normalizeResultRow = (one = {}) => {
   const req = one.request || {};
   const sigLegacy = one.signals || {};
@@ -205,6 +207,10 @@ const normalizeResultRow = (one = {}) => {
     one.family ||
     (typeof sigLegacy.type === "string" ? sigLegacy.type : null);
 
+  // ML provenance
+  const origin = (one.payload_origin || one.origin || "").toLowerCase() || (one.ranker_meta ? "ml" : "curated");
+  const ranker_meta = normalizeRankerMeta(one.ranker_meta);
+
   // severity (transparent math)
   const severityScore =
     (external ? 0.35 : 0) +
@@ -225,6 +231,8 @@ const normalizeResultRow = (one = {}) => {
     confidence,
     payload,
     family: fam,
+    origin,            // "ml" | "curated"
+    ranker_meta,       // { family_probs, family_chosen, ranker_score, model_ids }
     severity,
     delta: {
       status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
@@ -237,18 +245,33 @@ const normalizeResultRow = (one = {}) => {
     },
     signals: {
       sql_error: sqlErr,
-      xss_reflected: xssReflected,
       boolean_sqli: booleanSqli,
       time_sqli: timeSqli,
-      login_success: loginSuccess,
-      token_present: tokenPresent,
+      xss_reflected: xssReflected,
       external_redirect: external,
       location,
       location_host: locationHost,
+      login_success: loginSuccess,
+      token_present: tokenPresent,
       verify: sigLegacy.verify || {},
     },
   };
 };
+
+function normalizeRankerMeta(m = {}) {
+  const fm = m || {};
+  const fp = fm.family_probs && typeof fm.family_probs === "object" ? fm.family_probs : {};
+  // sanitize probs to [0,1] and normalize
+  const entries = Object.entries(fp).map(([k, v]) => [k, Number(v) || 0]);
+  const sum = entries.reduce((a, [, v]) => a + v, 0) || 1;
+  const family_probs = Object.fromEntries(entries.map(([k, v]) => [k, v / sum]));
+  return {
+    family_probs,
+    family_chosen: fm.family_chosen || null,
+    ranker_score: typeof fm.ranker_score === "number" ? fm.ranker_score : null,
+    model_ids: fm.model_ids || null,
+  };
+}
 
 /** Small UI bits */
 const Badge = ({ children, tone = "default", title }) => {
@@ -260,6 +283,8 @@ const Badge = ({ children, tone = "default", title }) => {
     green: "bg-green-100 text-green-900",
     amber: "bg-amber-100 text-amber-900",
     red: "bg-red-100 text-red-900",
+    indigo: "bg-indigo-100 text-indigo-900",
+    slate: "bg-slate-200 text-slate-900",
   };
   return (
     <span className={cn("px-2 py-0.5 rounded text-xs", map[tone] || map.default)} title={title}>
@@ -281,6 +306,12 @@ const ConfBadge = ({ v }) => (
 );
 
 const FamilyBadge = ({ fam }) => <Badge tone={fam === "redirect" ? "purple" : fam === "xss" ? "pink" : "blue"}>{fam || "—"}</Badge>;
+
+const OriginBadge = ({ origin }) => {
+  if (!origin) return <Badge tone="slate">—</Badge>;
+  if (origin === "ml") return <Badge tone="indigo" title="Selected by ML ranker">ML</Badge>;
+  return <Badge tone="slate" title="Curated/fallback payload">curated</Badge>;
+};
 
 const SeverityBadge = ({ sev }) => {
   const map = { high: ["red", "High"], med: ["amber", "Medium"], low: ["green", "Low"] };
@@ -330,6 +361,22 @@ const XssBits = ({ row }) => {
   return row?.signals?.xss_reflected ? <Badge tone="pink">reflected</Badge> : <span className="text-gray-400">—</span>;
 };
 
+/** Simple stacked bar for family probabilities */
+const FamilyProbsBar = ({ probs }) => {
+  const entries = Object.entries(probs || {}).filter(([, v]) => v > 0);
+  if (entries.length === 0) return <span className="text-gray-400">—</span>;
+  const total = entries.reduce((a, [, v]) => a + v, 0) || 1;
+  const seg = (k, v) => {
+    const w = Math.max(4, Math.round((v / total) * 100));
+    const tone =
+      k === "xss" ? "bg-pink-400" : k === "redirect" ? "bg-purple-400" : k === "sqli" ? "bg-blue-400" : "bg-gray-400";
+    return (
+      <div key={k} className={cn("h-2", tone)} style={{ width: `${w}%` }} title={`${k}: ${(v * 100).toFixed(1)}%`} />
+    );
+  };
+  return <div className="w-40 h-2 rounded overflow-hidden flex">{entries.sort((a,b)=>b[1]-a[1]).map(([k, v]) => seg(k, v))}</div>;
+};
+
 const LoginBits = ({ row }) => {
   const s = row?.signals || {};
   if (s.login_success || s.token_present) {
@@ -363,6 +410,7 @@ export default function CrawlAndFuzzPage() {
   const [onlyWithDelta, setOnlyWithDelta] = useState(false);
   const [sortBy, setSortBy] = useState("conf_desc"); // conf_desc | sev_conf | len_abs | url_asc
   const [expanded, setExpanded] = useState(() => new Set()); // row expand toggles
+  const [originFilter, setOriginFilter] = useState("all"); // all | ml | curated
 
   /** De-dup endpoints by shape; annotate with UI-only family/priority */
   const endpoints = useMemo(() => {
@@ -544,6 +592,7 @@ export default function CrawlAndFuzzPage() {
   const filteredResults = useMemo(() => {
     const fams = familiesSelected;
     const out = results.filter((r) => {
+      if (originFilter !== "all" && (r.origin || "curated") !== originFilter) return false;
       if (r.confidence < minConf) return false;
       if (!fams.has(r.family || "sqli")) return false;
       if (onlySqlError && !r.signals.sql_error) return false;
@@ -572,7 +621,7 @@ export default function CrawlAndFuzzPage() {
     });
 
     return out;
-  }, [results, familiesSelected, minConf, onlySqlError, onlyXssRef, onlyExtRedir, onlyWithDelta, sortBy]);
+  }, [results, familiesSelected, minConf, onlySqlError, onlyXssRef, onlyExtRedir, onlyWithDelta, sortBy, originFilter]);
 
   // Summary tiles
   const summary = useMemo(() => {
@@ -580,6 +629,8 @@ export default function CrawlAndFuzzPage() {
     const famCounts = { sqli: 0, xss: 0, redirect: 0 };
     const signals = { sql: 0, xss: 0, redir: 0 };
     let hi = 0;
+    let mlCount = 0;
+    let curatedCount = 0;
     for (const r of results) {
       const fam = r.family || "sqli";
       if (fam in famCounts) famCounts[fam]++;
@@ -587,8 +638,10 @@ export default function CrawlAndFuzzPage() {
       if (r.signals.xss_reflected) signals.xss++;
       if (r.signals.external_redirect) signals.redir++;
       if (r.confidence >= 0.8) hi++;
+      if ((r.origin || "curated") === "ml") mlCount++;
+      else curatedCount++;
     }
-    return { total, famCounts, signals, hi };
+    return { total, famCounts, signals, hi, mlCount, curatedCount };
   }, [results]);
 
   // Export helpers
@@ -607,6 +660,9 @@ export default function CrawlAndFuzzPage() {
         "url",
         "param",
         "family",
+        "origin",
+        "ranker_score",
+        "ranker_family",
         "severity",
         "confidence",
         "status_changed",
@@ -625,6 +681,9 @@ export default function CrawlAndFuzzPage() {
         r.url,
         r.param,
         r.family || "",
+        r.origin || "",
+        r?.ranker_meta?.ranker_score ?? "",
+        r?.ranker_meta?.family_chosen ?? "",
         r.severity || "",
         r.confidence,
         r?.delta?.status_changed ? "1" : "0",
@@ -768,6 +827,21 @@ export default function CrawlAndFuzzPage() {
             >
               Redirect
             </button>
+          </div>
+
+          {/* Origin filter */}
+          <div className="flex items-center gap-1">
+            <label className="text-xs text-gray-500">Origin:</label>
+            <select
+              className="border p-2 rounded text-sm"
+              value={originFilter}
+              onChange={(e) => setOriginFilter(e.target.value)}
+              title="Filter by payload origin"
+            >
+              <option value="all">All</option>
+              <option value="ml">ML only</option>
+              <option value="curated">Curated only</option>
+            </select>
           </div>
 
           {/* Confidence slider */}
@@ -934,8 +1008,11 @@ export default function CrawlAndFuzzPage() {
               <div className="text-xl font-semibold">{summary.hi}</div>
             </div>
             <div className="border rounded p-3">
-              <div className="text-gray-500">Visible after filters</div>
-              <div className="text-xl font-semibold">{filteredResults.length}</div>
+              <div className="text-gray-500">Origin</div>
+              <div className="mt-1 text-sm flex gap-2 flex-wrap">
+                <Badge tone="indigo">ML: {summary.mlCount}</Badge>
+                <Badge tone="slate">Curated: {summary.curatedCount}</Badge>
+              </div>
             </div>
           </div>
         </section>
@@ -951,6 +1028,7 @@ export default function CrawlAndFuzzPage() {
                 <tr className="text-left">
                   <th className="p-2">Severity</th>
                   <th className="p-2">Conf</th>
+                  <th className="p-2">Origin</th>
                   <th className="p-2">Family</th>
                   <th className="p-2">Method</th>
                   <th className="p-2">URL</th>
@@ -959,6 +1037,7 @@ export default function CrawlAndFuzzPage() {
                   <th className="p-2">SQLi</th>
                   <th className="p-2">XSS</th>
                   <th className="p-2">Redirect</th>
+                  <th className="p-2">Ranker</th>
                   <th className="p-2">Payload</th>
                   <th className="p-2"></th>
                 </tr>
@@ -967,6 +1046,7 @@ export default function CrawlAndFuzzPage() {
                 {filteredResults.map((row, i) => {
                   const key = `${row.method}-${row.url}-${row.param}-${i}`;
                   const isOpen = expanded.has(key);
+                  const chosen = row?.ranker_meta?.family_chosen || null;
                   return (
                     <tr key={key} className="border-t align-top hover:bg-gray-50">
                       <td className="p-2">
@@ -976,7 +1056,13 @@ export default function CrawlAndFuzzPage() {
                         <ConfBadge v={Number(row.confidence || 0)} />
                       </td>
                       <td className="p-2">
-                        <FamilyBadge fam={row.family || "sqli"} />
+                        <OriginBadge origin={row.origin} />
+                      </td>
+                      <td className="p-2">
+                        <div className="flex items-center gap-2">
+                          <FamilyBadge fam={row.family || "sqli"} />
+                          {chosen && <Badge tone="indigo" title="Family chosen by ranker">chosen: {chosen}</Badge>}
+                        </div>
                       </td>
                       <td className="p-2 font-mono">{row.method}</td>
                       <td className="p-2 font-mono break-all">
@@ -996,6 +1082,10 @@ export default function CrawlAndFuzzPage() {
                       </td>
                       <td className="p-2">
                         <RedirectBits row={row} />
+                      </td>
+                      <td className="p-2">
+                        {/* Compact ranker viz */}
+                        {row?.ranker_meta?.family_probs ? <FamilyProbsBar probs={row.ranker_meta.family_probs} /> : <span className="text-gray-400">—</span>}
                       </td>
                       <td className="p-2">
                         <code className="text-xs break-all">{row.payload || ""}</code>
@@ -1019,12 +1109,14 @@ export default function CrawlAndFuzzPage() {
               const key = `${row.method}-${row.url}-${row.param}-${i}`;
               if (!expanded.has(key)) return null;
               const v = row.signals?.verify || {};
+              const fm = row.ranker_meta || {};
               return (
                 <div key={`detail-${key}`} className="border rounded p-3 bg-white">
                   <div className="flex items-start justify-between gap-3">
                     <div className="space-y-1">
                       <div className="text-sm">
-                        <SeverityBadge sev={row.severity} /> <FamilyBadge fam={row.family || "sqli"} /> <ConfBadge v={row.confidence} />
+                        <SeverityBadge sev={row.severity} /> <FamilyBadge fam={row.family || "sqli"} />{" "}
+                        <OriginBadge origin={row.origin} /> <ConfBadge v={row.confidence} />
                       </div>
                       <div className="text-sm font-mono">
                         {row.method} {row.url}
@@ -1100,6 +1192,41 @@ export default function CrawlAndFuzzPage() {
                         {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
                         {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
                         {row.signals.token_present ? <Badge tone="green">token present</Badge> : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Ranker meta */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Family probabilities</div>
+                      <div className="flex items-center gap-2">
+                        <FamilyProbsBar probs={fm.family_probs} />
+                        <div className="text-xs font-mono">
+                          {Object.entries(fm.family_probs || {})
+                            .sort((a, b) => b[1] - a[1])
+                            .slice(0, 3)
+                            .map(([k, v]) => (
+                              <div key={k}>
+                                {k}: {(v * 100).toFixed(1)}%
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
+                      <div className="text-xs">
+                        chosen: <code>{fm.family_chosen || "—"}</code>
+                      </div>
+                      <div className="text-xs">
+                        score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code>
+                      </div>
+                    </div>
+                    <div className="border rounded p-2">
+                      <div className="text-xs text-gray-500 mb-1">Model IDs</div>
+                      <div className="text-xs font-mono">
+                        {fm.model_ids ? <pre className="whitespace-pre-wrap">{JSON.stringify(fm.model_ids, null, 2)}</pre> : "—"}
                       </div>
                     </div>
                   </div>

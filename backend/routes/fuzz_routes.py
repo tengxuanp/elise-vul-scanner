@@ -12,51 +12,66 @@ from pydantic import BaseModel, Field
 from urllib.parse import urlparse
 
 # ---- engines ----
-from ..modules.fuzzer_core import run_fuzz                           # primary (verification-first)
+from ..modules.fuzzer_core import run_fuzz  # primary (verification-first)
 try:
     # optional, legacy ffuf runner used inside _fuzz_targets_ffuf()
-    from ..modules.fuzzer_ffuf import run_ffuf                       # type: ignore
+    from ..modules.fuzzer_ffuf import run_ffuf  # type: ignore
 except Exception:  # pragma: no cover
     run_ffuf = None  # type: ignore
 
 # ---- builders ----
 # New builder that consumes merged endpoints from crawl_result.json
-from ..modules.target_builder import build_targets                    # type: ignore
+from ..modules.target_builder import build_targets  # type: ignore
 
 # ---- optional ML/feature plumbing (safe fallbacks) ----
 try:
-    from ..modules.feature_extractor import FeatureExtractor          # type: ignore
+    from ..modules.feature_extractor import FeatureExtractor  # type: ignore
 except Exception:  # pragma: no cover
     class FeatureExtractor:  # minimal stub
         def extract_features(self, *a, **kw): return {}
+
 try:
-    from ..modules.recommender import Recommender                     # type: ignore
+    from ..modules.recommender import Recommender  # type: ignore
 except Exception:  # pragma: no cover
     class Recommender:  # minimal stub
         def load(self): ...
         def recommend(self, *a, **kw): return []
 
+def _init_reco() -> Optional[Recommender]:
+    """Instantiate and best-effort load recommender."""
+    try:
+        r = Recommender()
+        try:
+            if hasattr(r, "load"):
+                r.load()  # may no-op
+        except Exception:
+            logging.exception("Recommender.load() failed; continuing with object anyway")
+        return r
+    except Exception:
+        logging.exception("Failed to initialize Recommender")
+        return None
+
 # ---- DB (optional) ----
 try:
-    from ..db import SessionLocal                                     # type: ignore
-    from ..models import ScanJob, JobPhase                             # type: ignore
+    from ..db import SessionLocal  # type: ignore
+    from ..models import ScanJob, JobPhase  # type: ignore
 except Exception:  # pragma: no cover
     SessionLocal, ScanJob, JobPhase = None, None, None
 
 # ---- filesystem layout ----
-REPO_ROOT  = Path(__file__).resolve().parents[2]
-DATA_DIR   = REPO_ROOT / "data"
-JOBS_DIR   = DATA_DIR / "jobs"
-RESULTS_DIR= DATA_DIR / "results"
-FFUF_TMP   = DATA_DIR / "results" / "ffuf"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
+JOBS_DIR = DATA_DIR / "jobs"
+RESULTS_DIR = DATA_DIR / "results"
+FFUF_TMP = DATA_DIR / "results" / "ffuf"
 for _p in (JOBS_DIR, RESULTS_DIR, FFUF_TMP):
     _p.mkdir(parents=True, exist_ok=True)
 
 # ---- optional evidence sink ----
 try:
-    from ..modules.evidence_sink import persist_evidence              # type: ignore
+    from ..modules.evidence_sink import persist_evidence  # type: ignore
 except Exception:  # pragma: no cover
-    def persist_evidence(**kwargs):                                   # type: ignore
+    def persist_evidence(**kwargs):  # type: ignore
         return {"endpoint_id": None, "test_case_id": None, "evidence_id": None}
 
 router = APIRouter()
@@ -131,6 +146,15 @@ def _filter_endpoints_by_selection(
         key = _key(s.method, s.url)
         allow[key] = set([p for p in (s.params or []) if p]) if s.params else None
 
+    def _names(items):
+        out = []
+        for it in items or []:
+            if isinstance(it, str):
+                out.append(it)
+            elif isinstance(it, dict) and it.get("name"):
+                out.append(it["name"])
+        return out
+
     filtered: List[Dict[str, Any]] = []
     for ep in endpoints:
         key = _key(ep.get("method", "GET"), ep.get("url", ""))
@@ -138,32 +162,32 @@ def _filter_endpoints_by_selection(
             continue
         allowed = allow[key]
         if allowed is None:
-            filtered.append(ep)
+            # Normalize convenience fields even if we accept all params
+            ep2 = dict(ep)
+            locs = dict(ep2.get("param_locs") or {})
+            ep2["param_locs"] = {
+                "query": _names(locs.get("query")),
+                "form": _names(locs.get("form")),
+                "json": _names(locs.get("json")),
+            }
+            ep2["query_keys"] = ep2["param_locs"]["query"]
+            ep2["body_keys"] = ep2["param_locs"]["form"] or ep2["param_locs"]["json"]
+            ep2["content_type"] = ep.get("content_type_hint") or ep.get("content_type")
+            filtered.append(ep2)
             continue
 
-        # Shallow copy and trim unified ParamLocs
+        # Trim to allowed names
         ep2 = dict(ep)
         locs = dict(ep2.get("param_locs") or {})
-        q = [p for p in (locs.get("query") or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
-        f = [p for p in (locs.get("form")  or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
-        j = [p for p in (locs.get("json")  or []) if (p in allowed or getattr(p, "get", None) and (p.get("name") in allowed))]
-
-        # Normalize to plain names if items are dicts
-        def _names(items):
-            out = []
-            for it in items:
-                if isinstance(it, str): out.append(it)
-                elif isinstance(it, dict) and it.get("name"): out.append(it["name"])
-            return out
-
-        qn, fn, jn = _names(q), _names(f), _names(j)
+        qn = [n for n in _names(locs.get("query")) if n in allowed]
+        fn = [n for n in _names(locs.get("form")) if n in allowed]
+        jn = [n for n in _names(locs.get("json")) if n in allowed]
         if not (qn or fn or jn):
             continue
-
         ep2["param_locs"] = {"query": qn, "form": fn, "json": jn}
         # legacy helpers for any old code paths
         ep2["query_keys"] = qn
-        ep2["body_keys"]  = fn if fn else jn
+        ep2["body_keys"] = fn if fn else jn
         ep2["content_type"] = ep.get("content_type_hint") or ep.get("content_type")
         filtered.append(ep2)
 
@@ -311,12 +335,12 @@ def _guess_label(payload: str) -> str:
     s = (payload or "").lower()
     if any(x in s for x in ("<script", "onerror=", "onload=", "alert(")): return "xss"
     if any(x in s for x in ("http://", "https://", "//")): return "redirect"
-    if any(x in s for x in (" or 1=1", "'--", "\"--")): return "sqli"
+    if any(x in s for x in (" or 1=1", "'--", "\"--", "union select", "sleep(")): return "sqli"
     return "benign"
 
 # optional ML delta scorer
 try:
-    from ..modules.ml.delta_scorer import DeltaScorer                # type: ignore
+    from ..modules.ml.delta_scorer import DeltaScorer  # type: ignore
     DELTA_SCORER: Optional[DeltaScorer] = DeltaScorer()
     try:
         DELTA_SCORER.load()
@@ -390,6 +414,10 @@ def _fuzz_targets_ffuf(
     results: List[Dict[str, Any]] = []
 
     for t in targets:
+        # Determine family up-front and use it consistently (ML + fallback)
+        content_type = (t.meta or {}).get("headers", {}).get("Content-Type")
+        family = _choose_family(t.method, t.url, t.param, content_type)
+
         # feature extraction (best-effort; does not block)
         try:
             feats = fe.extract_features(t.url, t.param, payload="' OR 1=1 --", method=t.method)
@@ -397,13 +425,23 @@ def _fuzz_targets_ffuf(
             logging.exception("feature_extractor failed for %s %s", t.url, t.param)
             feats = None
 
-        # payload selection (ML or fallback)
+        # payload selection (ML or fallback) — now passing 'family' into the recommender
         try:
             if reco is not None and feats is not None:
                 try:
-                    pairs = reco.recommend(feats, top_n=top_n, threshold=threshold)  # [(payload, prob), ...]
+                    pairs = reco.recommend(
+                        feats,
+                        top_n=top_n,
+                        threshold=threshold,
+                        family=family,  # <-- critical fix
+                    )  # [(payload, prob), ...]
                 except TypeError:
-                    pairs = reco.recommend(feats, top_n=top_n)  # legacy signature
+                    # legacy signature without threshold
+                    pairs = reco.recommend(
+                        feats,
+                        top_n=top_n,
+                        family=family,  # <-- critical fix
+                    )
                 candidates = [(p, float(conf)) for p, conf in (pairs or [])]
             else:
                 candidates = []
@@ -412,7 +450,6 @@ def _fuzz_targets_ffuf(
             candidates = []
 
         if not candidates:
-            family = _choose_family(t.method, t.url, t.param, (t.meta or {}).get("headers", {}).get("Content-Type"))
             for p in _fallback_payloads_for_family(family):
                 candidates.append((p, 0.0))
 
@@ -580,7 +617,7 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
 @router.post("/fuzz")
 def fuzz_many(
     targets: List[FuzzTarget],
-    reco: Optional[Recommender] = Depends(lambda: Recommender() if Recommender else None),  # keep legacy dep
+    reco: Optional[Recommender] = Depends(_init_reco),  # explicit load path
 ):
     """
     Legacy endpoint: fuzz an explicit list of FuzzTarget items via ffuf flow.
@@ -597,7 +634,7 @@ def fuzz_many(
 def fuzz_by_job(
     job_id: str,
     payload: Optional[FuzzByJobPayload] = None,
-    reco: Optional[Recommender] = Depends(lambda: Recommender() if Recommender else None),
+    reco: Optional[Recommender] = Depends(_init_reco),
 ):
     """
     Run fuzzing for a job. Engines:
@@ -649,7 +686,7 @@ def fuzz_by_job(
                         )
                     )
         if payload and payload.selection:
-            tmp_targets = [FuzzTarget(**t.dict()) for t in _filter_targets_by_selection([t.dict() for t in tmp_targets], payload.selection)]
+            tmp_targets = [FuzzTarget(**t.dict()) for t in _filter_endpoints_by_selection([t.dict() for t in tmp_targets], payload.selection)]
         results_ffuf = _fuzz_targets_ffuf(
             tmp_targets,
             reco=reco,

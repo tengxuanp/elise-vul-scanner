@@ -21,24 +21,150 @@ from .detectors import (
 
 TRUNCATE_BODY = 2048
 
+# ----------------------------- ML integration (confidence) -------------------
+# Backward-compatible: existing attempt-level ML confidence (if present).
+try:
+    # returns {"p": float, "source": "ml|fallback|..."}
+    from .ml_ranker import predict_proba as _ranker_predict  # type: ignore
+    _ML_AVAILABLE = True
+except Exception:
+    _ML_AVAILABLE = False
+
+    def _ranker_predict(features: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
+        return {"p": 0.0, "source": "fallback"}
+
+# ----------------------------- Stage A/B integration -------------------------
+# Best-effort imports. If not present, we fall back gracefully.
+try:
+    from .feature_extractor import FeatureExtractor  # payload-agnostic endpoint features
+except Exception:
+    FeatureExtractor = None  # type: ignore
+
+try:
+    from .family_router import FamilyClassifier, payload_pool_for
+except Exception:
+    FamilyClassifier = None  # type: ignore
+
+    def payload_pool_for(family: str) -> List[str]:  # minimal canonical pool fallback
+        fam = (family or "").lower()
+        if fam == "sqli":
+            return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
+        if fam == "xss":
+            return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
+        if fam == "redirect":
+            return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
+        return []
+
+try:
+    from .recommender import Recommender
+except Exception:
+    Recommender = None  # type: ignore
+
+# Singletons & caches
+_FEATURE_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
+_FE = FeatureExtractor(headless=True) if FeatureExtractor else None
+_FAM = FamilyClassifier() if FamilyClassifier else None
+_RECO = Recommender() if Recommender else None
+
+def _endpoint_key(t: Dict[str, Any]) -> Tuple[str, str, str]:
+    return ((t.get("method") or "GET").upper(), t.get("url") or "", t.get("target_param") or "")
+
+def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
+    """Very cheap feature proxy when real extractor isn't available."""
+    method = (t.get("method") or "GET").upper()
+    loc = (t.get("in") or "query").lower()
+    ct = (t.get("content_type") or "").split(";")[0].lower()
+    url = t.get("url") or ""
+    param = (t.get("target_param") or "").lower()
+    def depth(u: str) -> int:
+        try:
+            return sum(1 for seg in (urlparse(u).path or "").split("/") if seg)
+        except Exception:
+            return 0
+    return {
+        "method": method,
+        "in": loc,
+        "content_type": ct,
+        "url": url,
+        "param": param,
+        "path_depth": depth(url),
+        "param_len": len(param),
+    }
+
+def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
+    """Cache payload-agnostic endpoint features."""
+    k = _endpoint_key(t)
+    if k in _FEATURE_CACHE:
+        return _FEATURE_CACHE[k]
+    feats: Dict[str, Any]
+    if _FE is not None:
+        try:
+            feats = _FE.extract_features(
+                t.get("url"),
+                t.get("target_param"),
+                payload="",  # payload-agnostic
+                method=t.get("method") or "GET",
+                content_type=t.get("content_type"),
+            )
+        except Exception:
+            feats = _cheap_target_vector(t)
+    else:
+        feats = _cheap_target_vector(t)
+    _FEATURE_CACHE[k] = feats
+    return feats
+
+def _family_distribution(t: Dict[str, Any]) -> Dict[str, float]:
+    """Stage A: return distribution over families."""
+    fams = ["sqli", "xss", "redirect", "base"]
+    if _FAM is not None and hasattr(_FAM, "predict_proba"):
+        try:
+            return _FAM.predict_proba(
+                {
+                    "url": t.get("url"),
+                    "method": t.get("method"),
+                    "in": t.get("in"),
+                    "target_param": t.get("target_param"),
+                    "content_type": t.get("content_type"),
+                    "headers": t.get("headers"),
+                    "control_value": t.get("control_value"),
+                }
+            )
+        except Exception:
+            pass
+    # Fallback: light heuristic -> equal mass, tiny base
+    out = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
+    s = sum(out.values()) or 1.0
+    return {k: v / s for k, v in out.items()}
+
+def _rank_payloads_for_family(feats: Dict[str, Any], family: str, top_n: int = 3, threshold: float = 0.15) -> List[Tuple[str, float]]:
+    """Stage B: per-family payload ranking via LTR; fallback to curated pool."""
+    fam = (family or "").lower()
+    pool = payload_pool_for(fam)
+    if not pool:
+        return []
+    if _RECO is not None and hasattr(_RECO, "recommend"):
+        try:
+            recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+            # expect list[(payload, prob)]
+            return [(p, float(prob)) for (p, prob) in recs]
+        except Exception:
+            pass
+    # Fallback: naive order, uniform score
+    return [(p, 0.2) for p in pool[:top_n]]
 
 # ---------------------------- small utils ------------------------------------
 
-
 def _hash(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()
-
 
 def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
     try:
         return {k.lower(): v for k, v in dict(h).items()}
     except Exception:
-        # httpx Headers can be multi-dict; fallback
         out: Dict[str, str] = {}
         for k in h.keys():
             out[k.lower()] = h.get(k)
         return out
-
 
 def _origin_host(url: str) -> str:
     try:
@@ -46,14 +172,12 @@ def _origin_host(url: str) -> str:
     except Exception:
         return ""
 
-
 def _origin_referer(url: str) -> str:
     try:
         u = urlparse(url)
         return f"{u.scheme}://{u.netloc}/" if u.scheme and u.netloc else ""
     except Exception:
         return ""
-
 
 def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
     """
@@ -66,7 +190,6 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
     if not key("user-agent"):
         out["User-Agent"] = "Mozilla/5.0 (compatible; elise-fuzzer/1.0)"
 
-    # Prefer JSON on /api/ or /rest/ targets; otherwise allow HTML too
     path = (urlparse(url).path or "").lower()
     wants_json = ("/api/" in path) or ("/rest/" in path)
     if not key("accept"):
@@ -86,9 +209,7 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
 
     return out
 
-
 # -------------------------- request mutation ---------------------------------
-
 
 def _apply_payload_to_target(
     t: Dict[str, Any], payload: str, control: bool = False
@@ -105,17 +226,13 @@ def _apply_payload_to_target(
     target_param = t["target_param"]
 
     if t["in"] == "query":
-        # Replace only the target param; keep others as-is
         u = urlparse(url)
         q = parse_qs(u.query, keep_blank_values=True)
         q[target_param] = [value]
-        new_qs = urlencode(
-            [(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])]
-        )
+        new_qs = urlencode([(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])])
         url = urlunparse((u.scheme, u.netloc, u.path, u.params, new_qs, u.fragment))
         body = None  # GET
     else:
-        # Body parameter
         ctype = (t.get("content_type") or "").split(";")[0].strip().lower()
         if ctype == "application/json":
             try:
@@ -128,21 +245,15 @@ def _apply_payload_to_target(
             body = json.dumps(data)
             headers["Content-Type"] = "application/json"
         else:
-            # form-urlencoded or unknown -> urlencoded
             p = parse_qs(body or "", keep_blank_values=True)
             p[target_param] = [value]
-            body = urlencode(
-                [(k, v) for k, vs in p.items() for v in (vs if isinstance(vs, list) else [vs])]
-            )
+            body = urlencode([(k, v) for k, vs in p.items() for v in (vs if isinstance(vs, list) else [vs])])
             headers["Content-Type"] = "application/x-www-form-urlencoded"
 
-    # So we get stable content negotiation + basic browser-like posture
     headers = _augment_headers(headers, url)
     return url, headers, body
 
-
 # ------------------------------ transport ------------------------------------
-
 
 def _send_once(
     client: httpx.Client,
@@ -166,7 +277,6 @@ def _send_once(
     except Exception as e:
         return None, {"type": type(e).__name__, "message": str(e)}, 0.0
 
-
 def _send(
     client: httpx.Client,
     method: str,
@@ -188,19 +298,13 @@ def _send(
         resp, err, elapsed = _send_once(client, method, url, headers, body, timeout)
         last_resp, last_err = resp, err
         samples.append(elapsed)
-        if err is not None:
-            # still keep timing sample (0.0) to maintain length
-            continue
     return last_resp, last_err, samples
 
-
 # ------------------------------- payloads ------------------------------------
-
 
 def _looks_time_based(payload: str) -> bool:
     p = (payload or "").lower()
     return any(k in p for k in ("waitfor", "sleep(", "pg_sleep", "benchmark(", "dbms_lock.sleep"))
-
 
 def _payload_family(p: str) -> str:
     """Lightweight classifier so the UI can show both payload class and signal family."""
@@ -212,7 +316,6 @@ def _payload_family(p: str) -> str:
     if s.startswith(("http://", "https://", "//")) or "%2f%2f" in s:
         return "redirect"
     return "base"
-
 
 def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
     """
@@ -243,7 +346,6 @@ def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
             out.append((a, b))
             seen.add(key)
     return out
-
 
 def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
     """
@@ -309,9 +411,7 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
             seen.add(p)
     return out
 
-
 # -------------------------- inference (local) --------------------------------
-
 
 def _make_detector_hits(
     refl: Dict[str, Any],
@@ -335,7 +435,6 @@ def _make_detector_hits(
         "repeat_consistent": bool(repeat_consistent),
     }
 
-
 def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> str:
     """
     Deterministic, conservative inference.
@@ -347,18 +446,15 @@ def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> st
     if hits.get("xss_raw") and not hits.get("xss_html_escaped"):
         return "xss"
     if hits.get("open_redirect"):
-        return "open_redirect"
+        return "redirect"
     if abs(len_delta) > 300 and status_delta >= 1:
         return "suspicious"
     return "none"
 
-
 def _append_evidence_line(fout, obj: Dict[str, Any]) -> None:
     fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
 
-
 # ------------------------------ attempts utils --------------------------------
-
 
 def _attempt_request(
     client: httpx.Client,
@@ -371,16 +467,13 @@ def _attempt_request(
 ) -> Tuple[Optional[httpx.Response], Optional[Dict[str, str]], List[float]]:
     return _send(client, method, url, headers, body, timeout, repeats=repeats)
 
-
 def _response_core(resp: httpx.Response) -> Tuple[str, str, int]:
     """Return (full_text, snippet, status)."""
     body_full = resp.text or ""
     snippet = body_full[:TRUNCATE_BODY]
     return body_full, snippet, resp.status_code
 
-
 # --------------------------------- main --------------------------------------
-
 
 def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) -> Path:
     """
@@ -405,7 +498,6 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
             r0, err0, samples0 = _attempt_request(client, method, u_ctrl, h_ctrl, b_ctrl, timeout, repeats=1)
 
             if err0 is not None:
-                # Log baseline transport failure and skip this target
                 _append_evidence_line(
                     fout,
                     {
@@ -478,7 +570,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     body_f_full, body_f_snip, st_f = "", "", 0
                     len_f, hash_f, elapsed_f = 0, "", 0
 
-                # Log attempts
+                # Log attempts (both sides)
                 for (lbl, uX, hX, bX, stX, bodyX_full, bodyX_snip, elapsedX, smpX, errX, pX) in [
                     ("attempt", u_t, h_t, b_t, st_t, body_t_full, body_t_snip, elapsed_t, smp_t, err_t, p_true),
                     ("attempt", u_f, h_f, b_f, st_f, body_f_full, body_f_snip, elapsed_f, smp_f, err_f, p_false),
@@ -502,6 +594,13 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "elapsed_ms": elapsedX,
                             "timing_samples_ms": [int(s * 1000) for s in smpX],
                             "response_hash": _hash(bodyX_snip),
+                            "payload_origin": "curated",
+                            "ranker_meta": {
+                                "family_probs": None,
+                                "family_chosen": "sqli",  # boolean oracle implies sqli intent
+                                "ranker_score": None,
+                                "model_ids": None,
+                            },
                             **({"error": errX} if errX is not None else {}),
                         },
                     )
@@ -512,13 +611,14 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 boolean_hit = boolean_divergence_signal(metrics_true, metrics_false)
 
                 if boolean_hit:
-                    # Build findings line for the pair
+                    # Build pair deltas
                     status_delta_pair = abs(st_t - st_f)
                     len_delta_pair = abs(len_t - len_f)
                     ms_delta_pair = abs(elapsed_t - elapsed_f)
 
-                    findings = {
-                        "reflection": {},           # not relevant here
+                    # Heuristic score for the pair
+                    findings_pair = {
+                        "reflection": {},
                         "sql_error": False,
                         "open_redirect": False,
                         "boolean_sqli": True,
@@ -526,7 +626,27 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "hash_changed": (hash_t != hash_f),
                         "repeat_consistent": True,
                     }
-                    conf_pair = score(findings, status_delta_pair, len_delta_pair, ms_delta_pair)
+                    conf_pair = score(findings_pair, status_delta_pair, len_delta_pair, ms_delta_pair)
+
+                    # Attempt-level ML (old path) for the pair
+                    try:
+                        ml_in_pair = {
+                            "detector_hits": {"boolean_sqli": True},
+                            "status_delta": status_delta_pair,
+                            "len_delta": len_delta_pair,
+                            "latency_ms_delta": ms_delta_pair,
+                            "payload_family_used": "sqli",
+                            "pair": True,
+                            "method": method,
+                            "in": t["in"],
+                        }
+                        ml_out_pair = _ranker_predict(ml_in_pair)
+                    except Exception:
+                        ml_out_pair = {"p": 0.0, "source": "fallback_error"}
+
+                    ml_conf_pair = float(ml_out_pair.get("p", 0.0))
+                    ml_conf_pair = max(ml_conf_pair, 0.95)  # strong oracle floor
+                    conf_pair = max(conf_pair, ml_conf_pair)
 
                     _append_evidence_line(
                         fout,
@@ -542,14 +662,20 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "content_type": t.get("content_type"),
                             "payload_true": p_true,
                             "payload_false": p_false,
-                            "detector_hits": {
-                                "boolean_sqli": True,
-                            },
+                            "detector_hits": {"boolean_sqli": True},
                             "inferred_vuln_class": "sqli",
                             "status_delta": status_delta_pair,
                             "len_delta": len_delta_pair,
                             "latency_ms_delta": ms_delta_pair,
+                            "ml": {"p": ml_conf_pair, "source": ml_out_pair.get("source"), "enabled": _ML_AVAILABLE},
                             "confidence": conf_pair,
+                            "payload_origin": "curated",
+                            "ranker_meta": {
+                                "family_probs": None,
+                                "family_chosen": "sqli",
+                                "ranker_score": None,
+                                "model_ids": None,
+                            },
                             "request_true": {"url": u_t, "headers": h_t, "body": b_t},
                             "request_false": {"url": u_f, "headers": h_f, "body": b_f},
                             "response_true": {"status": st_t, "length": len(body_t_full), "elapsed_ms": elapsed_t},
@@ -557,23 +683,39 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         },
                     )
 
-                # Avoid double-processing these in the generic loop
+                # Avoid double-processing these in the generic/ML loops
                 seen_payloads.add(p_true)
                 seen_payloads.add(p_false)
 
-            # -------------------- GENERIC PAYLOAD LOOP --------------------
-            payloads = _generate_context_aware_payloads(t)
-            for payload in payloads:
+            # -------------------- STAGE A+B (ML-ranked payloads) --------------------
+            feats = _endpoint_features(t)
+            family_probs = _family_distribution(t)
+            fam_order = sorted([(f, p) for f, p in family_probs.items() if f != "base"], key=lambda x: x[1], reverse=True)[:2]
+
+            ranked_payloads: List[Tuple[str, str, float]] = []
+            for fam, p_fam in fam_order:
+                recs = _rank_payloads_for_family(feats, fam, top_n=3, threshold=0.15)
+                for payload, p_pl in recs:
+                    ranked_payloads.append((fam, payload, float(p_pl)))
+
+            # Fallback if ML produced nothing
+            if not ranked_payloads:
+                ranked_payloads = [
+                    ("sqli", "' OR 1=1--", 0.2),
+                    ("xss", '"/><script>alert(1)</script>', 0.2),
+                ]
+
+            # Sort globally by model score
+            ranked_payloads.sort(key=lambda x: x[2], reverse=True)
+
+            # Execute ML-ranked payloads first
+            for fam, payload, p_ml in ranked_payloads:
                 if payload in seen_payloads:
-                    continue  # skip ones already used for boolean pairs
-
+                    continue
                 u1, h1, b1 = _apply_payload_to_target(t, payload, control=False)
-
-                # Time-based probes: take median of 3 attempts
                 repeats = 3 if _looks_time_based(payload) else 1
                 r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
 
-                # Always write an attempt line, even if transport failed
                 if err1 is not None:
                     _append_evidence_line(
                         fout,
@@ -585,9 +727,15 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "in": t["in"],
                             "param": t["target_param"],
                             "payload_string": payload,
-                            "payload_family_used": _payload_family(payload),
-                            # legacy for back-compat
-                            "payload": payload,
+                            "payload_family_used": fam or _payload_family(payload),
+                            "payload_origin": "ml",
+                            "ranker_meta": {
+                                "family_probs": family_probs,
+                                "family_chosen": fam,
+                                "ranker_score": p_ml,
+                                "model_ids": {"family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
+                                              "ranker": f"ranker_{fam}.joblib" if fam else None},
+                            },
                             "url": u1,
                             "headers": h1,
                             "body": b1,
@@ -604,14 +752,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 # Signals
                 refl = reflection_signals(body1_full, payload)
                 sqlerr = sql_error_signal(body1_full)
-
-                # Open-redirect: use detectors helper (needs Location + origin)
                 loc_hdr = resp_headers.get("location")
                 openredir = bool(open_redirect_signal(loc_hdr, origin))
-
-                # Time-delay oracle (only meaningful if we purposely sent a time payload)
                 elapsed_ms_median = int(statistics.median(samples) * 1000)
-                baseline_ms = baseline_ms  # same var
                 time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
 
                 # Hash / consistency
@@ -624,19 +767,13 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 len_delta = abs(len(body1_snip) - l0)
                 ms_delta = max(0, elapsed_ms_median - baseline_ms)
 
-                # Flatten detector hits (booleans)
                 detector_hits = _make_detector_hits(
-                    refl,
-                    sqlerr,
-                    openredir,
-                    time_sqli,
-                    boolean_sqli=False,  # handled in the pair pass above
-                    hash_changed=hash_changed,
-                    repeat_consistent=repeat_consistent,
+                    refl, sqlerr, openredir, time_sqli, boolean_sqli=False,
+                    hash_changed=hash_changed, repeat_consistent=repeat_consistent,
                 )
 
-                # Confidence
-                conf = score(
+                # Heuristic confidence
+                conf_heur = score(
                     {
                         "reflection": refl,
                         "sql_error": sqlerr,
@@ -646,15 +783,40 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "hash_changed": hash_changed,
                         "repeat_consistent": repeat_consistent,
                     },
-                    status_delta,
-                    len_delta,
-                    ms_delta,
+                    status_delta, len_delta, ms_delta,
                 )
 
-                # Inferred class (deterministic)
+                # Attempt-level ML (old path)
+                try:
+                    ml_features = {
+                        "detector_hits": detector_hits,
+                        "status_delta": status_delta,
+                        "len_delta": len_delta,
+                        "latency_ms_delta": ms_delta,
+                        "payload_family_used": fam or _payload_family(payload),
+                        "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
+                        "method": method,
+                        "in": t["in"],
+                    }
+                    ml_out = _ranker_predict(ml_features)
+                except Exception:
+                    ml_out = {"p": 0.0, "source": "fallback_error"}
+
+                ml_conf = float(ml_out.get("p", 0.0))
+                ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
+
+                # Strong oracles dominate
+                if openredir:
+                    ml_conf = max(ml_conf, 0.95)
+                if sqlerr:
+                    ml_conf = max(ml_conf, 0.85)
+                if time_sqli:
+                    ml_conf = max(ml_conf, 0.95)
+
+                conf = max(conf_heur, ml_conf)
                 inferred = _infer_class(detector_hits, status_delta, len_delta)
 
-                # Always log the attempt (trace)
+                # Attempt (with provenance)
                 _append_evidence_line(
                     fout,
                     {
@@ -667,22 +829,26 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "url": u1,
                         "headers": h1,
                         "body": b1,
-                        # New clear fields
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam or _payload_family(payload),
+                        "payload_origin": "ml",
+                        "ranker_meta": {
+                            "family_probs": family_probs,
+                            "family_chosen": fam,
+                            "ranker_score": p_ml,
+                            "model_ids": {
+                                "family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
+                                "ranker": f"ranker_{fam}.joblib" if fam else None,
+                            },
+                        },
                         "detector_hits": detector_hits,
                         "inferred_vuln_class": inferred,
-                        # Legacy fields to avoid breaking current UI
-                        "payload": payload,
+                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
                         "signals": {
                             "reflection": refl,
                             "sql_error": sqlerr,
-                            "open_redirect": {
-                                "location": loc_hdr,
-                                "external": openredir,
-                            },
+                            "open_redirect": {"location": loc_hdr, "external": openredir},
                         },
-                        # Response meta & deltas
                         "status": status1,
                         "length": len(body1_full),
                         "elapsed_ms": elapsed_ms_median,
@@ -690,15 +856,13 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "status_delta": status_delta,
                         "len_delta": len_delta,
                         "latency_ms_delta": ms_delta,
-                        # Scoring
                         "confidence": conf,
-                        # Evidence
                         "response_hash": attempt_hash,
                         "response_snippet": body1_snip,
                     },
                 )
 
-                # Findings (high-signal) — lower threshold a bit for JSON responses
+                # Findings (threshold adjusted for JSON)
                 resp_ct = (resp_headers.get("content-type") or "").lower()
                 threshold = 0.5 if "application/json" in resp_ct else 0.6
                 should_record = (
@@ -716,19 +880,28 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "method": method,
                         "in": t["in"],
                         "param": t["target_param"],
-                        "url": t["url"],  # original target URL
+                        "url": t["url"],
                         "content_type": t.get("content_type"),
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam or _payload_family(payload),
+                        "payload_origin": "ml",
+                        "ranker_meta": {
+                            "family_probs": family_probs,
+                            "family_chosen": fam,
+                            "ranker_score": p_ml,
+                            "model_ids": {
+                                "family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
+                                "ranker": f"ranker_{fam}.joblib" if fam else None,
+                            },
+                        },
                         "detector_hits": detector_hits,
                         "inferred_vuln_class": inferred,
-                        # Legacy
-                        "payload": payload,
                         "control_value": t["control_value"],
                         "status": status1,
                         "status_delta": status_delta,
                         "len_delta": len_delta,
                         "latency_ms_delta": ms_delta,
+                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
                         "confidence": conf,
                         "response_hash": attempt_hash,
                         "response_snippet": body1_snip,
@@ -737,7 +910,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     ev_norm = {
                         "request": {
                             "method": method,
-                            "url": u1,  # the actual mutated URL we sent
+                            "url": u1,
                             "param": t["target_param"],
                             "headers": h1,
                             "body": b1,
@@ -747,7 +920,206 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "length": len(body1_full),
                             "elapsed_ms": elapsed_ms_median,
                             "headers": {
-                                # keep a small, useful subset
+                                "content-type": resp_headers.get("content-type"),
+                                "location": resp_headers.get("location"),
+                                "set-cookie": resp_headers.get("set-cookie"),
+                            },
+                        },
+                    }
+
+                    ev = {**ev_top, **ev_norm, "type": "finding"}
+                    _append_evidence_line(fout, ev)
+
+                seen_payloads.add(payload)
+
+            # -------------------- GENERIC PAYLOAD LOOP (curated) --------------------
+            payloads = _generate_context_aware_payloads(t)
+            for payload in payloads:
+                if payload in seen_payloads:
+                    continue  # skip ones already used
+
+                u1, h1, b1 = _apply_payload_to_target(t, payload, control=False)
+
+                repeats = 3 if _looks_time_based(payload) else 1
+                r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
+
+                if err1 is not None:
+                    _append_evidence_line(
+                        fout,
+                        {
+                            "type": "attempt_error",
+                            "job": job_dir.name,
+                            "target_id": t["id"],
+                            "method": method,
+                            "in": t["in"],
+                            "param": t["target_param"],
+                            "payload_string": payload,
+                            "payload_family_used": _payload_family(payload),
+                            "payload_origin": "curated",
+                            "ranker_meta": None,
+                            "url": u1,
+                            "headers": h1,
+                            "body": b1,
+                            "error": err1,
+                            "timing_samples_ms": [int(s * 1000) for s in samples],
+                        },
+                    )
+                    continue
+
+                # Bodies & headers
+                body1_full, body1_snip, status1 = _response_core(r1)  # type: ignore[arg-type]
+                resp_headers = _lower_headers(r1.headers)
+
+                # Signals
+                refl = reflection_signals(body1_full, payload)
+                sqlerr = sql_error_signal(body1_full)
+                loc_hdr = resp_headers.get("location")
+                openredir = bool(open_redirect_signal(loc_hdr, origin))
+                elapsed_ms_median = int(statistics.median(samples) * 1000)
+                time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
+
+                # Hash / consistency
+                attempt_hash = _hash(body1_snip)
+                hash_changed = attempt_hash != baseline_hash
+                repeat_consistent = (len(samples) >= 2) and (statistics.pstdev(samples) * 1000.0 <= 200.0)
+
+                # Deltas vs baseline
+                status_delta = abs((status1 or 0) - s0)
+                len_delta = abs(len(body1_snip) - l0)
+                ms_delta = max(0, elapsed_ms_median - baseline_ms)
+
+                detector_hits = _make_detector_hits(
+                    refl, sqlerr, openredir, time_sqli, boolean_sqli=False,
+                    hash_changed=hash_changed, repeat_consistent=repeat_consistent,
+                )
+
+                conf_heur = score(
+                    {
+                        "reflection": refl,
+                        "sql_error": sqlerr,
+                        "open_redirect": openredir,
+                        "boolean_sqli": False,
+                        "time_sqli": time_sqli,
+                        "hash_changed": hash_changed,
+                        "repeat_consistent": repeat_consistent,
+                    },
+                    status_delta, len_delta, ms_delta,
+                )
+
+                try:
+                    ml_features = {
+                        "detector_hits": detector_hits,
+                        "status_delta": status_delta,
+                        "len_delta": len_delta,
+                        "latency_ms_delta": ms_delta,
+                        "payload_family_used": _payload_family(payload),
+                        "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
+                        "method": method,
+                        "in": t["in"],
+                    }
+                    ml_out = _ranker_predict(ml_features)
+                except Exception:
+                    ml_out = {"p": 0.0, "source": "fallback_error"}
+
+                ml_conf = float(ml_out.get("p", 0.0))
+                ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
+
+                if openredir:
+                    ml_conf = max(ml_conf, 0.95)
+                if sqlerr:
+                    ml_conf = max(ml_conf, 0.85)
+                if time_sqli:
+                    ml_conf = max(ml_conf, 0.95)
+
+                conf = max(conf_heur, ml_conf)
+                inferred = _infer_class(detector_hits, status_delta, len_delta)
+
+                _append_evidence_line(
+                    fout,
+                    {
+                        "type": "attempt",
+                        "job": job_dir.name,
+                        "target_id": t["id"],
+                        "method": method,
+                        "in": t["in"],
+                        "param": t["target_param"],
+                        "url": u1,
+                        "headers": h1,
+                        "body": b1,
+                        "payload_string": payload,
+                        "payload_family_used": _payload_family(payload),
+                        "payload_origin": "curated",
+                        "ranker_meta": None,
+                        "detector_hits": detector_hits,
+                        "inferred_vuln_class": inferred,
+                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
+                        "signals": {
+                            "reflection": refl,
+                            "sql_error": sqlerr,
+                            "open_redirect": {"location": loc_hdr, "external": openredir},
+                        },
+                        "status": status1,
+                        "length": len(body1_full),
+                        "elapsed_ms": elapsed_ms_median,
+                        "timing_samples_ms": [int(s * 1000) for s in samples],
+                        "status_delta": status_delta,
+                        "len_delta": len_delta,
+                        "latency_ms_delta": ms_delta,
+                        "confidence": conf,
+                        "response_hash": attempt_hash,
+                        "response_snippet": body1_snip,
+                    },
+                )
+
+                resp_ct = (resp_headers.get("content-type") or "").lower()
+                threshold = 0.5 if "application/json" in resp_ct else 0.6
+                should_record = (
+                    conf >= threshold
+                    or detector_hits.get("sql_error")
+                    or detector_hits.get("xss_js")
+                    or detector_hits.get("xss_raw")
+                    or detector_hits.get("open_redirect")
+                    or detector_hits.get("time_sqli")
+                )
+                if should_record:
+                    ev_top = {
+                        "job": job_dir.name,
+                        "target_id": t["id"],
+                        "method": method,
+                        "in": t["in"],
+                        "param": t["target_param"],
+                        "url": t["url"],
+                        "content_type": t.get("content_type"),
+                        "payload_string": payload,
+                        "payload_family_used": _payload_family(payload),
+                        "payload_origin": "curated",
+                        "ranker_meta": None,
+                        "detector_hits": detector_hits,
+                        "inferred_vuln_class": inferred,
+                        "control_value": t["control_value"],
+                        "status": status1,
+                        "status_delta": status_delta,
+                        "len_delta": len_delta,
+                        "latency_ms_delta": ms_delta,
+                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
+                        "confidence": conf,
+                        "response_hash": _hash(body1_snip),
+                        "response_snippet": body1_snip,
+                    }
+
+                    ev_norm = {
+                        "request": {
+                            "method": method,
+                            "url": u1,
+                            "param": t["target_param"],
+                            "headers": h1,
+                            "body": b1,
+                        },
+                        "response": {
+                            "status": status1,
+                            "length": len(body1_full),
+                            "elapsed_ms": elapsed_ms_median,
+                            "headers": {
                                 "content-type": resp_headers.get("content-type"),
                                 "location": resp_headers.get("location"),
                                 "set-cookie": resp_headers.get("set-cookie"),
