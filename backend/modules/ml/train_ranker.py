@@ -1,6 +1,33 @@
 # backend/modules/ml/train_ranker.py
 from __future__ import annotations
 
+"""
+Train per-family Learning-to-Rank (Stage-B) models from evidence logs.
+
+What it does
+------------
+- Parses evidence.jsonl (attempts + findings).
+- Labels each (endpoint, payload) as:
+    2 = hard positive (SQL error / boolean or time oracle / JS XSS / external redirect)
+    1 = soft positive (big Δlen+Δstatus, large latency delta, or high ML p)
+    0 = negative
+- Builds per-family ranking datasets grouped by endpoint.
+- Trains LambdaMART with objective=rank:pairwise (robust and avoids brittle built-in ndcg@K quirks).
+- Reports NDCG@3 and Hit@1/3/5 and saves reliability bins (calibration) on a validation split.
+- Exports ranker_{family}.joblib and recommender_meta.json.
+
+Critical contract with runtime
+------------------------------
+Recommender at inference time concatenates:
+  [endpoint_feature_vector] + [payload_desc(payload)]
+This trainer uses the exact same recipe:
+- Endpoint vector comes from FeatureExtractor.extract_endpoint_features(...) (payload-agnostic, no navigation).
+- Payload descriptor mirrors backend/modules/recommender._payload_desc.
+
+Output files go to backend/modules/ml/ by default and are picked up by
+backend/modules/recommender.py via RANKER_PATHS + META_PATHS.
+"""
+
 import argparse
 import glob
 import json
@@ -11,7 +38,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from hashlib import sha1
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 # --- Dependencies: xgboost + joblib (ensure in requirements.txt) -------------
 try:
@@ -28,17 +55,17 @@ import numpy as np
 
 # Internal helpers (payload families & endpoint features)
 try:
-    # Canonical pools are useful for sanity, but not strictly required here
+    # Canonical pools not strictly required for training, but import to keep module deps aligned
     from ..family_router import payload_pool_for  # noqa: F401
 except Exception:
     def payload_pool_for(_: str) -> List[str]:
         return []
 
 try:
-    # Cheap, payload-agnostic endpoint vector (length 17)
+    # Payload-agnostic endpoint features (same API the runtime uses)
     from ..feature_extractor import FeatureExtractor
 except Exception as e:
-    raise SystemExit("feature_extractor is required at train time") from e
+    raise SystemExit("FeatureExtractor is required at train time.") from e
 
 
 # ============================ Core configs ===================================
@@ -82,7 +109,11 @@ def _payload_desc(payload: str) -> List[float]:
     ]
 
 
-def _endpoint_vec(fe: FeatureExtractor, t: Dict[str, Any]) -> List[int]:
+def _endpoint_vec(fe: FeatureExtractor, t: Dict[str, Any]) -> List[float]:
+    """
+    EXACTLY the same payload-agnostic endpoint vector used at inference,
+    with no headless navigation / HTTP fetches.
+    """
     return fe.extract_endpoint_features(
         url=t.get("url") or t.get("request", {}).get("url", ""),
         param=t.get("param") or t.get("request", {}).get("param", ""),
@@ -285,14 +316,26 @@ def _build_family_dataset(attempts: List[Attempt], family: str) -> LTRDataset:
 # ============================= Metrics =======================================
 
 def _ndcg_at_k(y_true: List[float], y_score: List[float], k: int = 3) -> float:
-    """Compute NDCG@k for a single query."""
-    order = np.argsort(-np.asarray(y_score))
-    y_true_sorted = np.asarray(y_true)[order][:k]
+    """
+    Compute NDCG@k for a single query.
+
+    Robust to queries with fewer than k candidates by capping k to the
+    actual list length (this avoids shape-mismatch errors like (2,) vs (3,)).
+    """
+    if not y_true or not y_score:
+        return 0.0
+    k_eff = min(k, len(y_true), len(y_score))
+    if k_eff <= 0:
+        return 0.0
+
+    order = np.argsort(-np.asarray(y_score))[:k_eff]
+    y_true_sorted = np.asarray(y_true)[order]  # length = k_eff
     gains = (2 ** y_true_sorted - 1)
-    discounts = 1 / np.log2(np.arange(2, k + 2))
+    discounts = 1 / np.log2(np.arange(2, k_eff + 2))
     dcg = float(np.sum(gains * discounts))
+
     # ideal
-    ideal_order = np.sort(y_true)[::-1][:k]
+    ideal_order = np.sort(y_true)[::-1][:k_eff]
     ideal_gains = (2 ** ideal_order - 1)
     ideal_dcg = float(np.sum(ideal_gains * discounts))
     return dcg / ideal_dcg if ideal_dcg > 0 else 0.0
@@ -300,7 +343,7 @@ def _ndcg_at_k(y_true: List[float], y_score: List[float], k: int = 3) -> float:
 
 def _hit_at_k(y_true: List[float], y_score: List[float], k: int) -> int:
     order = np.argsort(-np.asarray(y_score))[:k]
-    return int(max(np.asarray(y_true)[order]) > 0)
+    return int(max(np.asarray(y_true)[order]) > 0) if len(order) else 0
 
 
 def _softmax(xs: List[float]) -> List[float]:
@@ -320,10 +363,10 @@ def _evaluate_per_endpoint(
         by_ep[ep].append(idx)
 
     ndcgs, hit1, hit3, hit5 = [], [], [], []
-    for ep, idxs in by_ep.items():
+    for _, idxs in by_ep.items():
         yt = [float(y_true[i]) for i in idxs]
         ys = [float(y_score[i]) for i in idxs]
-        ndcgs.append(_ndcg_at_k(yt, ys, k=3))
+        ndcgs.append(_ndcg_at_k(yt, ys, k=3))              # safe for groups < 3
         hit1.append(_hit_at_k(yt, ys, k=1))
         hit3.append(_hit_at_k(yt, ys, k=3))
         hit5.append(_hit_at_k(yt, ys, k=min(5, len(idxs))))
@@ -348,7 +391,7 @@ def _reliability_bins(endpoint_ids: List[str], y_true: np.ndarray, y_score: np.n
         by_ep[ep].append(i)
 
     probs, succ = [], []
-    for ep, idxs in by_ep.items():
+    for _, idxs in by_ep.items():
         sm = _softmax([float(y_score[i]) for i in idxs])
         for j, i in enumerate(idxs):
             probs.append(sm[j])
@@ -380,9 +423,12 @@ def _reliability_bins(endpoint_ids: List[str], y_true: np.ndarray, y_score: np.n
 # ============================= Train / Eval ==================================
 
 def _train_ranker(dataset: LTRDataset) -> XGBRanker:
+    """
+    Train LambdaMART WITHOUT tying ourselves to a fragile built-in ndcg@K.
+    We use pairwise objective and do metrics ourselves on a val split.
+    """
     model = XGBRanker(
-        objective="rank:ndcg",
-        eval_metric="ndcg@3",
+        objective="rank:pairwise",     # robust; no top-k eval dependency during fit
         n_estimators=300,
         max_depth=6,
         learning_rate=0.10,
@@ -408,11 +454,6 @@ def _train_val_split(endpoint_ids: List[str], group_sizes: List[int], val_ratio:
     for g in group_sizes:
         q_ranges.append((start, start + g))
         start += g
-
-    # Unique endpoints in order
-    q_endpoints: List[str] = []
-    for (lo, hi) in q_ranges:
-        q_endpoints.append(endpoint_ids[lo])  # all rows in the group share the same endpoint_id
 
     # Shuffle endpoints deterministically
     idxs = list(range(len(q_ranges)))
@@ -467,6 +508,11 @@ def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dic
     ds_tr = _slice_dataset(ds, train_rows)
     ds_va = _slice_dataset(ds, val_rows)
 
+    # Sanity: every training group must have >= 2 rows (pairwise objective).
+    min_g = min(ds_tr.group) if ds_tr.group else 0
+    if min_g < 2:
+        raise ValueError(f"Training groups contain size-1 queries (min={min_g}). Your evidence is too thin for {family}.")
+
     # Train
     print(f"[Family: {family}] Training XGBRanker on {len(ds_tr.y)} rows / {len(ds_tr.group)} queries...")
     model = _train_ranker(ds_tr)
@@ -490,7 +536,9 @@ def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dic
         "queries_val": len(ds_va.group),
         "metrics": metrics,
         "reliability_bins": calib,
-        "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims.",
+        "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+        "objective": "rank:pairwise",
+        "min_group_train": min_g,
     }
     (out_dir / f"ranker_report_{family}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[Family: {family}] Validation metrics: {metrics}")
@@ -528,15 +576,18 @@ def main() -> None:
     for fam in families:
         try:
             summaries[fam] = train_one_family(attempts, fam, out_dir)
-        except ValueError as e:
+        except Exception as e:
             print(f"[Family: {fam}] Skipped: {e}")
 
-    # Write recommender meta to keep vectorization in sync (endpoint vector length)
+    # Write recommender meta to keep vectorization in sync (endpoint feature length).
+    # IMPORTANT: feature_dim here is ONLY the endpoint vector (without payload_desc).
+    # Inference concatenates [endpoint_vec(feature_dim)] + [payload_desc(5)] internally.
+    fe = FeatureExtractor(headless=True)
     meta = {
-        "feature_dim": 17,          # endpoint vector length produced by FeatureExtractor.extract_endpoint_features
-        "feature_names": None,      # list not needed because we pass a numeric list (fixed order)
-        "note": "Rankers expect [endpoint_feature(17)] + [payload_desc(5)] at inference.",
-        "families_trained": [k for k, v in summaries.items()],
+        "feature_dim": len(_endpoint_vec(fe, {"url": "", "param": "", "method": "GET", "content_type": None, "headers": None})),
+        "feature_names": None,  # not needed because we pass a numeric list in stable order
+        "note": "Rankers expect [endpoint_feature_vector] + [payload_desc(5)] at inference.",
+        "families_trained": [k for k, _ in summaries.items()],
     }
     (out_dir / "recommender_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
     print(f"[Meta] Wrote {out_dir / 'recommender_meta.json'}")

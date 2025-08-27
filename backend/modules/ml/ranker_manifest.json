@@ -2,9 +2,9 @@
   "summaries": {
     "sqli": {
       "family": "sqli",
-      "samples_train": 202,
-      "queries_train": 18,
-      "samples_val": 77,
+      "samples_train": 229,
+      "queries_train": 20,
+      "samples_val": 68,
       "queries_val": 5,
       "metrics": {
         "NDCG@3": 1.0,
@@ -16,21 +16,21 @@
       "reliability_bins": [
         {
           "bin": 0,
-          "p_mean": 0.03178348608798087,
-          "emp_rate": 0.8076923076923077,
-          "count": 52
+          "p_mean": 0.045580354598560344,
+          "emp_rate": 0.8275862068965517,
+          "count": 58
         },
         {
           "bin": 1,
-          "p_mean": 0.1237168244579037,
+          "p_mean": 0.1542946685274195,
           "emp_rate": 1.0,
-          "count": 23
+          "count": 7
         },
         {
           "bin": 2,
-          "p_mean": 0.25088588044660437,
+          "p_mean": 0.27627675359156406,
           "emp_rate": 1.0,
-          "count": 2
+          "count": 1
         },
         {
           "bin": 3,
@@ -43,6 +43,85 @@
           "p_mean": 0.45,
           "emp_rate": 0.0,
           "count": 0
+        },
+        {
+          "bin": 5,
+          "p_mean": 0.5,
+          "emp_rate": 1.0,
+          "count": 2
+        },
+        {
+          "bin": 6,
+          "p_mean": 0.6500000000000001,
+          "emp_rate": 0.0,
+          "count": 0
+        },
+        {
+          "bin": 7,
+          "p_mean": 0.75,
+          "emp_rate": 0.0,
+          "count": 0
+        },
+        {
+          "bin": 8,
+          "p_mean": 0.8500000000000001,
+          "emp_rate": 0.0,
+          "count": 0
+        },
+        {
+          "bin": 9,
+          "p_mean": 0.95,
+          "emp_rate": 0.0,
+          "count": 0
+        }
+      ],
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+      "objective": "rank:pairwise",
+      "min_group_train": 2
+    },
+    "xss": {
+      "family": "xss",
+      "samples_train": 36,
+      "queries_train": 10,
+      "samples_val": 12,
+      "queries_val": 3,
+      "metrics": {
+        "NDCG@3": 1.0,
+        "Hit@1": 1.0,
+        "Hit@3": 1.0,
+        "Hit@5": 1.0,
+        "queries": 3
+      },
+      "reliability_bins": [
+        {
+          "bin": 0,
+          "p_mean": 0.07408954034801953,
+          "emp_rate": 0.0,
+          "count": 3
+        },
+        {
+          "bin": 1,
+          "p_mean": 0.1668958323464051,
+          "emp_rate": 1.0,
+          "count": 1
+        },
+        {
+          "bin": 2,
+          "p_mean": 0.23036522573682794,
+          "emp_rate": 1.0,
+          "count": 3
+        },
+        {
+          "bin": 3,
+          "p_mean": 0.340815860217974,
+          "emp_rate": 1.0,
+          "count": 3
+        },
+        {
+          "bin": 4,
+          "p_mean": 0.44864614437256545,
+          "emp_rate": 1.0,
+          "count": 2
         },
         {
           "bin": 5,
@@ -75,27 +154,29 @@
           "count": 0
         }
       ],
-      "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+      "objective": "rank:pairwise",
+      "min_group_train": 3
     },
-    "xss": {
-      "family": "xss",
-      "samples_train": 30,
-      "queries_train": 10,
-      "samples_val": 6,
-      "queries_val": 2,
+    "redirect": {
+      "family": "redirect",
+      "samples_train": 256,
+      "queries_train": 16,
+      "samples_val": 51,
+      "queries_val": 4,
       "metrics": {
         "NDCG@3": 1.0,
         "Hit@1": 1.0,
         "Hit@3": 1.0,
         "Hit@5": 1.0,
-        "queries": 2
+        "queries": 4
       },
       "reliability_bins": [
         {
           "bin": 0,
-          "p_mean": 0.05,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.0625,
+          "emp_rate": 1.0,
+          "count": 48
         },
         {
           "bin": 1,
@@ -113,7 +194,7 @@
           "bin": 3,
           "p_mean": 0.3333333333333333,
           "emp_rate": 1.0,
-          "count": 6
+          "count": 3
         },
         {
           "bin": 4,
@@ -152,84 +233,9 @@
           "count": 0
         }
       ],
-      "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
-    },
-    "redirect": {
-      "family": "redirect",
-      "samples_train": 240,
-      "queries_train": 15,
-      "samples_val": 64,
-      "queries_val": 4,
-      "metrics": {
-        "NDCG@3": 1.0,
-        "Hit@1": 1.0,
-        "Hit@3": 1.0,
-        "Hit@5": 1.0,
-        "queries": 4
-      },
-      "reliability_bins": [
-        {
-          "bin": 0,
-          "p_mean": 0.0625,
-          "emp_rate": 1.0,
-          "count": 64
-        },
-        {
-          "bin": 1,
-          "p_mean": 0.15000000000000002,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 2,
-          "p_mean": 0.25,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 3,
-          "p_mean": 0.35000000000000003,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 4,
-          "p_mean": 0.45,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 5,
-          "p_mean": 0.55,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 6,
-          "p_mean": 0.6500000000000001,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 7,
-          "p_mean": 0.75,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 8,
-          "p_mean": 0.8500000000000001,
-          "emp_rate": 0.0,
-          "count": 0
-        },
-        {
-          "bin": 9,
-          "p_mean": 0.95,
-          "emp_rate": 0.0,
-          "count": 0
-        }
-      ],
-      "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+      "objective": "rank:pairwise",
+      "min_group_train": 16
     }
   },
   "out_dir": "/Users/raphaelpang/code/elise/backend/modules/ml"

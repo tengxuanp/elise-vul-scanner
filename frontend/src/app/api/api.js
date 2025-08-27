@@ -10,6 +10,23 @@ export const api = axios.create({
   timeout: 0,
 });
 
+// -------- helpers --------
+const normalizeBearer = (token) => {
+  if (!token) return null;
+  const t = String(token).trim();
+  return t.toLowerCase().startsWith('bearer ') ? t : `Bearer ${t}`;
+};
+
+// Pull bearer from several possible option keys for robustness
+const pickBearerFromOpts = (opts = {}) =>
+  normalizeBearer(
+    opts.bearerToken ??
+    opts.bearer_token ??
+    opts.bearer ??
+    opts.token ??
+    null
+  );
+
 // Global response interceptor (cleaner error logs)
 api.interceptors.response.use(
   (res) => res,
@@ -46,22 +63,20 @@ export const getCategorizedEndpoints = async (target_url) =>
  * opts = {
  *   engine: 'core' | 'ffuf' | 'hybrid' (default 'core'),
  *   selection: [{ method, url, params?, body_keys? }] | null,
- *   bearerToken: string | null,           // passed to backend; auto-prefixed 'Bearer ' if missing
+ *   bearerToken | bearer_token | bearer | token: string | null,  // auto 'Bearer ' prefix if missing
  *   topN: number (ffuf only),
  *   threshold: number (ffuf only)
  * }
  */
-export const fuzzByJob = async (
-  job_id,
-  opts = {}
-) => {
+export const fuzzByJob = async (job_id, opts = {}) => {
   const {
     engine = 'core',
     selection = null,
-    bearerToken = null,
     topN = 3,
     threshold = 0.2,
   } = opts;
+
+  const bearer = pickBearerFromOpts(opts);
 
   const body = {
     engine,
@@ -70,7 +85,7 @@ export const fuzzByJob = async (
     threshold,
   };
 
-  if (bearerToken) body.bearer_token = bearerToken;
+  if (bearer) body.bearer_token = bearer;
 
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
 };
@@ -79,14 +94,15 @@ export const fuzzByJob = async (
 export const fuzzSelected = async (
   job_id,
   selection,              // array of { method, url, params?, body_keys? }
-  opts = {}               // same shape as fuzzByJob opts (you can pass bearerToken/engine here)
+  opts = {}               // same shape as fuzzByJob opts (you can pass bearerToken/bearer_token/engine here)
 ) => {
   const {
     engine = 'core',
-    bearerToken = null,
     topN = 3,
     threshold = 0.2,
   } = opts;
+
+  const bearer = pickBearerFromOpts(opts);
 
   const body = {
     engine,
@@ -94,7 +110,8 @@ export const fuzzSelected = async (
     top_n: topN,
     threshold,
   };
-  if (bearerToken) body.bearer_token = bearerToken;
+
+  if (bearer) body.bearer_token = bearer;
 
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
 };
@@ -127,9 +144,8 @@ export const setAuthHeader = (key, value) => {
 
 // Convenience for UI: normalize a raw token into a proper Authorization header
 export const setBearerAuth = (token) => {
-  if (!token) return setAuthHeader('Authorization', undefined);
-  const trimmed = token.trim();
-  const val = trimmed.toLowerCase().startsWith('bearer ') ? trimmed : `Bearer ${trimmed}`;
+  const val = normalizeBearer(token);
+  if (!val) return setAuthHeader('Authorization', undefined);
   setAuthHeader('Authorization', val);
 };
 

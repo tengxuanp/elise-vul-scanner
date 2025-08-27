@@ -41,7 +41,14 @@ except Exception:
     FeatureExtractor = None  # type: ignore
 
 try:
-    from .family_router import FamilyClassifier, payload_pool_for
+    # Stage-A (family) + canonical pools
+    from .family_router import (
+        FamilyClassifier,
+        payload_pool_for,
+        decide_family,
+        DEFAULT_MIN_PROB,
+        DEFAULT_EXPLORE_TOPK,
+    )
 except Exception:
     FamilyClassifier = None  # type: ignore
 
@@ -54,6 +61,28 @@ except Exception:
         if fam == "redirect":
             return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
         return []
+
+    # Fallback Stage-A decider when family_router is not available
+    def decide_family(t: Dict[str, Any], min_prob: float = 0.55, explore_topk: int = 2, include_base: bool = False) -> Dict[str, Any]:  # type: ignore
+        fams = ["sqli", "xss", "redirect", "base"]
+        probs = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
+        s = sum(probs.values()) or 1.0
+        probs = {k: v / s for k, v in probs.items()}
+        ranked = sorted([(f, p) for f, p in probs.items()], key=lambda kv: kv[1], reverse=True)
+        top_family, top_prob = ranked[0]
+        threshold_passed = top_prob >= min_prob
+        fams_try = [top_family] if threshold_passed else [f for f, _ in ranked if (include_base or f != "base")][:max(1, explore_topk)]
+        return {
+            "family_top": top_family,
+            "family_probs": probs,
+            "threshold_passed": threshold_passed,
+            "families_to_try": fams_try,
+            "decision_reason": "rule_argmax" if threshold_passed else "below_threshold_explore",
+            "min_prob": float(min_prob),
+        }
+
+    DEFAULT_MIN_PROB = 0.55  # type: ignore
+    DEFAULT_EXPLORE_TOPK = 2  # type: ignore
 
 try:
     from .recommender import Recommender
@@ -113,44 +142,58 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     _FEATURE_CACHE[k] = feats
     return feats
 
-def _family_distribution(t: Dict[str, Any]) -> Dict[str, float]:
-    """Stage A: return distribution over families."""
-    fams = ["sqli", "xss", "redirect", "base"]
-    if _FAM is not None and hasattr(_FAM, "predict_proba"):
-        try:
-            return _FAM.predict_proba(
-                {
-                    "url": t.get("url"),
-                    "method": t.get("method"),
-                    "in": t.get("in"),
-                    "target_param": t.get("target_param"),
-                    "content_type": t.get("content_type"),
-                    "headers": t.get("headers"),
-                    "control_value": t.get("control_value"),
-                }
-            )
-        except Exception:
-            pass
-    # Fallback: light heuristic -> equal mass, tiny base
-    out = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
-    s = sum(out.values()) or 1.0
-    return {k: v / s for k, v in out.items()}
+# ---- Stage-A wrapper ---------------------------------------------------------
 
-def _rank_payloads_for_family(feats: Dict[str, Any], family: str, top_n: int = 3, threshold: float = 0.15) -> List[Tuple[str, float]]:
-    """Stage B: per-family payload ranking via LTR; fallback to curated pool."""
+def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Ask the Stage-A decider for family distribution + authoritative decision.
+    """
+    inp = {
+        "url": t.get("url"),
+        "method": t.get("method"),
+        "in": t.get("in"),
+        "target_param": t.get("target_param"),
+        "content_type": t.get("content_type"),
+        "headers": t.get("headers"),
+        "control_value": t.get("control_value"),
+    }
+    try:
+        return decide_family(inp, min_prob=DEFAULT_MIN_PROB, explore_topk=DEFAULT_EXPLORE_TOPK)
+    except Exception:
+        # ultra-safe fallback
+        return decide_family(inp)
+
+# ---- Stage-B wrapper ---------------------------------------------------------
+
+def _rank_payloads_for_family(
+    feats: Dict[str, Any],
+    family: str,
+    top_n: int = 3,
+    threshold: float = 0.2,
+) -> Tuple[List[Tuple[str, float]], Dict[str, Any]]:
+    """
+    Stage B: per-family payload ranking via LTR; fallback to curated pool.
+    Returns ([(payload, prob)], meta)
+    """
     fam = (family or "").lower()
     pool = payload_pool_for(fam)
     if not pool:
-        return []
-    if _RECO is not None and hasattr(_RECO, "recommend"):
+        return ([], {"used_path": "no_pool", "family": fam})
+
+    if _RECO is not None:
         try:
-            recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
-            # expect list[(payload, prob)]
-            return [(p, float(prob)) for (p, prob) in recs]
+            if hasattr(_RECO, "recommend_with_meta"):
+                recs, meta = _RECO.recommend_with_meta(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                return ([(p, float(prob)) for (p, prob) in recs], meta or {})
+            else:
+                recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam})
         except Exception:
             pass
+
     # Fallback: naive order, uniform score
-    return [(p, 0.2) for p in pool[:top_n]]
+    out = [(p, 0.2) for p in pool[:top_n]]
+    return (out, {"used_path": "heuristic", "family": fam})
 
 # ---------------------------- small utils ------------------------------------
 
@@ -208,6 +251,64 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
             out["Referer"] = ref
 
     return out
+
+# ---------- Redirect influence gating helpers (reduce false positives) --------
+
+_REDIRECT_PARAM_NAMES = {
+    "to", "url", "next", "redirect", "return", "continue", "return_to", "redirect_uri", "callback"
+}
+
+def _host_from_url(u: Optional[str]) -> str:
+    try:
+        return urlparse(u or "").netloc.lower()
+    except Exception:
+        return ""
+
+def _url_from_payload(p: str) -> Optional[str]:
+    """
+    Surface URL-ish payloads (http/https/// and common encoded variants).
+    """
+    try:
+        s = p or ""
+        if "%2f%2f" in s.lower():
+            s = s.replace("%2F", "/").replace("%2f", "/")
+        if s.startswith(("http://", "https://", "//")):
+            return s if s.startswith(("http://", "https://")) else "http:" + s
+    except Exception:
+        pass
+    return None
+
+def _redirect_payload_influenced(
+    baseline_loc: Optional[str],
+    new_loc: Optional[str],
+    payload: str,
+    target_param: str,
+) -> bool:
+    """
+    Consider 'open_redirect' only when the response Location is influenced by our payload:
+    - Location changed from baseline, AND
+    - Either the new Location host matches the payload host (if URL-ish), or payload appears in Location, OR
+    - We mutated a known redirect-style parameter (permissive fallback).
+    """
+    new_loc = new_loc or ""
+    base_loc = baseline_loc or ""
+    if not new_loc:
+        return False
+    if new_loc == base_loc:
+        return False
+
+    mutated_redirect_param = (target_param or "").lower() in _REDIRECT_PARAM_NAMES
+
+    pay_url = _url_from_payload(payload)
+    if pay_url:
+        pay_host = _host_from_url(pay_url)
+        new_host = _host_from_url(new_loc)
+        if pay_host and new_host and pay_host == new_host:
+            return True
+        if pay_url in new_loc:
+            return True
+
+    return mutated_redirect_param
 
 # -------------------------- request mutation ---------------------------------
 
@@ -520,6 +621,8 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
             l0 = len(body0_snip)
             baseline_hash = _hash(body0_snip)
             baseline_ms = int(statistics.median(samples0) * 1000)
+            baseline_headers = _lower_headers(r0.headers)  # type: ignore[arg-type]
+            baseline_location = baseline_headers.get("location")
 
             _append_evidence_line(
                 fout,
@@ -538,6 +641,11 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     "elapsed_ms": baseline_ms,
                     "timing_samples_ms": [int(s * 1000) for s in samples0],
                     "response_hash": baseline_hash,
+                    "response_headers": {
+                        "content-type": baseline_headers.get("content-type"),
+                        "location": baseline_location,
+                        "set-cookie": baseline_headers.get("set-cookie"),
+                    },
                 },
             )
 
@@ -689,248 +797,262 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # -------------------- STAGE A+B (ML-ranked payloads) --------------------
             feats = _endpoint_features(t)
-            family_probs = _family_distribution(t)
-            fam_order = sorted([(f, p) for f, p in family_probs.items() if f != "base"], key=lambda x: x[1], reverse=True)[:2]
+            decision = _stage_a_decision(t)
+            family_probs = decision.get("family_probs", {})
+            family_top = decision.get("family_top")
+            threshold_passed = bool(decision.get("threshold_passed"))
+            families_to_try = list(decision.get("families_to_try") or ([] if family_top is None else [family_top]))
 
-            ranked_payloads: List[Tuple[str, str, float]] = []
-            for fam, p_fam in fam_order:
-                recs = _rank_payloads_for_family(feats, fam, top_n=3, threshold=0.15)
-                for payload, p_pl in recs:
-                    ranked_payloads.append((fam, payload, float(p_pl)))
+            # Budget: if threshold passed, use chosen family (top_n=3); else explore top-k with top_n=1 each
+            plan: List[Tuple[str, int]] = []
+            if threshold_passed and family_top:
+                plan.append((family_top, 3))
+            else:
+                for fam in families_to_try:
+                    plan.append((fam, 1))
 
-            # Fallback if ML produced nothing
-            if not ranked_payloads:
-                ranked_payloads = [
-                    ("sqli", "' OR 1=1--", 0.2),
-                    ("xss", '"/><script>alert(1)</script>', 0.2),
-                ]
-
-            # Sort globally by model score
-            ranked_payloads.sort(key=lambda x: x[2], reverse=True)
-
-            # Execute ML-ranked payloads first
-            for fam, payload, p_ml in ranked_payloads:
-                if payload in seen_payloads:
+            # Execute per plan
+            for fam, top_n in plan:
+                recs, meta = _rank_payloads_for_family(feats, fam, top_n=top_n, threshold=0.2)
+                # Nothing to do
+                if not recs:
                     continue
-                u1, h1, b1 = _apply_payload_to_target(t, payload, control=False)
-                repeats = 3 if _looks_time_based(payload) else 1
-                r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
 
-                if err1 is not None:
+                # Fire candidates in the given order (ranked)
+                for payload, p_ml in recs:
+                    if payload in seen_payloads:
+                        continue
+                    u1, h1, b1 = _apply_payload_to_target(t, payload, control=False)
+                    repeats = 3 if _looks_time_based(payload) else 1
+                    r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
+
+                    # Build common ranker_meta (Stage-A + Stage-B)
+                    family_prob = float(family_probs.get(fam, 0.0))
+                    ranker_meta = {
+                        "family_probs": family_probs,
+                        "family_top": family_top,
+                        "family_chosen": fam,
+                        "threshold_passed": threshold_passed,
+                        "families_to_try": families_to_try,
+                        "decision_reason": decision.get("decision_reason"),
+                        "min_prob": decision.get("min_prob"),
+                        "ranker_score": float(p_ml),
+                        "ranker": (meta or {}),
+                    }
+
+                    if err1 is not None:
+                        _append_evidence_line(
+                            fout,
+                            {
+                                "type": "attempt_error",
+                                "job": job_dir.name,
+                                "target_id": t["id"],
+                                "method": method,
+                                "in": t["in"],
+                                "param": t["target_param"],
+                                "payload_string": payload,
+                                "payload_family_used": fam or _payload_family(payload),
+                                "payload_origin": "ml",
+                                "ranker_meta": ranker_meta,
+                                "url": u1,
+                                "headers": h1,
+                                "body": b1,
+                                "error": err1,
+                                "timing_samples_ms": [int(s * 1000) for s in samples],
+                            },
+                        )
+                        continue
+
+                    # Bodies & headers
+                    body1_full, body1_snip, status1 = _response_core(r1)  # type: ignore[arg-type]
+                    resp_headers = _lower_headers(r1.headers)
+
+                    # Signals
+                    refl = reflection_signals(body1_full, payload)
+                    sqlerr = sql_error_signal(body1_full)
+                    loc_hdr = resp_headers.get("location")
+                    openredir_raw = bool(open_redirect_signal(loc_hdr, origin))
+                    openredir = openredir_raw and _redirect_payload_influenced(
+                        baseline_location, loc_hdr, payload, t["target_param"]
+                    )
+                    elapsed_ms_median = int(statistics.median(samples) * 1000)
+                    time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
+
+                    # Hash / consistency
+                    attempt_hash = _hash(body1_snip)
+                    hash_changed = attempt_hash != baseline_hash
+                    repeat_consistent = (len(samples) >= 2) and (statistics.pstdev(samples) * 1000.0 <= 200.0)
+
+                    # Deltas vs baseline
+                    status_delta = abs((status1 or 0) - s0)
+                    len_delta = abs(len(body1_snip) - l0)
+                    ms_delta = max(0, elapsed_ms_median - baseline_ms)
+
+                    detector_hits = _make_detector_hits(
+                        refl, sqlerr, openredir, time_sqli, boolean_sqli=False,
+                        hash_changed=hash_changed, repeat_consistent=repeat_consistent,
+                    )
+
+                    # Heuristic confidence from signals/deltas
+                    conf_heur = score(
+                        {
+                            "reflection": refl,
+                            "sql_error": sqlerr,
+                            "open_redirect": openredir,
+                            "boolean_sqli": False,
+                            "time_sqli": time_sqli,
+                            "hash_changed": hash_changed,
+                            "repeat_consistent": repeat_consistent,
+                        },
+                        status_delta, len_delta, ms_delta,
+                    )
+
+                    # Attempt-level ML (old path)
+                    try:
+                        ml_features = {
+                            "detector_hits": detector_hits,
+                            "status_delta": status_delta,
+                            "len_delta": len_delta,
+                            "latency_ms_delta": ms_delta,
+                            "payload_family_used": fam or _payload_family(payload),
+                            "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
+                            "method": method,
+                            "in": t["in"],
+                        }
+                        ml_out = _ranker_predict(ml_features)
+                    except Exception:
+                        ml_out = {"p": 0.0, "source": "fallback_error"}
+
+                    ml_conf = float(ml_out.get("p", 0.0))
+                    ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
+
+                    # Clamp model confidence if we have neither detector signals nor deltas
+                    has_signal = any([
+                        detector_hits.get("sql_error"),
+                        detector_hits.get("boolean_sqli"),
+                        detector_hits.get("time_sqli"),
+                        detector_hits.get("xss_js"),
+                        (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
+                        detector_hits.get("open_redirect"),
+                    ])
+                    has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
+                    if not has_signal and not has_delta:
+                        ml_conf = 0.0
+
+                    # Strong oracles dominate (floors)
+                    if openredir:
+                        ml_conf = max(ml_conf, 0.95)
+                    if sqlerr:
+                        ml_conf = max(ml_conf, 0.85)
+                    if time_sqli:
+                        ml_conf = max(ml_conf, 0.95)
+
+                    # Stage A/B composite confidence
+                    conf_stage_ab = max(0.0, min(1.0, 0.6 * family_prob + 0.4 * float(p_ml)))
+
+                    # Final confidence
+                    conf = max(conf_heur, ml_conf, conf_stage_ab)
+                    inferred = _infer_class(detector_hits, status_delta, len_delta)
+
+                    # Attempt (with provenance)
                     _append_evidence_line(
                         fout,
                         {
-                            "type": "attempt_error",
+                            "type": "attempt",
                             "job": job_dir.name,
                             "target_id": t["id"],
                             "method": method,
                             "in": t["in"],
                             "param": t["target_param"],
+                            "url": u1,
+                            "headers": h1,
+                            "body": b1,
                             "payload_string": payload,
                             "payload_family_used": fam or _payload_family(payload),
                             "payload_origin": "ml",
-                            "ranker_meta": {
-                                "family_probs": family_probs,
-                                "family_chosen": fam,
-                                "ranker_score": p_ml,
-                                "model_ids": {"family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
-                                              "ranker": f"ranker_{fam}.joblib" if fam else None},
+                            "ranker_meta": ranker_meta,
+                            "detector_hits": detector_hits,
+                            "inferred_vuln_class": inferred,
+                            "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE, "stage_ab_p": conf_stage_ab},
+                            "signals": {
+                                "reflection": refl,
+                                "sql_error": sqlerr,
+                                "open_redirect": {"location": loc_hdr, "external": openredir},
                             },
-                            "url": u1,
-                            "headers": h1,
-                            "body": b1,
-                            "error": err1,
-                            "timing_samples_ms": [int(s * 1000) for s in samples],
-                        },
-                    )
-                    continue
-
-                # Bodies & headers
-                body1_full, body1_snip, status1 = _response_core(r1)  # type: ignore[arg-type]
-                resp_headers = _lower_headers(r1.headers)
-
-                # Signals
-                refl = reflection_signals(body1_full, payload)
-                sqlerr = sql_error_signal(body1_full)
-                loc_hdr = resp_headers.get("location")
-                openredir = bool(open_redirect_signal(loc_hdr, origin))
-                elapsed_ms_median = int(statistics.median(samples) * 1000)
-                time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
-
-                # Hash / consistency
-                attempt_hash = _hash(body1_snip)
-                hash_changed = attempt_hash != baseline_hash
-                repeat_consistent = (len(samples) >= 2) and (statistics.pstdev(samples) * 1000.0 <= 200.0)
-
-                # Deltas vs baseline
-                status_delta = abs((status1 or 0) - s0)
-                len_delta = abs(len(body1_snip) - l0)
-                ms_delta = max(0, elapsed_ms_median - baseline_ms)
-
-                detector_hits = _make_detector_hits(
-                    refl, sqlerr, openredir, time_sqli, boolean_sqli=False,
-                    hash_changed=hash_changed, repeat_consistent=repeat_consistent,
-                )
-
-                # Heuristic confidence
-                conf_heur = score(
-                    {
-                        "reflection": refl,
-                        "sql_error": sqlerr,
-                        "open_redirect": openredir,
-                        "boolean_sqli": False,
-                        "time_sqli": time_sqli,
-                        "hash_changed": hash_changed,
-                        "repeat_consistent": repeat_consistent,
-                    },
-                    status_delta, len_delta, ms_delta,
-                )
-
-                # Attempt-level ML (old path)
-                try:
-                    ml_features = {
-                        "detector_hits": detector_hits,
-                        "status_delta": status_delta,
-                        "len_delta": len_delta,
-                        "latency_ms_delta": ms_delta,
-                        "payload_family_used": fam or _payload_family(payload),
-                        "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
-                        "method": method,
-                        "in": t["in"],
-                    }
-                    ml_out = _ranker_predict(ml_features)
-                except Exception:
-                    ml_out = {"p": 0.0, "source": "fallback_error"}
-
-                ml_conf = float(ml_out.get("p", 0.0))
-                ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
-
-                # Strong oracles dominate
-                if openredir:
-                    ml_conf = max(ml_conf, 0.95)
-                if sqlerr:
-                    ml_conf = max(ml_conf, 0.85)
-                if time_sqli:
-                    ml_conf = max(ml_conf, 0.95)
-
-                conf = max(conf_heur, ml_conf)
-                inferred = _infer_class(detector_hits, status_delta, len_delta)
-
-                # Attempt (with provenance)
-                _append_evidence_line(
-                    fout,
-                    {
-                        "type": "attempt",
-                        "job": job_dir.name,
-                        "target_id": t["id"],
-                        "method": method,
-                        "in": t["in"],
-                        "param": t["target_param"],
-                        "url": u1,
-                        "headers": h1,
-                        "body": b1,
-                        "payload_string": payload,
-                        "payload_family_used": fam or _payload_family(payload),
-                        "payload_origin": "ml",
-                        "ranker_meta": {
-                            "family_probs": family_probs,
-                            "family_chosen": fam,
-                            "ranker_score": p_ml,
-                            "model_ids": {
-                                "family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
-                                "ranker": f"ranker_{fam}.joblib" if fam else None,
-                            },
-                        },
-                        "detector_hits": detector_hits,
-                        "inferred_vuln_class": inferred,
-                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
-                        "signals": {
-                            "reflection": refl,
-                            "sql_error": sqlerr,
-                            "open_redirect": {"location": loc_hdr, "external": openredir},
-                        },
-                        "status": status1,
-                        "length": len(body1_full),
-                        "elapsed_ms": elapsed_ms_median,
-                        "timing_samples_ms": [int(s * 1000) for s in samples],
-                        "status_delta": status_delta,
-                        "len_delta": len_delta,
-                        "latency_ms_delta": ms_delta,
-                        "confidence": conf,
-                        "response_hash": attempt_hash,
-                        "response_snippet": body1_snip,
-                    },
-                )
-
-                # Findings (threshold adjusted for JSON)
-                resp_ct = (resp_headers.get("content-type") or "").lower()
-                threshold = 0.5 if "application/json" in resp_ct else 0.6
-                should_record = (
-                    conf >= threshold
-                    or detector_hits.get("sql_error")
-                    or detector_hits.get("xss_js")
-                    or detector_hits.get("xss_raw")
-                    or detector_hits.get("open_redirect")
-                    or detector_hits.get("time_sqli")
-                )
-                if should_record:
-                    ev_top = {
-                        "job": job_dir.name,
-                        "target_id": t["id"],
-                        "method": method,
-                        "in": t["in"],
-                        "param": t["target_param"],
-                        "url": t["url"],
-                        "content_type": t.get("content_type"),
-                        "payload_string": payload,
-                        "payload_family_used": fam or _payload_family(payload),
-                        "payload_origin": "ml",
-                        "ranker_meta": {
-                            "family_probs": family_probs,
-                            "family_chosen": fam,
-                            "ranker_score": p_ml,
-                            "model_ids": {
-                                "family": getattr(_FAM, "__class__", type("",(),{})).__name__ if _FAM else None,
-                                "ranker": f"ranker_{fam}.joblib" if fam else None,
-                            },
-                        },
-                        "detector_hits": detector_hits,
-                        "inferred_vuln_class": inferred,
-                        "control_value": t["control_value"],
-                        "status": status1,
-                        "status_delta": status_delta,
-                        "len_delta": len_delta,
-                        "latency_ms_delta": ms_delta,
-                        "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE},
-                        "confidence": conf,
-                        "response_hash": attempt_hash,
-                        "response_snippet": body1_snip,
-                    }
-
-                    ev_norm = {
-                        "request": {
-                            "method": method,
-                            "url": u1,
-                            "param": t["target_param"],
-                            "headers": h1,
-                            "body": b1,
-                        },
-                        "response": {
                             "status": status1,
                             "length": len(body1_full),
                             "elapsed_ms": elapsed_ms_median,
-                            "headers": {
-                                "content-type": resp_headers.get("content-type"),
-                                "location": resp_headers.get("location"),
-                                "set-cookie": resp_headers.get("set-cookie"),
-                            },
+                            "timing_samples_ms": [int(s * 1000) for s in samples],
+                            "status_delta": status_delta,
+                            "len_delta": len_delta,
+                            "latency_ms_delta": ms_delta,
+                            "confidence": conf,
+                            "response_hash": attempt_hash,
+                            "response_snippet": body1_snip,
                         },
-                    }
+                    )
 
-                    ev = {**ev_top, **ev_norm, "type": "finding"}
-                    _append_evidence_line(fout, ev)
+                    # Findings (threshold adjusted for JSON)
+                    resp_ct = (resp_headers.get("content-type") or "").lower()
+                    threshold_find = 0.5 if "application/json" in resp_ct else 0.6
+                    should_record = (
+                        conf >= threshold_find
+                        or detector_hits.get("sql_error")
+                        or detector_hits.get("xss_js")
+                        or detector_hits.get("xss_raw")
+                        or detector_hits.get("open_redirect")
+                        or detector_hits.get("time_sqli")
+                    )
+                    if should_record:
+                        ev_top = {
+                            "job": job_dir.name,
+                            "target_id": t["id"],
+                            "method": method,
+                            "in": t["in"],
+                            "param": t["target_param"],
+                            "url": t["url"],
+                            "content_type": t.get("content_type"),
+                            "payload_string": payload,
+                            "payload_family_used": fam or _payload_family(payload),
+                            "payload_origin": "ml",
+                            "ranker_meta": ranker_meta,
+                            "detector_hits": detector_hits,
+                            "inferred_vuln_class": inferred,
+                            "control_value": t["control_value"],
+                            "status": status1,
+                            "status_delta": status_delta,
+                            "len_delta": len_delta,
+                            "latency_ms_delta": ms_delta,
+                            "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE, "stage_ab_p": conf_stage_ab},
+                            "confidence": conf,
+                            "response_hash": _hash(body1_snip),
+                            "response_snippet": body1_snip,
+                        }
 
-                seen_payloads.add(payload)
+                        ev_norm = {
+                            "request": {
+                                "method": method,
+                                "url": u1,
+                                "param": t["target_param"],
+                                "headers": h1,
+                                "body": b1,
+                            },
+                            "response": {
+                                "status": status1,
+                                "length": len(body1_full),
+                                "elapsed_ms": elapsed_ms_median,
+                                "headers": {
+                                    "content-type": resp_headers.get("content-type"),
+                                    "location": resp_headers.get("location"),
+                                    "set-cookie": resp_headers.get("set-cookie"),
+                                },
+                            },
+                        }
+
+                        ev = {**ev_top, **ev_norm, "type": "finding"}
+                        _append_evidence_line(fout, ev)
+
+                    seen_payloads.add(payload)
 
             # -------------------- GENERIC PAYLOAD LOOP (curated) --------------------
             payloads = _generate_context_aware_payloads(t)
@@ -974,7 +1096,10 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 refl = reflection_signals(body1_full, payload)
                 sqlerr = sql_error_signal(body1_full)
                 loc_hdr = resp_headers.get("location")
-                openredir = bool(open_redirect_signal(loc_hdr, origin))
+                openredir_raw = bool(open_redirect_signal(loc_hdr, origin))
+                openredir = openredir_raw and _redirect_payload_influenced(
+                    baseline_location, loc_hdr, payload, t["target_param"]
+                )
                 elapsed_ms_median = int(statistics.median(samples) * 1000)
                 time_sqli = _looks_time_based(payload) and time_delay_signal(baseline_ms, elapsed_ms_median)
 
@@ -1024,6 +1149,20 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 ml_conf = float(ml_out.get("p", 0.0))
                 ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
 
+                # Clamp model confidence if no signals and no deltas
+                has_signal = any([
+                    detector_hits.get("sql_error"),
+                    detector_hits.get("boolean_sqli"),
+                    detector_hits.get("time_sqli"),
+                    detector_hits.get("xss_js"),
+                    (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
+                    detector_hits.get("open_redirect"),
+                ])
+                has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
+                if not has_signal and not has_delta:
+                    ml_conf = 0.0
+
+                # Strong oracles dominate (floors)
                 if openredir:
                     ml_conf = max(ml_conf, 0.95)
                 if sqlerr:

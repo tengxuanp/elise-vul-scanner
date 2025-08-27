@@ -1,46 +1,46 @@
 {
   "family": "xss",
-  "samples_train": 30,
+  "samples_train": 36,
   "queries_train": 10,
-  "samples_val": 6,
-  "queries_val": 2,
+  "samples_val": 12,
+  "queries_val": 3,
   "metrics": {
     "NDCG@3": 1.0,
     "Hit@1": 1.0,
     "Hit@3": 1.0,
     "Hit@5": 1.0,
-    "queries": 2
+    "queries": 3
   },
   "reliability_bins": [
     {
       "bin": 0,
-      "p_mean": 0.05,
+      "p_mean": 0.07408954034801953,
       "emp_rate": 0.0,
-      "count": 0
+      "count": 3
     },
     {
       "bin": 1,
-      "p_mean": 0.15000000000000002,
-      "emp_rate": 0.0,
-      "count": 0
+      "p_mean": 0.1668958323464051,
+      "emp_rate": 1.0,
+      "count": 1
     },
     {
       "bin": 2,
-      "p_mean": 0.25,
-      "emp_rate": 0.0,
-      "count": 0
+      "p_mean": 0.23036522573682794,
+      "emp_rate": 1.0,
+      "count": 3
     },
     {
       "bin": 3,
-      "p_mean": 0.3333333333333333,
+      "p_mean": 0.340815860217974,
       "emp_rate": 1.0,
-      "count": 6
+      "count": 3
     },
     {
       "bin": 4,
-      "p_mean": 0.45,
-      "emp_rate": 0.0,
-      "count": 0
+      "p_mean": 0.44864614437256545,
+      "emp_rate": 1.0,
+      "count": 2
     },
     {
       "bin": 5,
@@ -73,5 +73,7 @@
       "count": 0
     }
   ],
-  "feature_dim_note": "Each row = 17-d endpoint vector + 5-d payload descriptor = 22 dims."
+  "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+  "objective": "rank:pairwise",
+  "min_group_train": 3
 }

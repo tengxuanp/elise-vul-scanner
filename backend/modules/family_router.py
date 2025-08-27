@@ -23,6 +23,15 @@ Rule APIs (deterministic fallback kept for clarity/audits):
 ML API (preferred for Stage-A when a model exists):
   FamilyClassifier().predict_proba(t) -> {"sqli":0.6,"xss":0.3,"redirect":0.1,"base":0.01}
 
+Decision helper for Stage-A→Stage-B:
+  decide_family(t, min_prob=0.55, explore_topk=2) -> {
+      "family_top": "redirect",
+      "family_probs": {...},
+      "threshold_passed": True/False,
+      "families_to_try": ["redirect"] or ["redirect","xss"] when exploring,
+      "decision_reason": "ml_argmax|rule_argmax|below_threshold_explore"
+  }
+
 Also exposes canonical curated payload pools used in training & fallback:
   payload_pool_for("sqli"|"xss"|"redirect") -> List[str]
 """
@@ -414,7 +423,7 @@ class FamilyClassifier:
         param = (t.get("target_param") or "").lower()
         url = t.get("url") or ""
 
-        def bucket(s: str, m: int = 32) -> int:
+        def bucket(s: str, m: int = 64) -> int:
             import hashlib
             return int(hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()[:8], 16) % m
 
@@ -443,6 +452,74 @@ class FamilyClassifier:
         return [x / s for x in exps]
 
 
+# ========================== Stage-A Decision Helper ===========================
+
+# Sensible defaults for production; override per target/job if needed.
+DEFAULT_MIN_PROB = 0.55         # arg-max family must exceed this to be authoritative
+DEFAULT_EXPLORE_TOPK = 2        # when below threshold, explore top-k families (budgeted)
+DEFAULT_INCLUDE_BASE = False    # typically we don't explore 'base'
+
+_classifier_singleton: FamilyClassifier | None = None
+
+def _clf() -> FamilyClassifier:
+    global _classifier_singleton
+    if _classifier_singleton is None:
+        _classifier_singleton = FamilyClassifier()
+    return _classifier_singleton
+
+def decide_family(
+    t: Dict[str, Any],
+    min_prob: float = DEFAULT_MIN_PROB,
+    explore_topk: int = DEFAULT_EXPLORE_TOPK,
+    include_base: bool = DEFAULT_INCLUDE_BASE,
+) -> Dict[str, Any]:
+    """
+    Authoritative Stage-A decision with thresholding and *explicit* exploration plan.
+    This eliminates the mismatch where Stage-B was ranking the wrong family.
+
+    Returns:
+      {
+        "family_top": "sqli" | "xss" | "redirect" | "base",
+        "family_probs": {"sqli":..., "xss":..., "redirect":..., "base":...},
+        "threshold_passed": True|False,
+        "families_to_try": ["sqli"] or ["sqli","xss"] when exploring,
+        "decision_reason": "ml_argmax" | "rule_argmax" | "below_threshold_explore"
+      }
+    """
+    # 1) Get probabilities (ML if available, else rules)
+    clf = _clf()
+    probs = clf.predict_proba(t)
+
+    # Defensive normalization
+    fams = ["sqli", "xss", "redirect", "base"]
+    probs = {f: float(max(0.0, probs.get(f, 0.0))) for f in fams}
+    s = sum(probs.values()) or 1.0
+    probs = {k: v / s for k, v in probs.items()}
+
+    # 2) Arg-max + threshold
+    ranked = sorted(((f, p) for f, p in probs.items()), key=lambda kv: kv[1], reverse=True)
+    top_family, top_prob = ranked[0]
+    threshold_passed = bool(top_prob >= float(min_prob))
+
+    # 3) Exploration plan if below threshold
+    if threshold_passed:
+        families_to_try = [top_family]
+        decision_reason = "ml_argmax" if clf.model is not None else "rule_argmax"
+    else:
+        families = [f for f, _ in ranked if include_base or f != "base"]
+        families_to_try = families[: max(1, int(explore_topk))]
+        decision_reason = "below_threshold_explore"
+
+    return {
+        "family_top": top_family,
+        "family_probs": probs,
+        "threshold_passed": threshold_passed,
+        "families_to_try": families_to_try,
+        "decision_reason": decision_reason,
+        "min_prob": float(min_prob),
+    }
+
+
 __all__ = [
     "payload_pool_for",
     "CANONICAL_PAYLOADS",
@@ -450,4 +527,8 @@ __all__ = [
     "choose_family",
     "rank_families",
     "FamilyClassifier",
+    "decide_family",
+    "DEFAULT_MIN_PROB",
+    "DEFAULT_EXPLORE_TOPK",
+    "DEFAULT_INCLUDE_BASE",
 ]

@@ -238,6 +238,106 @@ def _build_global_headers(payload: Optional[FuzzByJobPayload]) -> Dict[str, str]
     return gh
 
 
+def _hostname_of(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        return urlparse(url).netloc or None
+    except Exception:
+        return None
+
+
+def _post_normalize_row_for_ui(one: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Make sure the row contains:
+      - signals.verify (dup of top-level verify if needed)
+      - signals.open_redirect.{open_redirect,location,location_host}
+      - origin: 'ml' | 'curated'
+      - ranker_meta (and mirror ranker_score top-level for legacy)
+      - method upper-cased; family present when we can infer it
+    """
+    out = dict(one or {})
+    signals = dict(out.get("signals") or {})
+    # Copy verify up into signals.verify if present elsewhere
+    verify = out.get("verify") or signals.get("verify") or (out.get("response_meta") or {}).get("verify")
+    if isinstance(verify, dict):
+        signals["verify"] = verify
+
+    # Open-redirect consolidation
+    loc = None
+    if isinstance(verify, dict):
+        loc = verify.get("location")
+    open_redirect = signals.get("external_redirect") or signals.get("open_redirect", {}).get("open_redirect")
+    open_redirect_obj = dict(signals.get("open_redirect") or {})
+    if loc is not None:
+        open_redirect_obj["location"] = loc
+    if "open_redirect" not in open_redirect_obj and isinstance(open_redirect, bool):
+        open_redirect_obj["open_redirect"] = open_redirect
+    if "location_host" not in open_redirect_obj and loc:
+        open_redirect_obj["location_host"] = _hostname_of(loc)
+    if open_redirect_obj:
+        signals["open_redirect"] = open_redirect_obj
+
+    # Ensure booleans exist (even if falsey) for UI safety
+    for k in ("sql_error", "boolean_sqli", "time_sqli", "xss_reflected", "external_redirect"):
+        if k not in signals:
+            signals[k] = bool(signals.get(k))
+
+    out["signals"] = signals
+
+    # Origin determination
+    origin_existing = (out.get("origin") or (out.get("meta") or {}).get("origin") or "").strip().lower()
+    is_ml_flags = any([
+        bool(out.get("is_ml")),
+        isinstance(out.get("ml"), (dict, bool)) and out.get("ml") not in (False, None),
+        isinstance(out.get("ranker_meta"), dict) and (
+            "ranker_score" in out["ranker_meta"]
+            or "family_probs" in out["ranker_meta"]
+            or "model_ids" in out["ranker_meta"]
+        ),
+        isinstance(out.get("ml_meta"), dict),
+        isinstance(out.get("ranker"), dict),
+        isinstance((out.get("payload_id") or ""), str) and out.get("payload_id", "").lower().startswith("ml-"),
+        origin_existing == "ml",
+    ])
+    out["origin"] = "ml" if is_ml_flags else "curated"
+
+    # Ranker meta mirroring (so UI always finds something)
+    rm = out.get("ranker_meta") or out.get("ranker") or out.get("ml_meta") or {}
+    if not isinstance(rm, dict):
+        rm = {}
+    # If no family chosen, but we have "family", mirror it
+    if "family_chosen" not in rm and out.get("family"):
+        rm["family_chosen"] = out.get("family")
+    out["ranker_meta"] = rm
+    if "ranker_score" in rm and "ranker_score" not in out:
+        try:
+            out["ranker_score"] = float(rm["ranker_score"])
+        except Exception:
+            pass
+
+    # Method normalization
+    if out.get("method"):
+        out["method"] = str(out["method"]).upper()
+
+    # Family fallback if missing (very light heuristic)
+    if not out.get("family"):
+        param = (out.get("param") or "").lower()
+        url_l = (out.get("url") or "").lower()
+        if param in {"to", "return_to", "redirect", "url", "next", "callback", "continue"} or "redirect" in url_l:
+            out["family"] = "redirect"
+        elif param in {"q", "query", "search", "comment", "message", "content", "text", "title", "name"}:
+            out["family"] = "xss"
+        else:
+            out["family"] = "sqli"
+
+    return out
+
+
+def _post_normalize_results_for_ui(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [_post_normalize_row_for_ui(r) for r in (rows or [])]
+
+
 # =========================
 # Legacy ffuf-based flow
 # =========================
@@ -426,6 +526,7 @@ def _fuzz_targets_ffuf(
             feats = None
 
         # payload selection (ML or fallback) — now passing 'family' into the recommender
+        used_fallback = False
         try:
             if reco is not None and feats is not None:
                 try:
@@ -450,6 +551,7 @@ def _fuzz_targets_ffuf(
             candidates = []
 
         if not candidates:
+            used_fallback = True
             for p in _fallback_payloads_for_family(family):
                 candidates.append((p, 0.0))
 
@@ -508,6 +610,18 @@ def _fuzz_targets_ffuf(
                     derived_conf = _derive_confidence_fallback(float(base_conf or 0.0), len(ffuf_out.get("matches") or []), external_redirect)
 
                 matches = ffuf_out.get("matches") or []
+
+                # --- Construct result with ML/ranker + origin + signals.verify ---
+                used_ml = not used_fallback and (reco is not None) and (feats is not None)
+                ranker_meta = {
+                    "family_chosen": family,
+                    # We only have payload-level confidence from the recommender;
+                    # surface it as "ranker_score" so the UI has something to show.
+                    "ranker_score": float(base_conf or 0.0) if used_ml else None,
+                    # No per-family probabilities available here; leave {}, UI handles gracefully.
+                    "family_probs": {},
+                } if used_ml else {}
+
                 one = {
                     "url": t.url,
                     "param": t.param,
@@ -518,7 +632,22 @@ def _fuzz_targets_ffuf(
                     "verify": verify_meta,
                     "baseline": baseline_meta,
                     "delta": delta,
-                    "signals": {"external_redirect": external_redirect},
+                    "family": family,
+                    # Origin & ranker
+                    "origin": "ml" if used_ml else "curated",
+                    "ranker_meta": ranker_meta,
+                    "ranker_score": ranker_meta.get("ranker_score"),
+                    "ml": {"enabled": True, "ranker": ranker_meta} if used_ml else False,
+                    # Signals: include external + open_redirect shape + dup verify for UI
+                    "signals": {
+                        "external_redirect": external_redirect,
+                        "verify": verify_meta or {},
+                        "open_redirect": {
+                            "open_redirect": external_redirect,
+                            "location": (verify_meta or {}).get("location"),
+                            "location_host": _hostname_of((verify_meta or {}).get("location")),
+                        },
+                    },
                     "ffuf": {
                         "match_count": len(matches),
                         "errors": ffuf_out.get("errors"),
@@ -536,7 +665,8 @@ def _fuzz_targets_ffuf(
                         ],
                     },
                 }
-                results.append(one)
+
+                results.append(_post_normalize_row_for_ui(one))
 
                 # optional: persist to your evidence sink (unified locations)
                 if t.job_id:
@@ -556,19 +686,21 @@ def _fuzz_targets_ffuf(
                             param_locs=locs,
                             param=t.param,
                             family=label,
-                            payload_id="ffuf",
+                            payload_id=("ml-ffuf" if used_ml else "ffuf"),
                             request_meta={"headers": eff_headers},
                             response_meta={"verify": verify_meta, "baseline": baseline_meta, "delta": delta},
                             signals={"external_redirect": external_redirect, "ffuf_match_count": len(matches)},
                             confidence=float(min(1.0, max(0.0, derived_conf))),
                             label=label,
+                            origin=("ml" if used_ml else "curated"),
+                            ranker_meta=ranker_meta or None,
                         )
                     except Exception:
                         logging.exception("persist_evidence failed")
 
             except Exception as e:
                 logging.exception("ffuf run failed for %s %s", t.url, t.param)
-                results.append({
+                results.append(_post_normalize_row_for_ui({
                     "url": t.url,
                     "param": t.param,
                     "method": t.method,
@@ -577,7 +709,9 @@ def _fuzz_targets_ffuf(
                     "stage": "ffuf",
                     "error": str(e),
                     "meta": t.meta,
-                })
+                    "family": family,
+                    "origin": "curated",
+                }))
             finally:
                 try:
                     payload_file.unlink(missing_ok=True)
@@ -608,7 +742,39 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
     raw_token = norm.split(" ", 1)[1] if norm else None
     targets_path = build_targets(eps, job_dir, bearer_token=raw_token)  # writes <job_dir>/targets.json
     evidence_path = run_fuzz(job_dir, targets_path, out_dir=job_dir / "results")
-    return _read_evidence(evidence_path)
+    rows = _read_evidence(evidence_path)
+
+    # Best-effort normalization so UI always sees origin/ranker_meta/signals.verify
+    normed: List[Dict[str, Any]] = []
+    for r in rows:
+        # Try to surface 'verify' if present in response_meta or nested signals
+        verify = (
+            (r.get("signals") or {}).get("verify")
+            or (r.get("response_meta") or {}).get("verify")
+            or r.get("verify")
+        )
+        if verify:
+            r.setdefault("signals", {}).setdefault("verify", verify)
+            r.setdefault("signals", {}).setdefault("open_redirect", {})
+            r["signals"]["open_redirect"].setdefault("location", verify.get("location"))
+            r["signals"]["open_redirect"].setdefault("location_host", _hostname_of(verify.get("location")))
+
+        # Mirror any nested ML/ranker into ranker_meta for consistency
+        if "ranker_meta" not in r:
+            for k in ("ranker", "ml_meta",):
+                if isinstance(r.get(k), dict):
+                    r["ranker_meta"] = dict(r[k])  # shallow copy
+
+        # If there is an explicit origin/flag, keep it; else infer later
+        if "origin" not in r:
+            if r.get("is_ml") or isinstance(r.get("ml"), (dict, bool)):
+                r["origin"] = "ml"
+            elif isinstance(r.get("payload_id"), str) and r["payload_id"].lower().startswith("ml-"):
+                r["origin"] = "ml"
+
+        normed.append(_post_normalize_row_for_ui(r))
+
+    return normed
 
 
 # =========================
