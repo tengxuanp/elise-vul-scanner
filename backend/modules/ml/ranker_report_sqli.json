@@ -1,34 +1,34 @@
 {
   "family": "sqli",
-  "samples_train": 229,
-  "queries_train": 20,
-  "samples_val": 68,
-  "queries_val": 5,
+  "samples_train": 2580,
+  "queries_train": 215,
+  "samples_val": 648,
+  "queries_val": 54,
   "metrics": {
-    "NDCG@3": 1.0,
-    "Hit@1": 1.0,
-    "Hit@3": 1.0,
-    "Hit@5": 1.0,
-    "queries": 5
+    "NDCG@3": 0.24973735595728894,
+    "Hit@1": 0.35185185185185186,
+    "Hit@3": 0.7592592592592593,
+    "Hit@5": 0.9444444444444444,
+    "queries": 54
   },
   "reliability_bins": [
     {
       "bin": 0,
-      "p_mean": 0.045580354598560344,
-      "emp_rate": 0.8275862068965517,
-      "count": 58
+      "p_mean": 0.08333333333333333,
+      "emp_rate": 0.39814814814814814,
+      "count": 648
     },
     {
       "bin": 1,
-      "p_mean": 0.1542946685274195,
-      "emp_rate": 1.0,
-      "count": 7
+      "p_mean": 0.15000000000000002,
+      "emp_rate": 0.0,
+      "count": 0
     },
     {
       "bin": 2,
-      "p_mean": 0.27627675359156406,
-      "emp_rate": 1.0,
-      "count": 1
+      "p_mean": 0.25,
+      "emp_rate": 0.0,
+      "count": 0
     },
     {
       "bin": 3,
@@ -44,9 +44,9 @@
     },
     {
       "bin": 5,
-      "p_mean": 0.5,
-      "emp_rate": 1.0,
-      "count": 2
+      "p_mean": 0.55,
+      "emp_rate": 0.0,
+      "count": 0
     },
     {
       "bin": 6,
@@ -73,7 +73,19 @@
       "count": 0
     }
   ],
-  "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+  "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
   "objective": "rank:pairwise",
-  "min_group_train": 2
+  "min_group_train": 12,
+  "params": {
+    "n_estimators": 300,
+    "max_depth": 6,
+    "learning_rate": 0.1,
+    "val_ratio": 0.2,
+    "n_jobs": 8,
+    "random_state": 42
+  },
+  "versions": {
+    "python": "3.12.1",
+    "numpy": "2.3.2"
+  }
 }
