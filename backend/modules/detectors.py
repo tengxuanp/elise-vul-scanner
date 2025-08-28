@@ -18,12 +18,15 @@ SQL_ERRORS = [
     r"Warning.*mysql_",
     r"check the manual that corresponds to your MySQL server version",
     r"MariaDB server version for the right syntax",
+    r"MySQL server version for the right syntax",
+    r"mysqli?_error",
     # PostgreSQL
-    r"PG::(?:SyntaxError|UndefinedTable|InvalidTextRepresentation)",
+    r"PG::(?:SyntaxError|UndefinedTable|InvalidTextRepresentation|UndefinedFunction)",
     r"org\.postgresql\.util\.PSQLException",
     r"syntax error at or near",
     r"unterminated quoted string at or near",
     r"null value in column .* violates not-null constraint",
+    r"invalid input syntax for (?:type|integer|uuid|numeric)",
     # SQLite
     r"SQLite3::SQLException",
     r"sqlite3\.OperationalError",
@@ -35,10 +38,13 @@ SQL_ERRORS = [
     r"ORA-\d{5}",
     r"quoted string not properly terminated",
     r"missing right parenthesis",
+    r"ORA-00933: SQL command not properly ended",
     # Microsoft SQL Server / Sybase
     r"Unclosed quotation mark after the character string",
     r"\[Microsoft\]\[ODBC SQL Server Driver\]",
+    r"ODBC Driver 1[1-9] for SQL Server",
     r"SQL Server Native Client",
+    r"SQLSTATE\[\w+\]:.*\[Microsoft\].*SQL Server",
     r"Adaptive Server Enterprise",
     # DB2 / Informix / Other
     r"CLI Driver.*DB2",

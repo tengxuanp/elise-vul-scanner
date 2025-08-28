@@ -34,56 +34,29 @@ except Exception:
         return {"p": 0.0, "source": "fallback"}
 
 # ----------------------------- Stage A/B integration -------------------------
-# Best-effort imports. If not present, we fall back gracefully.
+# Prefer canonical payload pools from family_router if present; otherwise use payloads.py
 try:
-    from .feature_extractor import FeatureExtractor  # payload-agnostic endpoint features
-except Exception:
-    FeatureExtractor = None  # type: ignore
-
-try:
-    # Stage-A (family) + canonical pools
     from .family_router import (
         FamilyClassifier,
-        payload_pool_for,
-        decide_family,
-        DEFAULT_MIN_PROB,
-        DEFAULT_EXPLORE_TOPK,
+        payload_pool_for as _payload_pool_for_router,
+        decide_family as _router_decide_family,
+        DEFAULT_MIN_PROB as _ROUTER_MIN_PROB,
+        DEFAULT_EXPLORE_TOPK as _ROUTER_EXPLORE_TOPK,
     )
 except Exception:
     FamilyClassifier = None  # type: ignore
+    _payload_pool_for_router = None  # type: ignore
+    _router_decide_family = None  # type: ignore
+    _ROUTER_MIN_PROB = None
+    _ROUTER_EXPLORE_TOPK = None
 
-    def payload_pool_for(family: str) -> List[str]:  # minimal canonical pool fallback
-        fam = (family or "").lower()
-        if fam == "sqli":
-            return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
-        if fam == "xss":
-            return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
-        if fam == "redirect":
-            return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
-        return []
+# Always try our curated pools as a fallback
+try:
+    from .payloads import payload_pool_for as _payload_pool_for_payloads
+except Exception:
+    _payload_pool_for_payloads = None  # type: ignore
 
-    # Fallback Stage-A decider when family_router is not available
-    def decide_family(t: Dict[str, Any], min_prob: float = 0.55, explore_topk: int = 2, include_base: bool = False) -> Dict[str, Any]:  # type: ignore
-        fams = ["sqli", "xss", "redirect", "base"]
-        probs = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
-        s = sum(probs.values()) or 1.0
-        probs = {k: v / s for k, v in probs.items()}
-        ranked = sorted([(f, p) for f, p in probs.items()], key=lambda kv: kv[1], reverse=True)
-        top_family, top_prob = ranked[0]
-        threshold_passed = top_prob >= min_prob
-        fams_try = [top_family] if threshold_passed else [f for f, _ in ranked if (include_base or f != "base")][:max(1, explore_topk)]
-        return {
-            "family_top": top_family,
-            "family_probs": probs,
-            "threshold_passed": threshold_passed,
-            "families_to_try": fams_try,
-            "decision_reason": "rule_argmax" if threshold_passed else "below_threshold_explore",
-            "min_prob": float(min_prob),
-        }
-
-    DEFAULT_MIN_PROB = 0.55  # type: ignore
-    DEFAULT_EXPLORE_TOPK = 2  # type: ignore
-
+# Recommender (Stage-B ranker and family-clf fallback)
 try:
     from .recommender import Recommender
 except Exception:
@@ -91,12 +64,23 @@ except Exception:
 
 # Singletons & caches
 _FEATURE_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-_FE = FeatureExtractor(headless=True) if FeatureExtractor else None
+try:
+    from .feature_extractor import FeatureExtractor  # payload-agnostic endpoint features
+    _FE = FeatureExtractor(headless=True)  # type: ignore
+except Exception:
+    _FE = None
+
 _FAM = FamilyClassifier() if FamilyClassifier else None
 _RECO = Recommender() if Recommender else None
 
+# Defaults if router constants are missing
+DEFAULT_MIN_PROB = float(_ROUTER_MIN_PROB) if _ROUTER_MIN_PROB is not None else 0.55
+DEFAULT_EXPLORE_TOPK = int(_ROUTER_EXPLORE_TOPK) if _ROUTER_EXPLORE_TOPK is not None else 2
+
+
 def _endpoint_key(t: Dict[str, Any]) -> Tuple[str, str, str]:
     return ((t.get("method") or "GET").upper(), t.get("url") or "", t.get("target_param") or "")
+
 
 def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
     """Very cheap feature proxy when real extractor isn't available."""
@@ -105,11 +89,13 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
     ct = (t.get("content_type") or "").split(";")[0].lower()
     url = t.get("url") or ""
     param = (t.get("target_param") or "").lower()
+
     def depth(u: str) -> int:
         try:
             return sum(1 for seg in (urlparse(u).path or "").split("/") if seg)
         except Exception:
             return 0
+
     return {
         "method": method,
         "in": loc,
@@ -120,6 +106,7 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
         "param_len": len(param),
     }
 
+
 def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     """Cache payload-agnostic endpoint features."""
     k = _endpoint_key(t)
@@ -128,7 +115,7 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     feats: Dict[str, Any]
     if _FE is not None:
         try:
-            feats = _FE.extract_features(
+            feats = _FE.extract_features(  # type: ignore[attr-defined]
                 t.get("url"),
                 t.get("target_param"),
                 payload="",  # payload-agnostic
@@ -142,26 +129,114 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     _FEATURE_CACHE[k] = feats
     return feats
 
+
+# ---- canonical payload pool access ------------------------------------------
+
+def payload_pool_for(family: str) -> List[str]:
+    """
+    Best-effort canonical pool resolution:
+    1) family_router.payload_pool_for (if available)
+    2) payloads.payload_pool_for (our curated pools)
+    3) minimal hardcoded fallback
+    """
+    fam = (family or "").lower()
+    if _payload_pool_for_router:
+        try:
+            return list(_payload_pool_for_router(fam))  # type: ignore[misc]
+        except Exception:
+            pass
+    if _payload_pool_for_payloads:
+        try:
+            return list(_payload_pool_for_payloads(fam))
+        except Exception:
+            pass
+    # minimal fallback
+    if fam == "sqli":
+        return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
+    if fam == "xss":
+        return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
+    if fam in ("redirect", "open_redirect"):
+        return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
+    if fam == "base":
+        return ["*", "%27", "%22", "()", "{}"]
+    return []
+
+
 # ---- Stage-A wrapper ---------------------------------------------------------
 
 def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
     """
     Ask the Stage-A decider for family distribution + authoritative decision.
+
+    Preference order:
+    1) family_router.decide_family (if available)
+    2) Recommender family classifier (via recommend_with_meta with family=None)
+    3) Uniform prior fallback
     """
-    inp = {
-        "url": t.get("url"),
-        "method": t.get("method"),
-        "in": t.get("in"),
-        "target_param": t.get("target_param"),
-        "content_type": t.get("content_type"),
-        "headers": t.get("headers"),
-        "control_value": t.get("control_value"),
+    # Router path
+    if _router_decide_family is not None:
+        inp = {
+            "url": t.get("url"),
+            "method": t.get("method"),
+            "in": t.get("in"),
+            "target_param": t.get("target_param"),
+            "content_type": t.get("content_type"),
+            "headers": t.get("headers"),
+            "control_value": t.get("control_value"),
+        }
+        try:
+            return _router_decide_family(inp, min_prob=DEFAULT_MIN_PROB, explore_topk=DEFAULT_EXPLORE_TOPK)  # type: ignore[misc]
+        except Exception:
+            # fall through to recommender-based path
+            pass
+
+    # Recommender family-clf path
+    if _RECO is not None and hasattr(_RECO, "recommend_with_meta"):
+        try:
+            feats = _endpoint_features(t)
+            # We don't actually need real ranking here; we just want the meta.family_probs
+            # Use a tiny dummy pool and let recommender pick a family.
+            recs, meta = _RECO.recommend_with_meta(feats, pool=["*"], top_n=1, threshold=0.0, family=None)  # type: ignore[arg-type]
+            fam = meta.get("family") or None
+            fam_probs = dict(meta.get("family_probs") or {})
+            fam_decision = str(meta.get("family_decision") or "prior")
+            # Decide exploration set
+            ranked = sorted(fam_probs.items(), key=lambda kv: kv[1], reverse=True) or [("sqli", 0.34), ("xss", 0.33)]
+            family_top, top_prob = ranked[0][0], float(ranked[0][1])
+            threshold_passed = top_prob >= DEFAULT_MIN_PROB
+            if threshold_passed:
+                families_to_try = [family_top]
+            else:
+                families_to_try = [x for x, _ in ranked[:max(1, DEFAULT_EXPLORE_TOPK)]]
+            return {
+                "family_top": family_top,
+                "family_probs": fam_probs,
+                "threshold_passed": threshold_passed,
+                "families_to_try": families_to_try,
+                "decision_reason": fam_decision,
+                "min_prob": float(DEFAULT_MIN_PROB),
+            }
+        except Exception:
+            pass
+
+    # Ultra-safe uniform fallback
+    fams = ["sqli", "xss", "redirect", "base"]
+    probs = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
+    s = sum(probs.values()) or 1.0
+    probs = {k: v / s for k, v in probs.items()}
+    ranked = sorted([(f, p) for f, p in probs.items()], key=lambda kv: kv[1], reverse=True)
+    top_family, top_prob = ranked[0]
+    threshold_passed = top_prob >= DEFAULT_MIN_PROB
+    fams_try = [top_family] if threshold_passed else [f for f, _ in ranked if f != "base"][:max(1, DEFAULT_EXPLORE_TOPK)]
+    return {
+        "family_top": top_family,
+        "family_probs": probs,
+        "threshold_passed": threshold_passed,
+        "families_to_try": fams_try,
+        "decision_reason": "rule_argmax" if threshold_passed else "below_threshold_explore",
+        "min_prob": float(DEFAULT_MIN_PROB),
     }
-    try:
-        return decide_family(inp, min_prob=DEFAULT_MIN_PROB, explore_topk=DEFAULT_EXPLORE_TOPK)
-    except Exception:
-        # ultra-safe fallback
-        return decide_family(inp)
+
 
 # ---- Stage-B wrapper ---------------------------------------------------------
 
@@ -183,10 +258,10 @@ def _rank_payloads_for_family(
     if _RECO is not None:
         try:
             if hasattr(_RECO, "recommend_with_meta"):
-                recs, meta = _RECO.recommend_with_meta(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                recs, meta = _RECO.recommend_with_meta(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
                 return ([(p, float(prob)) for (p, prob) in recs], meta or {})
             else:
-                recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
                 return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam})
         except Exception:
             pass
@@ -195,10 +270,12 @@ def _rank_payloads_for_family(
     out = [(p, 0.2) for p in pool[:top_n]]
     return (out, {"used_path": "heuristic", "family": fam})
 
+
 # ---------------------------- small utils ------------------------------------
 
 def _hash(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()
+
 
 def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
     try:
@@ -209,11 +286,13 @@ def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
             out[k.lower()] = h.get(k)
         return out
 
+
 def _origin_host(url: str) -> str:
     try:
         return urlparse(url).netloc.lower()
     except Exception:
         return ""
+
 
 def _origin_referer(url: str) -> str:
     try:
@@ -221,6 +300,7 @@ def _origin_referer(url: str) -> str:
         return f"{u.scheme}://{u.netloc}/" if u.scheme and u.netloc else ""
     except Exception:
         return ""
+
 
 def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
     """
@@ -252,17 +332,20 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
 
     return out
 
+
 # ---------- Redirect influence gating helpers (reduce false positives) --------
 
 _REDIRECT_PARAM_NAMES = {
     "to", "url", "next", "redirect", "return", "continue", "return_to", "redirect_uri", "callback"
 }
 
+
 def _host_from_url(u: Optional[str]) -> str:
     try:
         return urlparse(u or "").netloc.lower()
     except Exception:
         return ""
+
 
 def _url_from_payload(p: str) -> Optional[str]:
     """
@@ -277,6 +360,7 @@ def _url_from_payload(p: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
 
 def _redirect_payload_influenced(
     baseline_loc: Optional[str],
@@ -309,6 +393,7 @@ def _redirect_payload_influenced(
             return True
 
     return mutated_redirect_param
+
 
 # -------------------------- request mutation ---------------------------------
 
@@ -354,6 +439,7 @@ def _apply_payload_to_target(
     headers = _augment_headers(headers, url)
     return url, headers, body
 
+
 # ------------------------------ transport ------------------------------------
 
 def _send_once(
@@ -378,6 +464,7 @@ def _send_once(
     except Exception as e:
         return None, {"type": type(e).__name__, "message": str(e)}, 0.0
 
+
 def _send(
     client: httpx.Client,
     method: str,
@@ -401,11 +488,13 @@ def _send(
         samples.append(elapsed)
     return last_resp, last_err, samples
 
+
 # ------------------------------- payloads ------------------------------------
 
 def _looks_time_based(payload: str) -> bool:
     p = (payload or "").lower()
     return any(k in p for k in ("waitfor", "sleep(", "pg_sleep", "benchmark(", "dbms_lock.sleep"))
+
 
 def _payload_family(p: str) -> str:
     """Lightweight classifier so the UI can show both payload class and signal family."""
@@ -417,6 +506,7 @@ def _payload_family(p: str) -> str:
     if s.startswith(("http://", "https://", "//")) or "%2f%2f" in s:
         return "redirect"
     return "base"
+
 
 def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
     """
@@ -447,6 +537,7 @@ def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
             out.append((a, b))
             seen.add(key)
     return out
+
 
 def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
     """
@@ -512,6 +603,7 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
             seen.add(p)
     return out
 
+
 # -------------------------- inference (local) --------------------------------
 
 def _make_detector_hits(
@@ -536,6 +628,7 @@ def _make_detector_hits(
         "repeat_consistent": bool(repeat_consistent),
     }
 
+
 def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> str:
     """
     Deterministic, conservative inference.
@@ -552,8 +645,10 @@ def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> st
         return "suspicious"
     return "none"
 
+
 def _append_evidence_line(fout, obj: Dict[str, Any]) -> None:
     fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
 
 # ------------------------------ attempts utils --------------------------------
 
@@ -568,11 +663,13 @@ def _attempt_request(
 ) -> Tuple[Optional[httpx.Response], Optional[Dict[str, str]], List[float]]:
     return _send(client, method, url, headers, body, timeout, repeats=repeats)
 
+
 def _response_core(resp: httpx.Response) -> Tuple[str, str, int]:
     """Return (full_text, snippet, status)."""
     body_full = resp.text or ""
     snippet = body_full[:TRUNCATE_BODY]
     return body_full, snippet, resp.status_code
+
 
 # --------------------------------- main --------------------------------------
 

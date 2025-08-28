@@ -2,7 +2,13 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import CrawlForm from "../components/CrawlForm";
-import { fuzzByJob, fuzzSelected, getReport, getReportMarkdown } from "../api/api";
+import {
+  fuzzByJob,
+  fuzzSelected,
+  getReport,
+  getReportMarkdown,
+  getCategorizedEndpoints, // ⬅️ NEW: fallback fetch if crawl payload lacks endpoints
+} from "../api/api";
 import { toast } from "react-toastify";
 
 /** === helpers === */
@@ -498,6 +504,9 @@ export default function CrawlAndFuzzPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
 
+  // internal guard so we only try categorized-endpoints once per crawl
+  const [triedCategorized, setTriedCategorized] = useState(false);
+
   // reset pagination when filters/sorts change
   useEffect(() => { setPage(1); }, [
     familiesSelected, originFilter, minConf, onlySqlError, onlyXssRef, onlyExtRedir,
@@ -552,15 +561,75 @@ export default function CrawlAndFuzzPage() {
     [endpoints, captured, selectedKeys, filtered]
   );
 
-  /** Crawl results in */
-  const onResults = ({ job_id, target_url, target, endpoints, captured_requests }) => {
+  /** Helper: pluck the first present array by key path */
+  const pickArray = (obj, keys) => {
+    for (const k of keys) {
+      const v = k.split(".").reduce((acc, part) => (acc && acc[part] !== undefined ? acc[part] : undefined), obj);
+      if (Array.isArray(v)) return v;
+    }
+    return [];
+  };
+
+  /** Crawl results in (robust to multiple shapes from backend) */
+  const onResults = (payload = {}) => {
+    // Accept several possible shapes from various backends
+    const job_id = payload.job_id || payload.job || null;
+    const target_url = payload.target_url || payload.target || payload.url || "";
+
+    // endpoints can live in many places depending on the backend
+    const endpointsCandidates = pickArray(payload, [
+      "endpoints",
+      "result.endpoints",
+      "items",
+      "data.endpoints",
+      "distinct_endpoints",
+      "unique_endpoints",
+      "payload.endpoints",
+    ]);
+
+    // captured requests also vary in naming
+    const capturedCandidates = pickArray(payload, [
+      "captured_requests",
+      "captures",
+      "requests",
+      "result.captured_requests",
+      "data.captured_requests",
+      "payload.captured_requests",
+      "replayed_requests",
+    ]);
+
     setJobId(job_id);
-    setTargetUrl(target_url || target || "");
-    setEndpointsRaw(Array.isArray(endpoints) ? endpoints : []);
-    setCaptured(Array.isArray(captured_requests) ? captured_requests : []);
+    setTargetUrl(target_url);
+    setEndpointsRaw(Array.isArray(endpointsCandidates) ? endpointsCandidates : []);
+    setCaptured(Array.isArray(capturedCandidates) ? capturedCandidates : []);
     setSelectedKeys(new Set());
     setFuzzSummary(null);
+    setTriedCategorized(false); // allow the categorized fallback once for this new payload
   };
+
+  // Fallback: if we have a target URL but no endpoints in the crawl payload, try categorized endpoints
+  useEffect(() => {
+    const needFallback = targetUrl && (!isNonEmptyArray(endpointsRaw)) && !triedCategorized;
+    if (!needFallback) return;
+    (async () => {
+      try {
+        setTriedCategorized(true);
+        const cats = await getCategorizedEndpoints(targetUrl);
+        const arr =
+          Array.isArray(cats) ? cats
+          : Array.isArray(cats?.endpoints) ? cats.endpoints
+          : Array.isArray(cats?.items) ? cats.items
+          : [];
+        if (arr.length) {
+          setEndpointsRaw(arr);
+          toast.info(`Loaded ${arr.length} endpoints from categorized-endpoints fallback`);
+        }
+      } catch (e) {
+        // quiet fallback; users might not have this route
+        console.warn("categorized-endpoints fallback failed", e);
+      }
+    })();
+  }, [targetUrl, endpointsRaw, triedCategorized]);
 
   /** Selection helpers */
   const toggle = (ep) => {

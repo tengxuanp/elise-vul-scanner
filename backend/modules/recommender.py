@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import pickle
+import re
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
@@ -16,7 +17,7 @@ except Exception:  # numpy is optional; we degrade gracefully
     np = None  # type: ignore
 
 try:
-    import joblib  # for loading ranker_*.joblib
+    import joblib  # for loading ranker_*.joblib and family_clf.joblib
 except Exception:
     joblib = None  # type: ignore
 
@@ -46,24 +47,35 @@ META_PATHS = [
     ML_DIR / "recommender_meta.json",         # optional: {"feature_names":[...], "feature_dim": N}
 ]
 
-# Per-family LTR rankers (LambdaMART / XGBRanker)
+# Per-family LTR rankers (LambdaMART / XGBRanker / LinearSVC etc.)
 RANKER_PATHS = {
     "sqli": ML_DIR / "ranker_sqli.joblib",
     "xss": ML_DIR / "ranker_xss.joblib",
     "redirect": ML_DIR / "ranker_redirect.joblib",
 }
 
+# Optional FAMILY CLASSIFIER to choose a family when caller doesn't pass one
+FAMILY_CLF_PATH = ML_DIR / "family_clf.joblib"  # sklearn pipeline with predict_proba
+
 # Per-family minimum probability thresholds (after softmax over rank scores)
 PER_FAMILY_THRESHOLDS: Dict[str, float] = {
     "redirect": 0.35,
     "xss": 0.30,
     "sqli": 0.30,
+    "base": 0.20,
 }
 
 # Optional plugin to support pairwise scoring:
 #   ELISE_RANKER_PLUGIN="backend.modules.ml.ranker:score"
 # The callable signature must be: score(feats: Any, payloads: List[str]) -> List[float]
 PLUGIN_ENV = "ELISE_RANKER_PLUGIN"
+
+# Weak prior keywords used when family_clf is missing
+PRIORS = {
+    "sqli": {"id", "uid", "user", "prod", "item", "cat", "page", "sort", "order"},
+    "xss": {"q", "query", "search", "term", "msg", "name", "email", "comment"},
+    "redirect": {"return", "return_to", "next", "url", "dest", "target", "to", "redir"},
+}
 
 
 # ---- data structures ---------------------------------------------------------
@@ -77,6 +89,7 @@ class RecommenderInfo:
     plugin: Optional[str]
     feature_dim: Optional[int]
     rankers_loaded: Dict[str, bool]
+    family_clf_loaded: bool
 
 
 # ---- utility ----------------------------------------------------------------
@@ -266,6 +279,40 @@ def _payload_desc(payload: str) -> List[float]:
     ]
 
 
+def _tokenize(s: str) -> List[str]:
+    return [t for t in re.split(r"[/\-_\.?=&:#]+", (s or "").lower()) if t]
+
+
+def _extract_family_text(feats: Any) -> Tuple[str, str, str]:
+    """
+    Build a simple family-classifier text "METHOD path_tokens param_tokens".
+    """
+    if isinstance(feats, dict):
+        method = str(feats.get("method") or "GET").upper()
+        url = str(feats.get("url") or feats.get("path") or "/")
+        param = str(feats.get("param") or feats.get("param_name") or "")
+    else:
+        method, url, param = "GET", "/", ""
+    path_tokens = " ".join(_tokenize(url))
+    param_tokens = " ".join(_tokenize(param))
+    return method, path_tokens, param_tokens
+
+
+def _prior_family_from_tokens(param: str, path_tokens: str) -> str:
+    p = (param or "").lower()
+    for fam, keys in PRIORS.items():
+        if any(k in p for k in keys):
+            return fam
+    # weak path-based hint
+    if "search" in path_tokens or "query" in path_tokens:
+        return "xss"
+    if any(k in path_tokens for k in ("prod", "item", "order", "cat", "id")):
+        return "sqli"
+    if any(k in path_tokens for k in ("login", "redir", "return")):
+        return "redirect"
+    return "base"
+
+
 # ---- canonical pool access (compat shim) ------------------------------------
 
 def default_payloads_by_family(family: str, *, context: Optional[Dict[str, Any]] = None) -> List[str]:
@@ -293,6 +340,8 @@ def default_payloads_by_family(family: str, *, context: Optional[Dict[str, Any]]
         return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
     if fam in ("redirect", "open_redirect"):
         return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
+    if fam == "base":
+        return ["*", "%27", "%22", "()", "{}"]
     return []
 
 
@@ -337,7 +386,7 @@ class Recommender:
     Rank payloads for a given request/features.
 
     Load order preference:
-      1) Per-family LTR rankers (ranker_{family}.joblib) if `family` is provided.
+      1) Per-family LTR rankers (ranker_{family}.joblib) if `family` is provided (or predicted).
       2) Optional plugin:   ELISE_RANKER_PLUGIN="module.sub:score" -> score(feats, payloads) -> list[float]
       3) Generic model:     recommender_model.(pkl|joblib), optionally with feature_pipeline.pkl
       4) Heuristic fallback.
@@ -353,6 +402,9 @@ class Recommender:
 
       - feedback (optional): {"recent_fail_counts": {"xss": 2, "sqli": 5, ...}}
         Downweights families with repeated negatives on the same endpoint shape.
+
+      - If `family` is None, we will try FAMILY_CLF (family_clf.joblib) to pick one.
+        Fallback: weak priors from param/path tokens.
     """
 
     def __init__(self) -> None:
@@ -370,11 +422,15 @@ class Recommender:
         # Per-family rankers
         self.rankers: Dict[str, Any] = {}
 
+        # Family classifier (optional)
+        self.family_clf: Any = None
+        self.family_classes: Optional[List[str]] = None
+
     # ---------------------- lifecycle ----------------------------------------
 
     def load(self) -> None:
         """
-        Load per-family rankers, plugin, model/pipeline/meta if present. Idempotent.
+        Load per-family rankers, plugin, model/pipeline/meta, and family classifier if present. Idempotent.
         """
         # Per-family rankers first (authoritative when family is specified)
         for fam, path in RANKER_PATHS.items():
@@ -387,6 +443,17 @@ class Recommender:
             except Exception as e:
                 log.warning("Failed to load ranker for %s at %s: %s", fam, path, e)
                 self.rankers[fam] = None
+
+        # Family classifier (optional)
+        if joblib is not None and FAMILY_CLF_PATH.exists():
+            try:
+                self.family_clf = joblib.load(FAMILY_CLF_PATH)
+                # Try to read classes_ if present
+                self.family_classes = list(getattr(self.family_clf, "classes_", [])) or ["sqli", "xss", "redirect", "base"]
+                log.info("Loaded family classifier: %s (classes=%s)", FAMILY_CLF_PATH, self.family_classes)
+            except Exception as e:
+                log.warning("Failed to load family classifier '%s': %s", FAMILY_CLF_PATH, e)
+                self.family_clf, self.family_classes = None, None
 
         # Plugin (optional)
         plugin_spec = os.getenv(PLUGIN_ENV, "").strip()
@@ -440,9 +507,9 @@ class Recommender:
 
         self.ready = True
         log.info(
-            "Recommender ready: plugin=%s, model=%s, pipeline=%s, feature_dim=%s, rankers=%s",
+            "Recommender ready: plugin=%s, model=%s, pipeline=%s, feature_dim=%s, rankers=%s, family_clf=%s",
             bool(self.plugin_fn), bool(self.model), bool(self.pipeline), self._feature_dim,
-            {k: bool(v) for k, v in self.rankers.items()},
+            {k: bool(v) for k, v in self.rankers.items()}, bool(self.family_clf),
         )
 
     # ---------------------- internals ----------------------------------------
@@ -501,6 +568,56 @@ class Recommender:
             log.warning("Family ranker for %s failed: %s", fam, e)
             return None
 
+    def _predict_family(self, feats: Any, prob_threshold: float = 0.55) -> Tuple[str, Dict[str, float], str]:
+        """
+        Choose a payload family.
+        If FAMILY_CLF exists, use predict_proba over text "METHOD path_tokens param_tokens".
+        Otherwise, use weak priors.
+        Returns (family, probs_map, decision_reason).
+        """
+        method, path_tokens, param_tokens = _extract_family_text(feats)
+        text = f"{method} {path_tokens} {param_tokens}".strip()
+
+        # Default priors
+        fallback_fam = _prior_family_from_tokens(param_tokens, path_tokens)
+        probs = {"sqli": 0.25, "xss": 0.25, "redirect": 0.25, "base": 0.25}
+
+        if self.family_clf is not None:
+            try:
+                if hasattr(self.family_clf, "predict_proba"):
+                    proba = self.family_clf.predict_proba([text])[0]  # type: ignore
+                    classes = list(getattr(self.family_clf, "classes_", []) or ["sqli", "xss", "redirect", "base"])
+                    probs = {str(c): float(p) for c, p in zip(classes, proba)}
+                elif hasattr(self.family_clf, "decision_function"):
+                    df = self.family_clf.decision_function([text])  # type: ignore
+                    if isinstance(df, (list, tuple, np.ndarray)):
+                        scores = list(df if isinstance(df, (list, tuple)) else df.tolist())
+                    else:
+                        scores = [float(df)]
+                    # Broadcast to known classes if single score
+                    classes = list(getattr(self.family_clf, "classes_", []) or ["sqli", "xss", "redirect", "base"])
+                    if len(scores) != len(classes):
+                        scores = scores * len(classes)
+                    s_probs = _softmax(scores)
+                    probs = {str(c): float(p) for c, p in zip(classes, s_probs)}
+                # choose top
+                fam_sorted = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)
+                top_f, top_p = fam_sorted[0][0], fam_sorted[0][1]
+                reason = "model_confident" if top_p >= prob_threshold else "below_threshold_explore"
+                return top_f, probs, reason
+            except Exception as e:
+                log.warning("Family classifier failed: %s; falling back to priors", e)
+
+        # Priors fallback
+        # Give the prior family 0.6 and spread the rest
+        base = {"sqli", "xss", "redirect", "base"}
+        if fallback_fam not in base:
+            fallback_fam = "base"
+        rem = list(base - {fallback_fam})
+        probs = {f: (0.2) for f in rem}
+        probs[fallback_fam] = 0.4 if fallback_fam == "base" else 0.6
+        return fallback_fam, probs, "prior"
+
     # ---------------------- public API ---------------------------------------
 
     def info(self) -> RecommenderInfo:
@@ -512,6 +629,7 @@ class Recommender:
             plugin=os.getenv(PLUGIN_ENV) or None,
             feature_dim=self._feature_dim,
             rankers_loaded={k: bool(v) for k, v in self.rankers.items()},
+            family_clf_loaded=bool(self.family_clf),
         )
 
     def recommend_with_meta(
@@ -531,11 +649,23 @@ class Recommender:
         meta is suitable to be attached to evidence as `ranker_meta`.
 
         feedback: optional dict to downweight families that recently failed on the same endpoint+param shape.
+
+        If `family` is None, we try to pick one with FAMILY_CLF (or priors).
         """
         if not self.ready:
             self.load()
 
+        # Select / predict family if not provided
+        fam_decision = "caller_provided"
+        fam_probs: Dict[str, float] = {}
+        if not family:
+            selected_fam, fam_probs, fam_decision = self._predict_family(feats, prob_threshold=0.55)
+            family = selected_fam
+
         fam = (family or "sqli").lower().strip()
+        if fam == "open_redirect":
+            fam = "redirect"  # normalize aliases
+
         # Prefer `pool` kwarg (new) but accept legacy `candidates`
         pool_list: List[str] = list(pool) if pool is not None else (list(candidates) if candidates is not None else [])
 
@@ -557,16 +687,19 @@ class Recommender:
 
         meta_out: Dict[str, Any] = {
             "used_path": "none",
-            "family": fam if family else None,
+            "family": fam,
+            "family_probs": fam_probs or None,
+            "family_decision": fam_decision,
             "applied_threshold": float(threshold),
             "scores": [],
             "ranker_score": None,
             "top_payload": None,
             "model_ids": {
-                "ranker_path": str(RANKER_PATHS.get(fam)) if family and RANKER_PATHS.get(fam) and RANKER_PATHS[fam].exists() else None,
+                "ranker_path": str(RANKER_PATHS.get(fam)) if RANKER_PATHS.get(fam) and RANKER_PATHS[fam].exists() else None,
                 "plugin": os.getenv(PLUGIN_ENV) or None,
                 "generic_model": self._model_path,
                 "pipeline": self._pipeline_path,
+                "family_clf": str(FAMILY_CLF_PATH) if (FAMILY_CLF_PATH.exists()) else None,
             },
             "hints": hints,
         }
@@ -576,14 +709,15 @@ class Recommender:
 
         # Effective threshold (per-family override)
         fam_thresholds = (family_thresholds or PER_FAMILY_THRESHOLDS).copy()
-        # Also nudge threshold upward if we have strong negative feedback for this family
         eff_threshold = float(max(threshold, fam_thresholds.get(fam, threshold)))
+
+        # Also nudge threshold upward if we have strong negative feedback for this family
         penalty = _negative_feedback_penalty(fam, hints)
         eff_threshold = min(0.95, eff_threshold + 0.5 * penalty)  # raise threshold modestly on repeated fails
         meta_out["applied_threshold"] = eff_threshold
 
         # 1) Per-family LTR ranker (authoritative if available and we know the family)
-        ranked_with_meta = self._rank_with_family_ranker(fam, feats, pool_list) if family else None
+        ranked_with_meta = self._rank_with_family_ranker(fam, feats, pool_list)
         if ranked_with_meta:
             ranked, m = ranked_with_meta
             meta_out.update(m)
