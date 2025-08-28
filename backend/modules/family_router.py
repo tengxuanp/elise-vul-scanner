@@ -2,7 +2,7 @@
 from __future__ import annotations
 """
 Lightweight, deterministic chooser for which payload *family* to attempt
-against a target parameter — plus an optional ML classifier that outputs a
+against a target parameter — with an optional ML classifier that outputs a
 calibrated distribution over families for Stage-A routing.
 
 Inputs (target dict) — best-effort (missing keys are tolerated):
@@ -36,11 +36,11 @@ Also exposes canonical curated payload pools used in training & fallback:
   payload_pool_for("sqli"|"xss"|"redirect") -> List[str]
 """
 
-import re
-import math
 from typing import Dict, Any, List, Tuple
 from urllib.parse import urlparse
 from pathlib import Path
+import re
+import math
 
 # Optional dependency for loading models
 try:
@@ -105,12 +105,13 @@ SQLI_PATH_HINTS = {"product", "item", "article", "post", "order", "invoice", "de
 
 REDIRECT_PARAM_HINTS = {
     "next", "return", "return_to", "redirect", "redirect_uri",
-    "callback", "url", "to", "continue", "dest", "destination"
+    "callback", "url", "to", "continue", "dest", "destination", "goto"
 }
-REDIRECT_PATH_HINTS = {"redirect", "return"}
+REDIRECT_PATH_HINTS = {"redirect", "return", "callback", "oauth", "sso"}
 
 LOGIN_PATH_HINTS = {"login", "signin", "sign-in", "authenticate", "auth"}
 ID_SUFFIX_RE = re.compile(r"(?:^|[_\-\.\[\{])id(?:$|[_\-\.\]\}])", re.I)
+URLISH_RE = re.compile(r"^(https?:)?//", re.I)
 
 RuleResult = Tuple[str, str, float, str]  # (family, rule_id, score, detail)
 
@@ -133,8 +134,12 @@ def _is_numeric(s: str) -> bool:
 
 
 def _looks_url(s: str) -> bool:
-    s = _norm(s)
-    return s.startswith("http://") or s.startswith("https://") or s.startswith("//")
+    return bool(URLISH_RE.match(_norm(s)))
+
+
+def _is_htmlish(ct: str) -> bool:
+    ct = _norm(ct.split(";")[0])
+    return ct in ("", "text/html", "application/xhtml+xml")
 
 
 def _rules_xss(t: Dict[str, Any]) -> List[RuleResult]:
@@ -153,10 +158,14 @@ def _rules_xss(t: Dict[str, Any]) -> List[RuleResult]:
         out.append(("xss", "R002", 0.25, f"path contains '{hit}'"))
 
     # Static HTML GETs are often reflective; JSON lowers XSS likelihood
-    if method == "get" and (ctype in ("", "text/html", "application/xhtml+xml") or loc == "query"):
+    if method == "get" and (_is_htmlish(ctype) or loc == "query"):
         out.append(("xss", "R003", 0.10, "GET + HTML/query increases XSS surface"))
-    if ctype == "application/json":
-        out.append(("xss", "R004", -0.05, "JSON response less likely to reflect as HTML"))
+    if "json" in ctype:
+        out.append(("xss", "R004", -0.06, "JSON response less likely to reflect as HTML"))
+
+    # Attribute-like param names are slightly more XSS-y
+    if any(k in param for k in ("href", "src", "title", "value")):
+        out.append(("xss", "R005", 0.08, "attribute-like param name"))
 
     return out
 
@@ -168,6 +177,7 @@ def _rules_sqli(t: Dict[str, Any]) -> List[RuleResult]:
     ctype = _norm((t.get("content_type") or "").split(";")[0])
     loc = _norm(t.get("in"))
     ctrl = t.get("control_value")
+    method = _norm(t.get("method"))
 
     if param in SQLI_PARAM_HINTS:
         out.append(("sqli", "R010", 0.35, f"param '{param}' is id-like"))
@@ -182,13 +192,19 @@ def _rules_sqli(t: Dict[str, Any]) -> List[RuleResult]:
     if _is_numeric(str(ctrl or "")):
         out.append(("sqli", "R013", 0.25, "control value is numeric (typical id)"))
 
+    # JSON body id-like keys lean SQLi
     if ctype == "application/json" and loc != "query" and (param in SQLI_PARAM_HINTS or ID_SUFFIX_RE.search(param)):
         out.append(("sqli", "R014", 0.20, "JSON body id-like key"))
 
-    # Login-ish endpoints: nudges toward SQLi (auth bypass)
-    parts_lower = parts
-    if parts_lower & LOGIN_PATH_HINTS:
+    # Login/admin/search paths slightly nudge SQLi due to auth/report queries
+    if parts & LOGIN_PATH_HINTS:
         out.append(("sqli", "R015", 0.25, "login/auth path heuristic"))
+    if any(k in parts for k in ("admin", "report")):
+        out.append(("sqli", "R016", 0.10, "admin/report path heuristic"))
+
+    # Non-GET writes usually back a DB operation
+    if method in ("post", "put", "patch"):
+        out.append(("sqli", "R017", 0.06, "non-GET write"))
 
     return out
 
@@ -198,6 +214,7 @@ def _rules_redirect(t: Dict[str, Any]) -> List[RuleResult]:
     param = _norm(t.get("target_param"))
     parts = set(_path_parts(t.get("url") or ""))
     ctrl = t.get("control_value")
+    loc = _norm(t.get("in"))
 
     if param in REDIRECT_PARAM_HINTS:
         out.append(("redirect", "R020", 0.50, "redirect param name (next/return/url/...)"))
@@ -208,6 +225,10 @@ def _rules_redirect(t: Dict[str, Any]) -> List[RuleResult]:
 
     if _looks_url(str(ctrl or "")):
         out.append(("redirect", "R022", 0.30, "control value looks like URL"))
+
+    # Query-location redirect params tend to be wired into 302 flows
+    if loc == "query":
+        out.append(("redirect", "R023", 0.05, "query-param redirect pattern"))
 
     return out
 
@@ -234,10 +255,10 @@ def _aggregate_rules(t: Dict[str, Any]) -> Tuple[Dict[str, float], List[Dict[str
         scores[fam] += weight
         matches.append({"rule": rule_id, "family": fam, "score": round(weight, 3), "detail": detail})
 
-    # Clamp negatives
+    # Clamp negatives to zero
     for fam in scores:
         if scores[fam] < 0:
-            scores[fam] = max(0.0, scores[fam])
+            scores[fam] = 0.0
 
     return scores, matches
 
@@ -245,10 +266,9 @@ def _aggregate_rules(t: Dict[str, Any]) -> Tuple[Dict[str, float], List[Dict[str
 def _normalize_confidence(raw_score: float) -> float:
     """
     Map an unbounded positive score to [0,1].
-    Our rule weights were designed so 0.65+ is a strong signal.
+    Our rule weights were designed so ~0.65+ is a strong signal.
     """
-    # Simple squashing: 1 - exp(-k*x), ~1 at ~1.5
-    k = 1.2
+    k = 1.2  # squashing factor: 1 - exp(-k*x)
     return max(0.0, min(1.0, 1.0 - math.exp(-k * max(0.0, raw_score))))
 
 
@@ -308,8 +328,8 @@ def rank_families(t: Dict[str, Any]) -> List[Dict[str, Any]]:
 # ================================ ML Stage-A =================================
 
 MODEL_DIR = Path(__file__).resolve().parent / "ml"
-FAMILY_MODEL = MODEL_DIR / "family_model.joblib"   # optional (LightGBM/XGB)
-CALIBRATOR = MODEL_DIR / "family_platt.joblib"     # optional (per-class)
+FAMILY_MODEL = MODEL_DIR / "family_model.joblib"   # optional (LightGBM/XGB/Sklearn)
+CALIBRATOR = MODEL_DIR / "family_platt.joblib"     # optional (per-class or isotonic)
 
 class FamilyClassifier:
     """
@@ -346,8 +366,8 @@ class FamilyClassifier:
         if self.model is not None:
             try:
                 x = self._featurize_target(t)
-                raw = self._predict_model([x])  # -> [probabilities or scores]
-                if raw is not None and len(raw) == 4:  # already probabilities
+                raw = self._predict_model([x])  # -> [probs or scores] length 4 expected
+                if raw is not None and len(raw) == 4 and all(isinstance(v, (int, float)) for v in raw):
                     p = raw
                 else:
                     # If model outputs logits/scores, softmax them
@@ -369,7 +389,6 @@ class FamilyClassifier:
 
         # Fallback: normalize rule scores
         ranked = rank_families(t)
-        # Gather raw scores with floor for base
         rs = {r["family"]: float(r.get("raw_score", 0.0)) for r in ranked}
         rs["base"] = max(rs.get("base", 0.0), 1e-3)
         s = sum(max(0.0, v) for v in rs.values()) or 1.0
@@ -389,23 +408,22 @@ class FamilyClassifier:
         if hasattr(m, "predict_proba"):
             proba = m.predict_proba(X)  # type: ignore
             try:
-                return [float(v) for v in proba[0]]
+                return [float(v) for v in proba[0]]  # type: ignore[index]
             except Exception:
-                return [float(proba[0])]  # type: ignore
+                # Some models return shape (n_samples, n_classes); fall back
+                return [float(proba[0])]  # type: ignore[index]
         # decision_function/logits
         if hasattr(m, "decision_function"):
             df = m.decision_function(X)  # type: ignore
             row = df[0] if isinstance(df, (list, tuple)) else df
-            # row may be vector (multi-class) or scalar; coerce to list
             try:
-                return [float(x) for x in row]  # type: ignore
+                return [float(x) for x in row]  # type: ignore[call-overload]
             except Exception:
-                return [float(row)]  # type: ignore
-        # fallback
+                return [float(row)]  # type: ignore[arg-type]
+        # fallback to predict → one-hot guess
         if hasattr(m, "predict"):
             y = m.predict(X)  # type: ignore
             row = y[0] if isinstance(y, (list, tuple)) else y
-            # one-hot-ish guess
             out = [0.0, 0.0, 0.0, 0.0]
             idx = {"sqli": 0, "xss": 1, "redirect": 2, "base": 3}.get(str(row).lower(), 3)
             out[idx] = 1.0
@@ -483,7 +501,8 @@ def decide_family(
         "family_probs": {"sqli":..., "xss":..., "redirect":..., "base":...},
         "threshold_passed": True|False,
         "families_to_try": ["sqli"] or ["sqli","xss"] when exploring,
-        "decision_reason": "ml_argmax" | "rule_argmax" | "below_threshold_explore"
+        "decision_reason": "ml_argmax" | "rule_argmax" | "below_threshold_explore",
+        "min_prob": float
       }
     """
     # 1) Get probabilities (ML if available, else rules)

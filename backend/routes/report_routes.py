@@ -49,7 +49,7 @@ def report_markdown(job_id: str):
         content = md_path.read_text(encoding="utf-8")
     except Exception:
         raise HTTPException(status_code=500, detail="Failed to read report.md")
-    return Response(content=content, media_type="text/markdown")
+    return Response(content=content, media_type="text/markdown; charset=utf-8")
 
 
 # ----------------------------- legacy DB view --------------------------------
@@ -67,6 +67,11 @@ def _is_verified(ev: "Evidence") -> bool:
     login = sig.get("login") or {}
     refl = sig.get("reflection") or {}
     sqlerr = bool(sig.get("sql_error"))
+
+    # Explicit verification verdict if present (newer pipeline)
+    verify = sig.get("verify") or {}
+    if isinstance(verify, dict) and verify.get("confirmed"):
+        return True
 
     if isinstance(redir, dict) and redir.get("open_redirect"):
         return True
@@ -92,9 +97,9 @@ def _artifact_path(ev: "Evidence") -> str:
 
 
 def _row(ev: "Evidence") -> str:
-    label = ev.label or (ev.family or "n/a")
+    label = getattr(ev, "label", None) or getattr(ev, "family", None) or "n/a"
     try:
-        conf = f"{float(ev.confidence or 0.0):.2f}"
+        conf = f"{float(getattr(ev, 'confidence', 0.0) or 0.0):.2f}"
     except Exception:
         conf = "0.00"
     confirmed = "✅" if _is_verified(ev) else "⚪"
@@ -120,7 +125,7 @@ def report_job_db(job_id: str, db: "Session" = Depends(get_db)):  # type: ignore
     total = len(rows)
     by_label: Dict[str, int] = {}
     for r in rows:
-        key = (r.label or r.family or "n/a")
+        key = (getattr(r, "label", None) or getattr(r, "family", None) or "n/a")
         by_label[key] = by_label.get(key, 0) + 1
 
     md: List[str] = []
@@ -138,4 +143,4 @@ def report_job_db(job_id: str, db: "Session" = Depends(get_db)):  # type: ignore
         md.append(_row(r))
 
     body = "\n".join(md)
-    return Response(content=body, media_type="text/markdown")
+    return Response(content=body, media_type="text/markdown; charset=utf-8")

@@ -1,8 +1,8 @@
-// frontend/src/pages/CrawlAndFuzzPage.jsx
+// frontend/src/app/pages/CrawlAndFuzzPage.jsx
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import CrawlForm from "../components/CrawlForm";
-import { fuzzByJob, fuzzSelected, getReport } from "../api/api";
+import { fuzzByJob, fuzzSelected, getReport, getReportMarkdown } from "../api/api";
 import { toast } from "react-toastify";
 
 /** === helpers === */
@@ -650,11 +650,44 @@ export default function CrawlAndFuzzPage() {
   const downloadReport = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     try {
-      const blob = await getReport(jobId);
+      let blob = null;
+      let filename = "";
+
+      // Prefer Markdown endpoint if available
+      try {
+        const md = await getReportMarkdown(jobId);
+        if (typeof md === "string" && md.trim()) {
+          blob = new Blob([md], { type: "text/markdown" });
+          filename = `elise_report_${jobId}.md`;
+        }
+      } catch (_) {
+        // ignore and fall through to generic /report/{job_id}
+      }
+
+      if (!blob) {
+        const data = await getReport(jobId);
+        if (data instanceof Blob) {
+          blob = data;
+          filename =
+            data.type === "application/pdf"
+              ? `elise_report_${jobId}.pdf`
+              : data.type?.includes("markdown")
+              ? `elise_report_${jobId}.md`
+              : `elise_report_${jobId}.bin`;
+        } else if (typeof data === "string") {
+          blob = new Blob([data], { type: "text/markdown" });
+          filename = `elise_report_${jobId}.md`;
+        } else {
+          const txt = JSON.stringify(data ?? {}, null, 2);
+          blob = new Blob([txt], { type: "application/json" });
+          filename = `elise_report_${jobId}.json`;
+        }
+      }
+
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `elise_report_${jobId}.pdf`;
+      a.download = filename || `elise_report_${jobId}.md`;
       document.body.appendChild(a);
       a.click();
       a.remove();

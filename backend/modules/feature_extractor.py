@@ -19,11 +19,10 @@ except Exception:
     PlaywrightTimeoutError = Exception  # type: ignore
     _PLAYWRIGHT_AVAILABLE = False
 
-# Reuse your detector logic instead of duplicating regex soup
+# Prefer your detectors; soft-fallback keeps module importable
 try:
     from .detectors import reflection_signals
 except Exception:
-    # Soft fallback to keep this module importable even if detectors isn’t available yet.
     def reflection_signals(body_text: str, probe: str) -> Dict[str, bool]:
         if not body_text or not probe:
             return {
@@ -38,15 +37,21 @@ except Exception:
         js = False
         if raw:
             try:
-                js = bool(re.search(r"<script[^>]*>[^<]*" + re.escape(probe), body_text, re.I))
+                js = bool(re.search(r"<script[^>]*>[^<]*" + re.escape(probe), body_text, re.I | re.S))
             except Exception:
                 js = False
+        # naive attribute probe
+        attr = False
+        try:
+            attr = bool(re.search(r"<[^>]+\b[\w:-]+\s*=\s*(['\"]).*?" + re.escape(probe) + r".*?\1", body_text, re.I | re.S))
+        except Exception:
+            attr = False
         return {
             "raw": raw,
             "html_escaped": esc,
             "js_context": js,
-            "attr_context": False,
-            "tag_text_context": False,
+            "attr_context": attr,
+            "tag_text_context": raw and not (js or attr),
         }
 
 log = logging.getLogger(__name__)
@@ -129,7 +134,6 @@ def _first_reflection_tag(html: str, payload: str) -> Tuple[str, str, int]:
                 else:
                     val_str = val if val is not None else ""
                 if (payload and payload in val_str) or (enc and enc in val_str):
-                    # quote detection within the attribute string
                     dq = '"' in val_str
                     sq = "'" in val_str
                     qf = 3 if dq and sq else (1 if dq else (2 if sq else 0))
@@ -181,7 +185,7 @@ def _sanitize_headers(headers: Optional[Dict[str, Any]]) -> Dict[str, str]:
 
 class FeatureExtractor:
     """
-    Returns a fixed-size 17-dim feature vector, preserving your original shape:
+    Returns a fixed-size 17-dim feature vector:
       0  tag_feature            (stable hash bucket of reflected tag name or 0)
       1  attr_feature           (stable hash bucket of reflected attr name or 0)
       2  domain_feature         (stable hash bucket of netloc)
@@ -199,18 +203,15 @@ class FeatureExtractor:
      14  xss_param_hint         (1 if param in xss-ish names; else 0)
      15  payload_entropy_bucket (0..9)
      16  payload_special_bucket (0..9)
-
-    Note: We keep the return shape and indices to avoid breaking downstream code.
     """
 
     def __init__(self, wait_until: str = "domcontentloaded", nav_timeout_ms: int = 10000, headless: bool = True):
         self.wait_until = wait_until
         self.nav_timeout_ms = nav_timeout_ms
         self.headless = headless
-        # Filled after extract_features for optional debugging
         self.last_meta: Dict[str, Any] = {}
 
-    # ---------- NEW: payload-agnostic endpoint vector (cheap, no browser) -----
+    # ---------- payload-agnostic endpoint vector (no browser) ----------
     def extract_endpoint_features(
         self,
         url: str,
@@ -234,7 +235,6 @@ class FeatureExtractor:
         xss_param_hint = 1 if param_norm in _XSS_PARAM_HINTS else 0
         ct_hint = _content_type_hint(content_type)
 
-        # Payload-agnostic → reflection/JS/quote/type/context are zeros; payload len/entropy/specials are zeros.
         vec: List[int] = [
             0,                          # tag
             0,                          # attr
@@ -254,7 +254,6 @@ class FeatureExtractor:
             0,                          # entropy bucket
             0,                          # special-char bucket
         ]
-        # minimal metadata
         self.last_meta = {
             "endpoint_only": True,
             "content_type_hint": ct_hint,
@@ -275,10 +274,9 @@ class FeatureExtractor:
         use_browser: bool = True,
     ) -> List[int]:
         """
-        Heavy extractor (may open a real browser) that tries to observe reflection/JS execution.
+        Heavy extractor (may open a browser) that tries to observe reflection/JS execution.
         Set use_browser=False to force the cheap path.
         """
-        # Fast path if caller opts out or Playwright is unavailable
         if not use_browser or not _PLAYWRIGHT_AVAILABLE:
             return self.extract_endpoint_features(url, param, method=method, content_type=content_type, headers=headers)
 
@@ -309,17 +307,20 @@ class FeatureExtractor:
 
                 page.on("dialog", on_dialog)
 
+                # Optional: catch console log that echoes payload (weak signal; do not set execution_flag)
+                def on_console(msg):
+                    # leave only for metadata
+                    if payload and payload in (msg.text() or ""):
+                        self.last_meta["console_reflection"] = True
+                page.on("console", on_console)
+
                 try:
                     if method.upper() == "POST":
                         base_url = url.split("?")[0]
-
-                        # Choose body encoder based on content-type hint
                         ct = (content_type or "").split(";")[0].strip().lower()
 
-                        # Prefer APIRequestContext if available; otherwise navigate with page
                         resp_text = None
                         try:
-                            # Best effort API request path (available in modern Playwright)
                             if hasattr(p, "request"):
                                 api_ctx = p.request.new_context(extra_http_headers=ctx_headers or None)
                                 if ct == "application/json":
@@ -337,18 +338,15 @@ class FeatureExtractor:
 
                         if resp_text:
                             try:
-                                # Render the response HTML in a page so inline JS/dialogs can trigger
                                 page.set_content(resp_text, wait_until=self.wait_until, timeout=self.nav_timeout_ms)
                                 html = page.content()
                             except Exception:
                                 html = resp_text
                         else:
-                            # Fallback attempt to navigate so we at least capture something
                             page.goto(base_url, wait_until=self.wait_until, timeout=self.nav_timeout_ms)
                             html = page.content()
 
                     else:
-                        # GET: append/merge our single param simply
                         glue = "&" if "?" in url else "?"
                         target = f"{url}{glue}{urlencode({param: payload})}"
                         page.goto(target, wait_until=self.wait_until, timeout=self.nav_timeout_ms)
@@ -381,6 +379,10 @@ class FeatureExtractor:
 
         # Tag / attribute features + quoting
         tag_name, attr_name, quote_feature = _first_reflection_tag(html, payload)
+        # If detector didn't mark attribute, but we found an attribute container, nudge context
+        if reflection_type != "none" and reflection_context == "html" and attr_name:
+            reflection_context = "attribute"
+
         tag_feature = _sha_bucket(tag_name, 10) if tag_name else 0
         attr_feature = _sha_bucket(attr_name, 10) if attr_name else 0
 
@@ -424,7 +426,7 @@ class FeatureExtractor:
             special_bucket,             # 16
         ]
 
-        # optional debug metadata for introspection (not used by the recommender)
+        # optional debug metadata
         self.last_meta = {
             "endpoint_only": False,
             "reflection_type": reflection_type,

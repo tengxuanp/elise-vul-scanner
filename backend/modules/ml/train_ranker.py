@@ -34,6 +34,7 @@ import json
 import math
 import os
 import random
+import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from hashlib import sha1
@@ -58,7 +59,7 @@ try:
     # Canonical pools not strictly required for training, but import to keep module deps aligned
     from ..family_router import payload_pool_for  # noqa: F401
 except Exception:
-    def payload_pool_for(_: str) -> List[str]:
+    def payload_pool_for(_: str) -> List[str]:  # type: ignore
         return []
 
 try:
@@ -81,6 +82,8 @@ RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
+ML_DIR = Path(__file__).resolve().parent
+
 
 # ============================ Utilities ======================================
 
@@ -88,7 +91,7 @@ def _payload_family(p: str) -> str:
     s = (p or "").lower()
     if any(x in s for x in ("<script", "<svg", "onerror=", "<img")):
         return "xss"
-    if any(x in s for x in (" union ", " or ", " and ", "waitfor delay", "'--", "/*", " sleep(")) or s.startswith("'"):
+    if any(x in s for x in (" union ", " or ", " and ", "waitfor delay", "waitfor", "'--", "/*", " sleep(")) or s.startswith("'"):
         return "sqli"
     if s.startswith(("http://", "https://", "//")) or "%2f%2f" in s:
         return "redirect"
@@ -422,22 +425,31 @@ def _reliability_bins(endpoint_ids: List[str], y_true: np.ndarray, y_score: np.n
 
 # ============================= Train / Eval ==================================
 
-def _train_ranker(dataset: LTRDataset) -> XGBRanker:
+def _train_ranker(
+    dataset: LTRDataset,
+    n_estimators: int = 300,
+    max_depth: int = 6,
+    learning_rate: float = 0.10,
+    subsample: float = 0.8,
+    colsample_bytree: float = 0.8,
+    reg_lambda: float = 1.0,
+    n_jobs: int = max(1, os.cpu_count() or 1),
+) -> XGBRanker:
     """
     Train LambdaMART WITHOUT tying ourselves to a fragile built-in ndcg@K.
     We use pairwise objective and do metrics ourselves on a val split.
     """
     model = XGBRanker(
         objective="rank:pairwise",     # robust; no top-k eval dependency during fit
-        n_estimators=300,
-        max_depth=6,
-        learning_rate=0.10,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        reg_lambda=1.0,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        subsample=subsample,
+        colsample_bytree=colsample_bytree,
+        reg_lambda=reg_lambda,
         random_state=RANDOM_SEED,
         tree_method="hist",
-        n_jobs=max(1, os.cpu_count() or 1),
+        n_jobs=n_jobs,
     )
     model.fit(dataset.X, dataset.y, group=dataset.group)
     return model
@@ -498,13 +510,23 @@ def _slice_dataset(ds: LTRDataset, rows: List[int]) -> LTRDataset:
     return LTRDataset(X=X, y=y, group=group, payloads=payloads, endpoint_ids=endpoints)
 
 
-def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dict[str, Any]:
+def train_one_family(
+    attempts: List[Attempt],
+    family: str,
+    out_dir: Path,
+    *,
+    n_estimators: int = 300,
+    max_depth: int = 6,
+    learning_rate: float = 0.10,
+    val_ratio: float = 0.2,
+    n_jobs: int = max(1, os.cpu_count() or 1),
+) -> Dict[str, Any]:
     print(f"\n[Family: {family}] Building dataset...")
     ds = _build_family_dataset(attempts, family)
     print(f"[Family: {family}] Samples: {len(ds.y)} | Queries: {len(ds.group)} | Dim: {ds.X.shape[1]}")
 
     # Split
-    train_rows, val_rows = _train_val_split(ds.endpoint_ids, ds.group, val_ratio=0.2)
+    train_rows, val_rows = _train_val_split(ds.endpoint_ids, ds.group, val_ratio=val_ratio)
     ds_tr = _slice_dataset(ds, train_rows)
     ds_va = _slice_dataset(ds, val_rows)
 
@@ -515,7 +537,13 @@ def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dic
 
     # Train
     print(f"[Family: {family}] Training XGBRanker on {len(ds_tr.y)} rows / {len(ds_tr.group)} queries...")
-    model = _train_ranker(ds_tr)
+    model = _train_ranker(
+        ds_tr,
+        n_estimators=n_estimators,
+        max_depth=max_depth,
+        learning_rate=learning_rate,
+        n_jobs=n_jobs,
+    )
 
     # Evaluate (validation)
     y_score = model.predict(ds_va.X)
@@ -539,6 +567,18 @@ def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dic
         "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
         "objective": "rank:pairwise",
         "min_group_train": min_g,
+        "params": {
+            "n_estimators": n_estimators,
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "val_ratio": val_ratio,
+            "n_jobs": n_jobs,
+            "random_state": RANDOM_SEED,
+        },
+        "versions": {
+            "python": sys.version.split()[0],
+            "numpy": getattr(np, "__version__", "unknown"),
+        },
     }
     (out_dir / f"ranker_report_{family}.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"[Family: {family}] Validation metrics: {metrics}")
@@ -551,8 +591,13 @@ def train_one_family(attempts: List[Attempt], family: str, out_dir: Path) -> Dic
 def main() -> None:
     ap = argparse.ArgumentParser(description="Train per-family LambdaMART/XGBRanker from evidence logs.")
     ap.add_argument("--data-glob", required=True, help="Glob for evidence jsonl files, e.g., data/**/evidence.jsonl")
-    ap.add_argument("--out-dir", default=str(Path(__file__).resolve().parent), help="Output dir (default: backend/modules/ml)")
+    ap.add_argument("--out-dir", default=str(ML_DIR), help=f"Output dir (default: {ML_DIR})")
     ap.add_argument("--families", nargs="+", default=list(FAMILIES_DEFAULT), help="Families to train: sqli xss redirect")
+    ap.add_argument("--n-estimators", type=int, default=300)
+    ap.add_argument("--max-depth", type=int, default=6)
+    ap.add_argument("--learning-rate", type=float, default=0.10)
+    ap.add_argument("--val-ratio", type=float, default=0.2)
+    ap.add_argument("--threads", type=int, default=max(1, os.cpu_count() or 1))
     args = ap.parse_args()
 
     out_dir = Path(args.out_dir).resolve()
@@ -575,7 +620,16 @@ def main() -> None:
     summaries: Dict[str, Any] = {}
     for fam in families:
         try:
-            summaries[fam] = train_one_family(attempts, fam, out_dir)
+            summaries[fam] = train_one_family(
+                attempts,
+                fam,
+                out_dir,
+                n_estimators=args.n_estimators,
+                max_depth=args.max_depth,
+                learning_rate=args.learning_rate,
+                val_ratio=args.val_ratio,
+                n_jobs=args.threads,
+            )
         except Exception as e:
             print(f"[Family: {fam}] Skipped: {e}")
 

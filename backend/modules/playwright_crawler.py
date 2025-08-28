@@ -71,9 +71,20 @@ def _looks_like_json_string(s: Optional[str]) -> bool:
     return (ss.startswith("{") and ss.endswith("}")) or (ss.startswith("[") and ss.endswith("]"))
 
 
+def _json_types(obj: Any) -> Optional[Dict[str, str]]:
+    """Return a shallow {key: type_name} map for dict-like JSON bodies."""
+    if not isinstance(obj, dict):
+        return None
+    out: Dict[str, str] = {}
+    for k, v in obj.items():
+        tn = type(v).__name__
+        out[str(k)] = tn
+    return out or None
+
+
 def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, Any]:
     """
-    Returns: {"type": "json"|"form"|"multipart"|"other"|None, "parsed": dict|None, "raw": str|None, "keys":[...], "graphql": dict|None}
+    Returns: {"type": "json"|"form"|"multipart"|"other"|None, "parsed": dict|None, "raw": str|None, "keys":[...], "graphql": dict|None, "json_types": dict|None}
     - Tries hard to infer JSON even if content-type is missing/misleading.
     - Multipart: best-effort extraction of field names (no file content preserved).
     """
@@ -84,7 +95,7 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
             break
 
     if not post_data:
-        return {"type": None, "parsed": None, "raw": None, "keys": [], "graphql": None}
+        return {"type": None, "parsed": None, "raw": None, "keys": [], "graphql": None, "json_types": None}
 
     # JSON
     if "application/json" in ct or _looks_like_json_string(post_data):
@@ -102,26 +113,47 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
                     }
         except Exception:
             parsed = None
-        return {"type": "json", "parsed": parsed if isinstance(parsed, dict) else None, "raw": post_data, "keys": keys, "graphql": gql}
+        return {
+            "type": "json",
+            "parsed": parsed if isinstance(parsed, dict) else None,
+            "raw": post_data,
+            "keys": keys,
+            "graphql": gql,
+            "json_types": _json_types(parsed) if isinstance(parsed, dict) else None
+        }
 
     # Form-urlencoded
     if "application/x-www-form-urlencoded" in ct or "form" in ct:
         try:
             parsed_qs = parse_qs(post_data)  # {k: [v,...]}
             parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_qs.items()}
-            return {"type": "form", "parsed": parsed, "raw": post_data, "keys": sorted(parsed.keys()), "graphql": None}
+            return {
+                "type": "form",
+                "parsed": parsed,
+                "raw": post_data,
+                "keys": sorted(parsed.keys()),
+                "graphql": None,
+                "json_types": None
+            }
         except Exception:
-            return {"type": "form", "parsed": None, "raw": post_data, "keys": [], "graphql": None}
+            return {"type": "form", "parsed": None, "raw": post_data, "keys": [], "graphql": None, "json_types": None}
 
     # Multipart (best-effort names)
     if "multipart/form-data" in ct:
         # Pull out name="field" occurrences; do not keep contents
         names = sorted(set(re.findall(r'name="([^"]+)"', post_data)))
         parsed = {n: "<multipart>" for n in names}
-        return {"type": "multipart", "parsed": parsed if parsed else None, "raw": "<multipart redacted>", "keys": names, "graphql": None}
+        return {
+            "type": "multipart",
+            "parsed": parsed if parsed else None,
+            "raw": "<multipart redacted>",
+            "keys": names,
+            "graphql": None,
+            "json_types": None
+        }
 
     # Fallback
-    return {"type": "other", "parsed": None, "raw": post_data, "keys": [], "graphql": None}
+    return {"type": "other", "parsed": None, "raw": post_data, "keys": [], "graphql": None, "json_types": None}
 
 
 def strip_fragment(u: str) -> str:
@@ -191,6 +223,9 @@ def crawl_site(
     auth: Optional[Dict[str, Any]] = None,
     job_dir: Optional[str] = None,
     max_pages: int = 200,
+    save_artifacts: bool = True,
+    save_har: bool = True,
+    har_omit_content: bool = True,
 ) -> Tuple[List[EndpointOut], List[Dict[str, Any]]]:
     """
     Crawl a target and return:
@@ -200,13 +235,19 @@ def crawl_site(
     captured_requests item shape:
       {
         "method","url","headers","post_data","body_type","body_parsed","query_params",
-        "response_status","response_content_type","graphql","is_login_like"
+        "response_status","response_content_type","graphql","is_login_like",
+        "json_types" (for JSON bodies)
       }
 
     NOTES:
     - Same-origin only.
     - SPA hash routes are navigated to mine forms, but endpoints are emitted with fragments stripped.
     - No socket.io endpoints; no static assets.
+    - If job_dir is provided and save_artifacts is True, we persist:
+        - storage_state.json
+        - captured_requests.json
+        - endpoints.json
+        - crawl.har (if save_har is True and supported by the installed Playwright version)
     """
     # === State ===
     visited: Set[Tuple[str, Tuple[str, ...]]] = set()
@@ -214,6 +255,11 @@ def crawl_site(
     raw_form_endpoints: List[Dict[str, Any]] = []
     captured_requests: List[Dict[str, Any]] = []
     response_meta: Dict[str, Dict[str, Any]] = {}  # by stripped URL: {"status": int, "content-type": str}
+
+    out_dir: Optional[Path] = None
+    if job_dir:
+        out_dir = Path(job_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
 
     def normalize_for_visit(url: str) -> Tuple[str, Tuple[str, ...]]:
         """Normalize a page URL for visited-set: path + query key tuple (fragment stripped)."""
@@ -328,6 +374,8 @@ def crawl_site(
                 "content_type_hint": ("application/json" if j_names else ("multipart/form-data" if (enctype and "multipart" in enctype) else ("application/x-www-form-urlencoded" if f_names else None))),
                 "source": "form",
                 "headers": {},
+                "is_login": bool(f.get("is_login")),
+                "csrf_params": sorted(f.get("csrf_params") or []),
             })
         return out
 
@@ -419,6 +467,7 @@ def crawl_site(
                 "post_data": body_info["raw"],
                 "body_type": body_info["type"],         # "json" | "form" | "multipart" | "other" | None
                 "body_parsed": body_info["parsed"],     # dict for json/form/multipart; else None
+                "json_types": body_info.get("json_types"),
                 "query_params": q_params,
                 "response_status": None,
                 "response_content_type": None,
@@ -580,18 +629,35 @@ def crawl_site(
     # --- Playwright bootstrap (with optional auth) ---
     headful = bool(auth and str(auth.get("mode", "none")).lower() == "manual")
     with sync_playwright() as p:
+        # Prepare artifact paths
+        har_path = None
+        if out_dir and save_har:
+            har_path = out_dir / "crawl.har"
+
         # Reuse prior storage state if present (helps with auth continuity)
         storage_state = None
         try:
-            if job_dir:
-                state_path = Path(job_dir) / "storage_state.json"
+            if out_dir:
+                state_path = out_dir / "storage_state.json"
                 if state_path.exists():
                     storage_state = str(state_path)
         except Exception:
             storage_state = None
 
+        # Try to record HAR when supported by the installed Playwright version
         browser = p.chromium.launch(headless=not headful)
-        context = browser.new_context(storage_state=storage_state)
+        context_kwargs: Dict[str, Any] = {}
+        if storage_state:
+            context_kwargs["storage_state"] = storage_state
+        try:
+            if har_path:
+                # Supported in modern Playwright versions
+                context_kwargs["record_har_path"] = str(har_path)
+                context_kwargs["record_har_omit_content"] = bool(har_omit_content)
+        except Exception:
+            pass
+
+        context = browser.new_context(**context_kwargs)
 
         # Extra headers passthrough (advanced users)
         try:
@@ -669,8 +735,8 @@ def crawl_site(
         finally:
             # Persist storage state for this job (optional, used by replay/fuzzer)
             try:
-                if job_dir:
-                    state_path = Path(job_dir) / "storage_state.json"
+                if out_dir:
+                    state_path = out_dir / "storage_state.json"
                     state_path.parent.mkdir(parents=True, exist_ok=True)
                     context.storage_state(path=str(state_path))
             except Exception:
@@ -694,5 +760,34 @@ def crawl_site(
     eps_from_network = endpoints_from_requests(deduped_reqs)
     eps_from_forms = endpoints_from_forms(raw_form_endpoints)
     merged = merge_endpoints(eps_from_forms, eps_from_network)
+
+    # Optionally persist artifacts
+    if out_dir and save_artifacts:
+        try:
+            (out_dir / "captured_requests.json").write_text(
+                json.dumps(deduped_reqs, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
+        try:
+            # Serialize EndpointOut to dicts
+            eps_serialized = []
+            for e in merged:
+                eps_serialized.append({
+                    "method": e.method.value,
+                    "url": e.url,
+                    "path": e.path,
+                    "content_type_hint": e.content_type_hint,
+                    "param_locs": {
+                        "query": [p.name for p in (e.param_locs.query or [])],
+                        "form": [p.name for p in (e.param_locs.form or [])],
+                        "json": [p.name for p in (e.param_locs.json or [])],
+                    },
+                })
+            (out_dir / "endpoints.json").write_text(
+                json.dumps(eps_serialized, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
 
     return merged, deduped_reqs

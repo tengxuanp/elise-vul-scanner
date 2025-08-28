@@ -615,10 +615,7 @@ def _fuzz_targets_ffuf(
                 used_ml = not used_fallback and (reco is not None) and (feats is not None)
                 ranker_meta = {
                     "family_chosen": family,
-                    # We only have payload-level confidence from the recommender;
-                    # surface it as "ranker_score" so the UI has something to show.
                     "ranker_score": float(base_conf or 0.0) if used_ml else None,
-                    # No per-family probabilities available here; leave {}, UI handles gracefully.
                     "family_probs": {},
                 } if used_ml else {}
 
@@ -692,8 +689,6 @@ def _fuzz_targets_ffuf(
                             signals={"external_redirect": external_redirect, "ffuf_match_count": len(matches)},
                             confidence=float(min(1.0, max(0.0, derived_conf))),
                             label=label,
-                            origin=("ml" if used_ml else "curated"),
-                            ranker_meta=ranker_meta or None,
                         )
                     except Exception:
                         logging.exception("persist_evidence failed")

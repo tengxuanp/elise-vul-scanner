@@ -23,10 +23,10 @@ except Exception:  # pragma: no cover
 
 router = APIRouter()
 
-REPO_ROOT  = Path(__file__).resolve().parents[2]
-DATA_DIR   = REPO_ROOT / "data"
-JOBS_DIR   = DATA_DIR / "jobs"
-RESULTS_DIR= DATA_DIR / "results"
+REPO_ROOT   = Path(__file__).resolve().parents[2]
+DATA_DIR    = REPO_ROOT / "data"
+JOBS_DIR    = DATA_DIR / "jobs"
+RESULTS_DIR = DATA_DIR / "results"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -48,11 +48,14 @@ class AuthConfig(BaseModel):
     password_selector: Optional[str] = Field(default="input[type=password], #password, input[name=password]")
     submit_selector:  Optional[str] = Field(default="button[type=submit], button#loginButton")
     wait_after_ms: Optional[int] = 1500
+    # pass-through extra headers for Playwright context (supported by crawler)
+    extra_headers: Optional[Dict[str, str]] = None
 
 class CrawlRequest(BaseModel):
     job_id: str
     target_url: str
     max_depth: int = 2
+    max_pages: int = 200
     auth: Optional[AuthConfig] = None
 
 
@@ -269,6 +272,17 @@ def _write_status(job_id: str, phase: str, extra: Optional[Dict[str, Any]] = Non
     except Exception:
         pass
 
+def _validate_target_url(target: str) -> None:
+    """Hard fail if target_url lacks http/https scheme."""
+    try:
+        u = urlparse(target)
+        if u.scheme not in {"http", "https"}:
+            raise ValueError
+        if not u.netloc:
+            raise ValueError
+    except Exception:
+        raise HTTPException(status_code=400, detail="target_url must be an absolute http(s) URL")
+
 
 # -------------------- routes --------------------
 
@@ -279,13 +293,18 @@ def start_crawl(body: CrawlRequest):
     Saves to data/jobs/<job_id>/crawl_result.json
     Persists Endpoint + TestCase plans into DB.
     """
-    job_id = body.job_id
-    target = body.target_url
-    auth  = (body.auth.model_dump() if getattr(body.auth, "model_dump", None) else body.auth.dict()) if body.auth else None
-    max_depth = int(body.max_depth or 2)
+    job_id = body.job_id.strip()
+    target = body.target_url.strip()
+    _validate_target_url(target)
 
-    if _job_status.get(job_id) == "running":
-        raise HTTPException(status_code=400, detail=f"Job {job_id} crawl already running.")
+    # Flatten auth (keep None if not provided)
+    auth = (body.auth.model_dump() if getattr(body.auth, "model_dump", None) else body.auth.dict()) if body.auth else None
+    max_depth = int(body.max_depth or 2)
+    max_pages = int(body.max_pages or 200)
+
+    # Prevent duplicate concurrent runs for the same job
+    if _job_status.get(job_id) in {"starting", "running"}:
+        raise HTTPException(status_code=400, detail=f"Job {job_id} crawl already in progress.")
 
     _write_status(job_id, "starting")
 
@@ -310,6 +329,7 @@ def start_crawl(body: CrawlRequest):
                 max_depth=max_depth,
                 auth=auth,
                 job_dir=str(JOBS_DIR / job_id),
+                max_pages=max_pages,
             )
 
             # --- Coerce to plain dicts and normalize without mutating models ---
@@ -405,7 +425,14 @@ def start_crawl(body: CrawlRequest):
             print(f"[ERROR] Crawl failed for {job_id}: {e}")
 
     threading.Thread(target=run_crawl, daemon=True).start()
-    return {"status": "started", "job_id": job_id, "target_url": target, "auth_mode": (auth["mode"] if auth else "none"), "max_depth": max_depth}
+    return {
+        "status": "started",
+        "job_id": job_id,
+        "target_url": target,
+        "auth_mode": (auth["mode"] if auth else "none"),
+        "max_depth": max_depth,
+        "max_pages": max_pages,
+    }
 
 
 @router.get("/crawl/status/{job_id}")

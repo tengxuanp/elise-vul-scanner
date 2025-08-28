@@ -133,6 +133,8 @@ FAM_ALIASES = {
     "base": "base",
 }
 
+# ------------------------ tiny utilities ------------------------------------
+
 def _rand_control(prefix="ctrl") -> str:
     return prefix + "_" + "".join(random.choices(string.ascii_letters + string.digits, k=8))
 
@@ -174,6 +176,17 @@ def _inject_query(url: str, param: str, value: str) -> str:
     u = urlparse(url)
     q = parse_qs(u.query, keep_blank_values=True)
     q[param] = [value]
+    qs = urlencode([(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])])
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, qs, u.fragment))
+
+def _normalize_query_value(url: str, param: str, placeholder: str = "<CTRL>") -> str:
+    """
+    Return URL where `param` exists and is set to a stable placeholder.
+    Used only for dedupe so different control strings don't create fake uniques.
+    """
+    u = urlparse(url)
+    q = parse_qs(u.query, keep_blank_values=True)
+    q[param] = [placeholder]
     qs = urlencode([(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])])
     return urlunparse((u.scheme, u.netloc, u.path, u.params, qs, u.fragment))
 
@@ -273,7 +286,7 @@ def _priority_score(method: str, url: str, param: str) -> float:
     # fallback heuristics
     s = 0.0
     lp, lu = (param or "").lower(), (url or "").lower()
-    if lp in {"id","uid","pid","productid","user","q","search","query","s","to","return_to","redirect","url","redirect_uri"}:
+    if lp in {"id","uid","pid","productid","user","q","search","query","s","to","return_to","redirect","url","redirect_uri","next","continue","dest"}:
         s += 0.6
     if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
         s += 0.25
@@ -300,7 +313,7 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
         if k.lower() not in lower:
             out[k] = v
 
-    set_if_absent("User-Agent", "Mozilla/5.0 (compatible; elise-target-builder/1.0)")
+    set_if_absent("User-Agent", "Mozilla/5.0 (compatible; elise-target-builder/1.1)")
     path = (urlparse(url).path or "").lower()
     wants_json = ("/api/" in path) or ("/rest/" in path)
     set_if_absent("Accept", "application/json, */*;q=0.8" if wants_json else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -421,10 +434,11 @@ def build_targets(
                   "payloads": [str, ...],
                   "timeout": float,
                   "priority": float,
-                  # --- NEW (optional, for transparency / UI) ---
-                  "family_hint": "xss|sqli|redirect|base",
+                  # --- NON-BREAKING EXTRAS for transparency/UI ---
+                  "family_hint": "xss|sqli|redir|base",
                   "family_confidence": float,
-                  "family_reason": str
+                  "family_reason": str,
+                  "in_detail": "query|form|json"           # (extra; still keep 'in')
                 }, ...
             ]}
     """
@@ -577,15 +591,19 @@ def build_targets(
             family = fam_info.get("family") or "base"
             payloads = _plan_from_family(family, p, method, None, path)
 
-            key = _dedupe_key(method, base_url, "query", p, None)
+            # Dedupe against a placeholder URL so ctrl value doesn't create fake uniques
+            dedupe_url = _normalize_query_value(url, p, "<CTRL>")
+            key = _dedupe_key(method, dedupe_url, "query", p, None)
             if key in seen:
                 continue
             seen.add(key)
+
             t = {
                 "id": str(uuid.uuid4()),
                 "method": method,
                 "url": base_url,
                 "in": "query",
+                "in_detail": "query",
                 "target_param": p,
                 "content_type": None,
                 "headers": dict(headers),
@@ -637,6 +655,7 @@ def build_targets(
                         "method": method,
                         "url": url,
                         "in": "body",
+                        "in_detail": "form",
                         "target_param": p,
                         "content_type": "application/x-www-form-urlencoded",
                         "headers": headers_body,
@@ -680,6 +699,7 @@ def build_targets(
                         "method": method,
                         "url": url,
                         "in": "body",
+                        "in_detail": "json",
                         "target_param": p,
                         "content_type": "application/json",
                         "headers": headers_body,
@@ -854,7 +874,7 @@ def _add_priority_scores(targets: List[Dict[str, Any]]) -> None:
         else:
             lp = p.lower()
             lu = u.lower()
-            if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url"}:
+            if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url","redirect_uri","next","continue","dest"}:
                 score += 0.6
             if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
                 score += 0.25

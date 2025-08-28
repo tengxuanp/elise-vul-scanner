@@ -6,8 +6,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-
+from typing import Any, Dict, List, Optional
 
 # ------------------------------- paths -------------------------------
 
@@ -54,11 +53,13 @@ def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                s = line.strip()
+                if not s:
                     continue
                 try:
-                    out.append(json.loads(line))
+                    row = json.loads(s)
+                    if isinstance(row, dict):
+                        out.append(row)
                 except Exception:
                     # skip broken lines
                     continue
@@ -135,45 +136,76 @@ def _family_of(f: Finding) -> str:
         return "xss"
     if any(x in p for x in ("http://", "https://", "//")):
         return "redirect"
-    if any(x in p for x in (" or 1=1", "'--", "\"--")):
+    if any(x in p for x in (" or 1=1", "'--", "\"--", "union select", "sleep(")):
         return "sqli"
     return "unknown"
 
 
 def _coerce_finding(job_id: str, row: Dict[str, Any]) -> Optional[Finding]:
+    """
+    Normalize heterogeneous rows from either the verification-first core engine
+    (type == 'finding') or legacy/ffuf paths (type may be 'attempt' or omitted).
+    """
     try:
-        # Engine-normalized rows (type == "finding") from core
-        method = str(row.get("request", {}).get("method") or row.get("method") or "GET")
-        url = str(row.get("request", {}).get("url") or row.get("url") or "")
-        param = row.get("request", {}).get("param") or row.get("param")
-        family = row.get("payload_family") or row.get("family") or "unknown"
+        # Request side (prefer canonical request.*)
+        req = row.get("request") or row.get("request_meta") or {}
+        method = str(req.get("method") or row.get("method") or "GET")
+        url = str(req.get("url") or row.get("url") or "")
+        param = req.get("param") or row.get("param")
+
+        # Family / payload identifiers
+        family = (
+            row.get("payload_family")
+            or row.get("family")
+            or (row.get("ranker_meta") or {}).get("family_chosen")
+            or "unknown"
+        )
         payload_id = str(row.get("payload_id")) if row.get("payload_id") is not None else None
         payload = row.get("payload")
 
-        conf = float(row.get("confidence") or 0.0)
-        status = row.get("response", {}).get("status") or row.get("status")
-        rh = row.get("response_hash")
-        rsnip = row.get("response_snippet")
+        # Confidence
+        conf = float(row.get("confidence") or (row.get("ranker_meta") or {}).get("ranker_score") or 0.0)
 
+        # Response/meta & status (prefer canonical response.*)
+        resp = row.get("response") or row.get("response_meta") or {}
+        status = resp.get("status") or row.get("status") or None
+
+        # Legacy verify blob may carry status/redirect info
+        verify = (row.get("signals") or {}).get("verify") or row.get("verify") or {}
+        if status is None and isinstance(verify, dict):
+            status = verify.get("status")
+
+        # Response snippet/hash if present (non-fatal if absent)
+        rh = row.get("response_hash")
+        rsnip = row.get("response_snippet") or resp.get("snippet")
+
+        # Signals — keep as dict
         signals = row.get("signals") or {}
-        req_meta = row.get("request") or {}
-        resp_meta = row.get("response") or {}
+        if not isinstance(signals, dict):
+            signals = {}
+
+        # Ensure verify info is reflected under signals.open_redirect.* for the report
+        if isinstance(verify, dict):
+            od = signals.setdefault("open_redirect", {}) if isinstance(signals, dict) else {}
+            if isinstance(od, dict):
+                od.setdefault("location", verify.get("location"))
+                # may fill location_host on the UI later
 
         return Finding(
             job_id=job_id,
             method=method,
             url=url,
             param=(param if isinstance(param, str) else None),
-            family=family,
+            family=str(family),
             payload_id=payload_id,
             payload=(payload if isinstance(payload, str) else None),
             confidence=conf,
-            status=(int(status) if isinstance(status, int) or (isinstance(status, str) and status.isdigit()) else None),
+            status=(int(status) if isinstance(status, (int, float)) else None),
             response_hash=(str(rh) if rh else None),
             response_snippet=(str(rsnip) if rsnip else None),
-            signals=signals if isinstance(signals, dict) else {},
-            request_meta=req_meta if isinstance(req_meta, dict) else {},
-            response_meta=resp_meta if isinstance(resp_meta, dict) else {},
+            signals=signals,
+            request_meta=req if isinstance(req, dict) else {},
+            response_meta=resp if isinstance(resp, dict) else {},
         )
     except Exception:
         return None
@@ -188,13 +220,13 @@ def _load_findings(job_id: str) -> List[Finding]:
     for row in raw:
         if not isinstance(row, dict):
             continue
-        # Prefer high-signal entries; otherwise include attempt entries with high confidence
         typ = row.get("type")
-        if typ not in {"finding", "attempt"}:
+        if typ not in {"finding", "attempt", None}:
             continue
         f = _coerce_finding(job_id, row)
         if not f:
             continue
+        # Keep definitive findings or high-confidence attempts
         if typ == "finding" or (f.confidence >= 0.6):
             out.append(f)
     return out
@@ -218,14 +250,19 @@ def _median_latency_ms(f: Finding) -> Optional[int]:
     try:
         samples = (f.response_meta or {}).get("timing_samples_ms")
         if isinstance(samples, list) and samples:
-            return int(statistics.median([int(s) for s in samples if isinstance(s, (int, float))]))
+            vals = [float(s) for s in samples if isinstance(s, (int, float))]
+            if vals:
+                return int(statistics.median(vals))
     except Exception:
         pass
     # fallback to single elapsed
     try:
-        return int((f.response_meta or {}).get("elapsed_ms"))
+        v = (f.response_meta or {}).get("elapsed_ms")
+        if isinstance(v, (int, float)):
+            return int(v)
     except Exception:
-        return None
+        pass
+    return None
 
 
 # ----------------------------- report core ----------------------------
@@ -247,12 +284,18 @@ def _mk_table(rows: List[List[str]]) -> str:
     """
     if not rows:
         return ""
-    widths = [max(len(str(cell)) for cell in col) for col in zip(*rows)]
+    # Defensive: ensure all rows have the same width as header
+    width = len(rows[0])
+    norm_rows = [r[:width] + [""] * (width - len(r)) if len(r) < width else r[:width] for r in rows]
+    widths = [max(len(str(cell)) for cell in col) for col in zip(*norm_rows)]
+
     def fmt_row(r: List[Any]) -> str:
-        return "| " + " | ".join(str(c).ljust(w) for c, w in zip(r, widths)) + " |"
-    header = fmt_row(rows[0])
+        cells = [str(c) for c in r]
+        return "| " + " | ".join(s.ljust(w) for s, w in zip(cells, widths)) + " |"
+
+    header = fmt_row(norm_rows[0])
     sep = "| " + " | ".join("-" * w for w in widths) + " |"
-    body = "\n".join(fmt_row(r) for r in rows[1:])
+    body = "\n".join(fmt_row(r) for r in norm_rows[1:])
     return "\n".join([header, sep, body])
 
 
@@ -265,7 +308,7 @@ def _build_markdown(job_id: str, crawl: Dict[str, Any], findings: List[Finding],
     # --- Top findings table ---
     top = _top_n(findings, n=15)
     top_rows: List[List[str]] = [
-        ["#","Severity","Conf","Family","Method","URL","Param","Status","Latency(ms)","Snippet"]
+        ["#", "Severity", "Conf", "Family", "Method", "URL", "Param", "Status", "Latency(ms)", "Snippet"]
     ]
     for i, f in enumerate(top, start=1):
         top_rows.append([
@@ -276,8 +319,8 @@ def _build_markdown(job_id: str, crawl: Dict[str, Any], findings: List[Finding],
             f.method,
             f.url,
             f.param or "",
-            str(f.status or ""),
-            str(_median_latency_ms(f) or ""),
+            (str(f.status) if f.status is not None else ""),
+            (str(_median_latency_ms(f)) if _median_latency_ms(f) is not None else ""),
             _short(f.response_snippet, 120),
         ])
     top_md = _mk_table(top_rows) if len(top_rows) > 1 else "_No findings._"
@@ -286,15 +329,19 @@ def _build_markdown(job_id: str, crawl: Dict[str, Any], findings: List[Finding],
     cat_md = ""
     if isinstance(cats, dict) and isinstance(cats.get("summary_counts"), dict):
         cc = cats["summary_counts"]
-        cat_rows = [["Group","Count"]]
+        cat_rows = [["Group", "Count"]]
         for k in sorted(cc.keys()):
-            cat_rows.append([k, str(cc[k])])
+            try:
+                v = int(cc[k])
+            except Exception:
+                v = cc[k]
+            cat_rows.append([k, str(v)])
         cat_md = _mk_table(cat_rows)
 
     fam_counts = summary["by_family"]
     sev_counts = summary["by_severity"]
 
-    md = []
+    md: List[str] = []
     md.append(f"# Scan Report — Job `{job_id}`")
     md.append("")
     md.append(f"- Target: **{target}**")
@@ -330,7 +377,6 @@ def build_report(job_id: str) -> Dict[str, Any]:
     Writes to data/results/<job_id>/report.json and report.md
     Returns the JSON payload.
     """
-    job_dir = JOBS_DIR / job_id
     out_dir = RESULTS_DIR / job_id
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -384,7 +430,7 @@ if __name__ == "__main__":  # pragma: no cover
     import sys
     if len(sys.argv) != 2:
         print("Usage: python -m backend.services.report_builder <job_id>")
-        sys.exit(1)
+        raise SystemExit(1)
     jid = sys.argv[1]
     out = build_report(jid)
     print(f"Wrote report for job '{jid}' to {RESULTS_DIR / jid}/report.(json|md)")

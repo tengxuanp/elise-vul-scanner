@@ -21,8 +21,13 @@ class HTTPMethod(str, Enum):
 
 
 class PayloadFamily(str, Enum):
-    # Keep this minimal for M0; extend later (sqli, open_redirect, etc.)
+    """
+    Broadened family set to align with Stage-A routing and detectors.
+    """
     XSS = "xss"
+    SQLI = "sqli"
+    REDIRECT = "redirect"
+    BASE = "base"  # catch-all / probe family
 
 
 class XSSContext(str, Enum):
@@ -32,6 +37,17 @@ class XSSContext(str, Enum):
     JS = "js"                # inside a JS string / script context
     ENCODED = "encoded"      # URL-encoded / HTML entity encoded
     DOM = "dom"              # client-side DOM sink observed (future)
+
+
+class SQLIContext(str, Enum):
+    """
+    Optional SQLi sub-context to annotate signals/findings.
+    """
+    ERROR = "error"          # DB error/stacktrace
+    BOOLEAN = "boolean"      # true/false branch divergence
+    TIME = "time"            # time-delay observed
+    UNION = "union"          # UNION-based indicator
+    GENERIC = "generic"
 
 
 # ------------------------------- auth config --------------------------------
@@ -46,7 +62,7 @@ class AuthMode(str, Enum):
 
 class AuthConfig(BaseModel):
     """
-    Minimal auth for M0: cookie header passthrough is enough for Juice Shop.
+    Minimal auth: cookie header passthrough / basic / bearer.
     """
     mode: AuthMode = Field(default=AuthMode.NONE)
     cookie: Optional[str] = Field(
@@ -71,8 +87,7 @@ class AuthConfig(BaseModel):
 
 class Param(BaseModel):
     """
-    A single fuzzable parameter identifier. For M0 we only need the name.
-    'value' can seed baseline requests if you captured it; optional.
+    A single fuzzable parameter identifier. 'value' can seed baseline requests.
     """
     name: str = Field(..., min_length=1, description="Parameter key")
     value: Optional[str] = Field(default=None, description="Observed baseline value (optional)")
@@ -89,7 +104,7 @@ class Param(BaseModel):
 class ParamLocs(BaseModel):
     """
     Unified parameter carrier across pipeline.
-    Keys are FIXED and exhaustive for M0: query, form, json.
+    Keys are FIXED and exhaustive: query, form, json.
     """
     query: List[Param] = Field(default_factory=list)
     form: List[Param]  = Field(default_factory=list)
@@ -133,12 +148,12 @@ class EndpointOut(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def strip_fragment(cls, v: HttpUrl) -> HttpUrl:
+    def strip_fragment(cls, v: HttpUrl) -> Any:
         # remove #fragment to avoid SPA pseudo-URLs becoming endpoints
         parts = list(urlparse(str(v)))
         parts[5] = ""  # fragment
         clean = urlunparse(parts)
-        return HttpUrl(clean)
+        return clean  # Pydantic will re-parse into HttpUrl
 
     @field_validator("headers")
     @classmethod
@@ -165,7 +180,7 @@ class EndpointOut(BaseModel):
         return f"{self.method}|{self.path}|Q=[{q}]|F=[{f}]|J=[{j}]"
 
 
-# ---------------------------- fuzzing input (M0) -----------------------------
+# ---------------------------- fuzzing input ----------------------------------
 
 class FuzzTargets(BaseModel):
     """
@@ -197,11 +212,11 @@ class TestCaseIn(BaseModel):
 
     @field_validator("url")
     @classmethod
-    def strip_fragment(cls, v: HttpUrl) -> HttpUrl:
+    def strip_fragment(cls, v: HttpUrl) -> Any:
         parts = list(urlparse(str(v)))
         parts[5] = ""  # fragment
         clean = urlunparse(parts)
-        return HttpUrl(clean)
+        return clean
 
     @field_validator("headers")
     @classmethod
@@ -239,13 +254,19 @@ class ResponseMeta(BaseModel):
 
 class Signal(BaseModel):
     """
-    Detection signal emitted by detectors. For M0 focus on XSS.
+    Detection signal emitted by detectors. Family-aware with optional subcontexts.
+    - For XSS, set family=XSS and xss_context.
+    - For SQLi, set family=SQLI and sqli_context.
     """
     family: PayloadFamily = Field(default=PayloadFamily.XSS)
     name: str = Field(..., description="Short identifier for the signal rule")
+    # Back-compat for existing consumers:
     context: Optional[XSSContext] = Field(
-        default=None, description="XSS context classification, if available"
+        default=None, description="(Deprecated) XSS context classification"
     )
+    # New, family-specific optional context:
+    xss_context: Optional[XSSContext] = Field(default=None, description="XSS context")
+    sqli_context: Optional[SQLIContext] = Field(default=None, description="SQLi context")
     weight: float = Field(default=1.0, ge=0.0, le=10.0)
     snippet: Optional[str] = Field(default=None, description="Tiny excerpt around reflection")
 
@@ -261,7 +282,7 @@ class EvidenceOut(BaseModel):
     request: RequestMeta
     response: ResponseMeta
     signals: List[Signal] = Field(default_factory=list)
-    label: Optional[Literal["xss", "benign", "unknown"]] = Field(default=None)
+    label: Optional[Literal["xss", "sqli", "redirect", "benign", "unknown"]] = Field(default=None)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     ts: Optional[str] = Field(default=None, description="ISO timestamp when recorded")
 
@@ -280,11 +301,11 @@ class CrawlJobRequest(BaseModel):
 
     @field_validator("target_url")
     @classmethod
-    def strip_fragment(cls, v: HttpUrl) -> HttpUrl:
+    def strip_fragment(cls, v: HttpUrl) -> Any:
         parts = list(urlparse(str(v)))
         parts[5] = ""  # fragment
         clean = urlunparse(parts)
-        return HttpUrl(clean)
+        return clean
 
 
 # ------------------------------- utilities ----------------------------------

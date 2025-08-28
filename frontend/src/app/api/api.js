@@ -1,4 +1,4 @@
-// src/app/api/api.js
+// frontend/src/app/api/api.js
 import axios from 'axios';
 
 // Base URL comes from env in dev/prod; hardcoded fallback is only for local.
@@ -21,10 +21,10 @@ const normalizeBearer = (token) => {
 const pickBearerFromOpts = (opts = {}) =>
   normalizeBearer(
     opts.bearerToken ??
-    opts.bearer_token ??
-    opts.bearer ??
-    opts.token ??
-    null
+      opts.bearer_token ??
+      opts.bearer ??
+      opts.token ??
+      null
   );
 
 // Global response interceptor (cleaner error logs)
@@ -32,7 +32,11 @@ api.interceptors.response.use(
   (res) => res,
   (error) => {
     const payload = error?.response?.data;
-    const msg = payload?.detail || payload?.message || error.message || 'Unknown API error';
+    const msg =
+      payload?.detail ||
+      payload?.message ||
+      error.message ||
+      'Unknown API error';
     console.error('API Error:', msg, payload);
     return Promise.reject(error);
   }
@@ -62,10 +66,11 @@ export const getCategorizedEndpoints = async (target_url) =>
  * Run fuzzing for a job.
  * opts = {
  *   engine: 'core' | 'ffuf' | 'hybrid' (default 'core'),
- *   selection: [{ method, url, params?, body_keys? }] | null,
+ *   selection: [{ method, url, params? }] | null,
  *   bearerToken | bearer_token | bearer | token: string | null,  // auto 'Bearer ' prefix if missing
  *   topN: number (ffuf only),
- *   threshold: number (ffuf only)
+ *   threshold: number (ffuf only),
+ *   extraHeaders | extra_headers: { [k: string]: string }  // optional additional headers
  * }
  */
 export const fuzzByJob = async (job_id, opts = {}) => {
@@ -74,9 +79,12 @@ export const fuzzByJob = async (job_id, opts = {}) => {
     selection = null,
     topN = 3,
     threshold = 0.2,
+    extraHeaders,
+    extra_headers,
   } = opts;
 
   const bearer = pickBearerFromOpts(opts);
+  const extras = extraHeaders || extra_headers || null;
 
   const body = {
     engine,
@@ -86,6 +94,7 @@ export const fuzzByJob = async (job_id, opts = {}) => {
   };
 
   if (bearer) body.bearer_token = bearer;
+  if (extras) body.extra_headers = extras;
 
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
 };
@@ -93,16 +102,19 @@ export const fuzzByJob = async (job_id, opts = {}) => {
 // Convenience: send only chosen endpoint shapes to the backend (defaults to core engine)
 export const fuzzSelected = async (
   job_id,
-  selection,              // array of { method, url, params?, body_keys? }
-  opts = {}               // same shape as fuzzByJob opts (you can pass bearerToken/bearer_token/engine here)
+  selection, // array of { method, url, params? }
+  opts = {} // same shape as fuzzByJob opts (you can pass bearerToken/bearer_token/engine/extraHeaders here)
 ) => {
   const {
     engine = 'core',
     topN = 3,
     threshold = 0.2,
+    extraHeaders,
+    extra_headers,
   } = opts;
 
   const bearer = pickBearerFromOpts(opts);
+  const extras = extraHeaders || extra_headers || null;
 
   const body = {
     engine,
@@ -112,11 +124,12 @@ export const fuzzSelected = async (
   };
 
   if (bearer) body.bearer_token = bearer;
+  if (extras) body.extra_headers = extras;
 
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
 };
 
-// If you expose a pollable results route per job, keep this. If not, remove it.
+// If you expose a pollable results route per job, keep this.
 export const getFuzzResultByJob = async (job_id) =>
   (await api.get(`/fuzz/result/${job_id}`)).data;
 
@@ -124,6 +137,7 @@ export const getFuzzResultByJob = async (job_id) =>
 export const startProbe = async (job_id) =>
   (await api.post(`/probe/${job_id}`)).data;
 
+// Backend expected path is job-scoped; adjust if your backend uses a flat route.
 export const getRecommendations = async (job_id) =>
   (await api.get(`/recommend_probed/${job_id}`)).data;
 
@@ -133,8 +147,13 @@ export const exploitTarget = async (job_id, tool, endpoint_url, options = {}) =>
   (await api.post(`/exploit/${job_id}`, { tool, endpoint_url, options })).data;
 
 /* ===================== Reporting ===================== */
+// JSON report
 export const getReport = async (job_id) =>
-  (await api.get(`/report/${job_id}`, { responseType: 'blob' })).data;
+  (await api.get(`/report/${job_id}`)).data;
+
+// Markdown report (string)
+export const getReportMarkdown = async (job_id) =>
+  (await api.get(`/report/${job_id}/md`, { responseType: 'text' })).data;
 
 /* ===================== Utilities ===================== */
 export const setAuthHeader = (key, value) => {
@@ -163,6 +182,7 @@ export default {
   getRecommendations,
   exploitTarget,
   getReport,
+  getReportMarkdown,
   setAuthHeader,
   setBearerAuth,
 };
