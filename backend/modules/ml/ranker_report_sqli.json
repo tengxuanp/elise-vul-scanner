@@ -1,0 +1,79 @@
+{
+  "family": "sqli",
+  "samples_train": 229,
+  "queries_train": 20,
+  "samples_val": 68,
+  "queries_val": 5,
+  "metrics": {
+    "NDCG@3": 1.0,
+    "Hit@1": 1.0,
+    "Hit@3": 1.0,
+    "Hit@5": 1.0,
+    "queries": 5
+  },
+  "reliability_bins": [
+    {
+      "bin": 0,
+      "p_mean": 0.045580354598560344,
+      "emp_rate": 0.8275862068965517,
+      "count": 58
+    },
+    {
+      "bin": 1,
+      "p_mean": 0.1542946685274195,
+      "emp_rate": 1.0,
+      "count": 7
+    },
+    {
+      "bin": 2,
+      "p_mean": 0.27627675359156406,
+      "emp_rate": 1.0,
+      "count": 1
+    },
+    {
+      "bin": 3,
+      "p_mean": 0.35000000000000003,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 4,
+      "p_mean": 0.45,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 5,
+      "p_mean": 0.5,
+      "emp_rate": 1.0,
+      "count": 2
+    },
+    {
+      "bin": 6,
+      "p_mean": 0.6500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 7,
+      "p_mean": 0.75,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 8,
+      "p_mean": 0.8500000000000001,
+      "emp_rate": 0.0,
+      "count": 0
+    },
+    {
+      "bin": 9,
+      "p_mean": 0.95,
+      "emp_rate": 0.0,
+      "count": 0
+    }
+  ],
+  "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec comes from FeatureExtractor.extract_endpoint_features(...)",
+  "objective": "rank:pairwise",
+  "min_group_train": 2
+}

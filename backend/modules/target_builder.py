@@ -56,6 +56,16 @@ try:
         _PP = None
 except Exception:
     _PP = None
+
+# ---- optional family router (non-fatal if missing) -------------------------
+try:
+    from .family_router import choose_family  # type: ignore
+    _HAS_FAMILY_ROUTER = True
+except Exception:
+    _HAS_FAMILY_ROUTER = False
+    def choose_family(_: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
+        return {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
 # ---------------------------------------------------------------------------
 
 # Payload families (seed lists; fuzzer will extend context-aware)
@@ -114,6 +124,17 @@ PAYLOADS = {
     "base": ["__X__", "__X1__", "__X2__"],  # generic reflection probes
 }
 
+# Mapping to keep names consistent across modules (detectors use "redirect")
+FAM_ALIASES = {
+    "redirect": "redir",
+    "redir": "redir",
+    "xss": "xss",
+    "sqli": "sqli",
+    "base": "base",
+}
+
+# ------------------------ tiny utilities ------------------------------------
+
 def _rand_control(prefix="ctrl") -> str:
     return prefix + "_" + "".join(random.choices(string.ascii_letters + string.digits, k=8))
 
@@ -158,6 +179,17 @@ def _inject_query(url: str, param: str, value: str) -> str:
     qs = urlencode([(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])])
     return urlunparse((u.scheme, u.netloc, u.path, u.params, qs, u.fragment))
 
+def _normalize_query_value(url: str, param: str, placeholder: str = "<CTRL>") -> str:
+    """
+    Return URL where `param` exists and is set to a stable placeholder.
+    Used only for dedupe so different control strings don't create fake uniques.
+    """
+    u = urlparse(url)
+    q = parse_qs(u.query, keep_blank_values=True)
+    q[param] = [placeholder]
+    qs = urlencode([(k, v) for k, vs in q.items() for v in (vs if isinstance(vs, list) else [vs])])
+    return urlunparse((u.scheme, u.netloc, u.path, u.params, qs, u.fragment))
+
 def _baseline_value(name: str) -> str:
     n = name.lower()
     if "mail" in n or "email" in n:
@@ -173,7 +205,7 @@ def _baseline_value(name: str) -> str:
 def _payload_plan(param_name: str, method: str, content_type: Optional[str], path: str) -> List[str]:
     """
     Provide a smart seed list per-parameter. The fuzzer will still add its own
-    context-aware probes. This ensures we hit your 'proven' cases quickly.
+    context-aware probes. This ensures we hit known-good cases quickly.
     """
     n = (param_name or "").lower()
     pth = (path or "").lower()
@@ -183,7 +215,7 @@ def _payload_plan(param_name: str, method: str, content_type: Optional[str], pat
     if any(k in n for k in ["q", "query", "search", "name", "title", "comment", "message", "content", "text"]):
         plan += PAYLOADS["xss"] + PAYLOADS["base"]
 
-    # --- SQLi probes for identifiers/search
+    # --- SQLi probes for identifiers/search (kept for M1; harmless to include)
     if any(k in n for k in ["id", "uid", "user", "product", "item", "order", "sort", "orderby", "q", "query", "search", "s"]):
         plan += PAYLOADS["sqli"] + PAYLOADS["base"]
         # Juice Shop: add known-good SQLite-friendly payloads for /rest/products/search
@@ -195,12 +227,6 @@ def _payload_plan(param_name: str, method: str, content_type: Optional[str], pat
                 # UNION that matches the products query (10 columns; many NULLs)
                 "qwert')) UNION SELECT NULL,id,email,password,NULL,NULL,NULL,NULL,NULL,NULL FROM Users--",
             ]
-
-    # --- Login-ish fields (JSON or form)
-    looks_like_login = ("login" in pth) or (n in {"email","username","user","login"})
-    if looks_like_login and (method.upper() in {"POST","PUT","PATCH"}):
-        # Ensure boolean-based SQLi is tried first
-        plan = ["' OR '1'='1' -- ", "' OR '1'='2' -- "] + plan
 
     # --- Open-redirect probes
     if any(k in n for k in ["url", "next", "to", "dest", "redirect", "return", "return_to", "redirect_uri", "callback", "continue"]):
@@ -219,6 +245,38 @@ def _payload_plan(param_name: str, method: str, content_type: Optional[str], pat
             seen.add(p); out.append(p)
     return out
 
+def _plan_from_family(
+    family: str,
+    param_name: str,
+    method: str,
+    content_type: Optional[str],
+    path: str
+) -> List[str]:
+    """
+    Prioritize payloads for a given family (from family_router).
+    Always append a couple of base probes for reflection coverage.
+    """
+    fam = FAM_ALIASES.get((family or "").lower(), "base")
+    seeds = []
+    if fam == "xss":
+        seeds = PAYLOADS["xss"]
+    elif fam == "sqli":
+        seeds = PAYLOADS["sqli"]
+    elif fam == "redir":
+        seeds = PAYLOADS["redir"]
+    else:
+        # If router doesn't know, fall back to heuristic plan
+        return _payload_plan(param_name, method, content_type, path)
+
+    # Family-first, then a small base tail
+    merged = list(seeds) + PAYLOADS["base"]
+    # Dedupe
+    seen, out = set(), []
+    for p in merged:
+        if p not in seen:
+            seen.add(p); out.append(p)
+    return out
+
 def _priority_score(method: str, url: str, param: str) -> float:
     if _PP:
         try:
@@ -228,7 +286,7 @@ def _priority_score(method: str, url: str, param: str) -> float:
     # fallback heuristics
     s = 0.0
     lp, lu = (param or "").lower(), (url or "").lower()
-    if lp in {"id","uid","pid","productid","user","q","search","query","s","to","return_to","redirect","url","redirect_uri"}:
+    if lp in {"id","uid","pid","productid","user","q","search","query","s","to","return_to","redirect","url","redirect_uri","next","continue","dest"}:
         s += 0.6
     if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
         s += 0.25
@@ -255,7 +313,7 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
         if k.lower() not in lower:
             out[k] = v
 
-    set_if_absent("User-Agent", "Mozilla/5.0 (compatible; elise-target-builder/1.0)")
+    set_if_absent("User-Agent", "Mozilla/5.0 (compatible; elise-target-builder/1.1)")
     path = (urlparse(url).path or "").lower()
     wants_json = ("/api/" in path) or ("/rest/" in path)
     set_if_absent("Accept", "application/json, */*;q=0.8" if wants_json else "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -265,9 +323,18 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
     set_if_absent("Accept-Language", "en-US,en;q=0.8")
     return out
 
-def _canonical_ctype(ctype: Optional[str], body_type: Optional[str]) -> Optional[str]:
-    c = (ctype or "").lower().strip()
+def _canonical_ctype(ctype_hint: Optional[str], body_type: Optional[str]) -> Optional[str]:
+    """
+    Normalize to: application/json | application/x-www-form-urlencoded | multipart/form-data | None
+    """
+    c = (ctype_hint or "").lower().strip()
     if c:
+        if "json" in c:
+            return "application/json"
+        if "x-www-form-urlencoded" in c or "form-urlencoded" in c or "form" in c:
+            return "application/x-www-form-urlencoded"
+        if "multipart" in c:
+            return "multipart/form-data"
         return c
     bt = (body_type or "").lower().strip()
     if bt == "json":
@@ -294,23 +361,48 @@ def _infer_query_keys_from_url(url: str) -> List[str]:
     except Exception:
         return []
 
-def _infer_body_keys_from_templates(ep: Dict[str, Any], ctype: Optional[str]) -> List[str]:
-    # JSON body
+def _names_from_param_items(items: Any) -> List[str]:
+    """
+    Accepts a list of strings OR a list of dicts like {"name": "..."} (from Pydantic export).
+    """
+    out: List[str] = []
+    if isinstance(items, list):
+        for it in items:
+            if isinstance(it, str):
+                n = it.strip()
+            elif isinstance(it, dict):
+                n = str(it.get("name", "")).strip()
+            else:
+                n = str(getattr(it, "name", "")).strip()
+            if n:
+                out.append(n)
+    return _unique(out)
+
+def _infer_body_keys_from_templates(ep: Dict[str, Any], ctype: Optional[str]) -> Tuple[List[str], List[str]]:
+    """
+    Return (form_keys, json_keys) inferred from templates and hints.
+    """
+    form_keys: List[str] = []
+    json_keys: List[str] = []
+
+    # JSON template
     if (ctype or "").startswith("application/json"):
         tmpl = ep.get("body_template")
         if isinstance(tmpl, dict):
-            return list(tmpl.keys())
-    # Form payloads
+            json_keys = list(tmpl.keys())
+
+    # Form template
     ft = ep.get("form_template")
     if isinstance(ft, dict):
-        return list(ft.keys())
-    if isinstance(ft, list):
+        form_keys = [k for k in ft.keys()]
+    elif isinstance(ft, list):
         keys: List[str] = []
         for item in ft:
             if isinstance(item, dict) and item.get("name"):
                 keys.append(item["name"])
-        return keys
-    return []
+        form_keys = keys
+
+    return (form_keys, json_keys)
 
 # =============================================================================
 # Core builder for fuzzer_core.run_fuzz
@@ -325,7 +417,7 @@ def build_targets(
     Build param-exact fuzz targets consumed by fuzzer_core.run_fuzz.
 
     INPUT: merged_endpoints from crawler (each with:
-           url, method, param_locs {query:[...], body:[...]}, content_type | body_type,
+           url, method, param_locs {query:[...], form:[...], json:[...]}, content_type_hint | content_type | body_type,
            [body_template|form_template], [headers])
     OUTPUT: <job_dir>/targets.json
             {"targets":[
@@ -341,7 +433,12 @@ def build_targets(
                   "control_value": str,
                   "payloads": [str, ...],
                   "timeout": float,
-                  "priority": float
+                  "priority": float,
+                  # --- NON-BREAKING EXTRAS for transparency/UI ---
+                  "family_hint": "xss|sqli|redir|base",
+                  "family_confidence": float,
+                  "family_reason": str,
+                  "in_detail": "query|form|json"           # (extra; still keep 'in')
                 }, ...
             ]}
     """
@@ -370,25 +467,25 @@ def build_targets(
             continue
 
         path = urlparse(url).path
-        ctype = _canonical_ctype(ep.get("content_type"), ep.get("body_type"))
+        ctype = _canonical_ctype(ep.get("content_type_hint") or ep.get("content_type"), ep.get("body_type"))
 
-        # Base param locations from crawler (may be empty)
-        param_locs = ep.get("param_locs") or {
-            # ⚠️ include legacy fields too
-            "query": (ep.get("query_keys") or ep.get("params") or []),
-            "body": ep.get("body_keys", []),
-        }
+        # Base param locations from crawler (may be empty) — unified schema
+        locs = ep.get("param_locs") or {}
+        q_locs = _names_from_param_items(locs.get("query")) if isinstance(locs, dict) else []
+        f_locs = _names_from_param_items(locs.get("form")) if isinstance(locs, dict) else []
+        j_locs = _names_from_param_items(locs.get("json")) if isinstance(locs, dict) else []
+
+        # Legacy hints (if present)
+        legacy_query = ep.get("query_keys") or ep.get("params") or []
+        legacy_body  = ep.get("body_keys") or []
 
         # --- Assemble candidate query params (merge everything, keep order)
         q_candidates: List[str] = []
         # 1) canonical / crawler
-        if isinstance(param_locs.get("query"), list):
-            q_candidates += param_locs.get("query")  # type: ignore
+        q_candidates += q_locs
         # 2) legacy fields explicitly
-        if isinstance(ep.get("params"), list):
-            q_candidates += ep.get("params")  # type: ignore
-        if isinstance(ep.get("query_keys"), list):
-            q_candidates += ep.get("query_keys")  # type: ignore
+        if isinstance(legacy_query, list):
+            q_candidates += legacy_query  # type: ignore
         # 3) URL inference (handles blanks like ?q=)
         from_url = _infer_query_keys_from_url(url)
         if from_url:
@@ -401,19 +498,35 @@ def build_targets(
         q_candidates = _unique(q_candidates)
         q_params: List[str] = [p for p in q_candidates if p and not _is_token_param(p)]
 
-        # --- Assemble candidate body params (with template fallback)
-        b_candidates: List[str] = []
-        if isinstance(param_locs.get("body"), list):
-            b_candidates += param_locs.get("body")  # type: ignore
-        if isinstance(ep.get("body_keys"), list):
-            b_candidates += ep.get("body_keys")  # type: ignore
-        if not b_candidates:
-            b_candidates += _infer_body_keys_from_templates(ep, ctype)
-        b_candidates = _unique(b_candidates)
-        b_params: List[str] = [p for p in b_candidates if p and not _is_token_param(p)]
+        # --- Assemble candidate body params (split form vs json)
+        f_candidates: List[str] = []
+        j_candidates: List[str] = []
+
+        # Prefer canonical locs
+        f_candidates += f_locs
+        j_candidates += j_locs
+
+        # Legacy body keys (we can't tell form vs json from this alone)
+        if isinstance(legacy_body, list):
+            # If ctype says json, treat them as json keys; else as form keys
+            if ctype == "application/json":
+                j_candidates += legacy_body  # type: ignore
+            else:
+                f_candidates += legacy_body  # type: ignore
+
+        # Template fallback
+        f_from_tmpl, j_from_tmpl = _infer_body_keys_from_templates(ep, ctype)
+        f_candidates += f_from_tmpl
+        j_candidates += j_from_tmpl
+
+        f_candidates = _unique(f_candidates)
+        j_candidates = _unique(j_candidates)
+
+        f_params: List[str] = [p for p in f_candidates if p and not _is_token_param(p)]
+        j_params: List[str] = [p for p in j_candidates if p and not _is_token_param(p)]
 
         # If we truly have nothing actionable, skip
-        if not q_params and not b_params:
+        if not q_params and not f_params and not j_params:
             continue
 
         # Merge safe headers: start with captured headers (if any), then add auth cookie/bearer
@@ -434,17 +547,17 @@ def build_targets(
         json_template: Dict[str, Any] = {}
 
         if ctype == "application/json":
-            # Prefer provided body_template; else synthesize from b_params
-            src = ep.get("body_template") or {k: _baseline_value(k) for k in b_params}
+            # Prefer provided body_template; else synthesize from j_params
+            src = ep.get("body_template") or {k: _baseline_value(k) for k in j_params}
             if isinstance(src, dict):
-                # include all keys from template OR discovered body params
-                keys = list({*list(src.keys()), *b_params})
+                # include all keys from template OR discovered json params
+                keys = list({*list(src.keys()), *j_params})
                 for k in keys:
                     v = src.get(k)
                     json_template[k] = v if v is not None else _baseline_value(k)
         elif method in {"POST", "PUT", "PATCH"}:
             # assume x-www-form-urlencoded by default
-            # Prefer provided form_template; else synthesize from b_params
+            # Prefer provided form_template; else synthesize from f_params
             ft = ep.get("form_template")
             if isinstance(ft, dict):
                 for k, v in ft.items():
@@ -455,7 +568,7 @@ def build_targets(
                     if isinstance(i, dict) and i.get("name") and not _is_token_param(i["name"]):
                         form_template[i["name"]] = _baseline_value(i["name"])
             # fallback to discovered keys
-            for k in b_params:
+            for k in f_params:
                 if k not in form_template and not _is_token_param(k):
                     form_template[k] = _baseline_value(k)
 
@@ -464,58 +577,142 @@ def build_targets(
         for p in q_params:
             ctrl = _rand_control()
             base_url = _inject_query(url, p, ctrl)  # ensure target param is present with control value
-            key = _dedupe_key(method, base_url, "query", p, None)
+
+            # Family recommendation (query)
+            fam_info = choose_family({
+                "url": url,
+                "method": method,
+                "in": "query",
+                "target_param": p,
+                "content_type": None,
+                "control_value": ctrl,
+            }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
+            family = fam_info.get("family") or "base"
+            payloads = _plan_from_family(family, p, method, None, path)
+
+            # Dedupe against a placeholder URL so ctrl value doesn't create fake uniques
+            dedupe_url = _normalize_query_value(url, p, "<CTRL>")
+            key = _dedupe_key(method, dedupe_url, "query", p, None)
             if key in seen:
                 continue
             seen.add(key)
+
             t = {
                 "id": str(uuid.uuid4()),
                 "method": method,
                 "url": base_url,
                 "in": "query",
+                "in_detail": "query",
                 "target_param": p,
                 "content_type": None,
                 "headers": dict(headers),
                 "body": None,
                 "control_value": ctrl,
-                "payloads": _payload_plan(p, method, ctype, path),
+                "payloads": payloads,
                 "timeout": float(timeout_s),
                 "priority": _priority_score(method, url, p),
+                # transparency
+                "family_hint": family,
+                "family_confidence": float(fam_info.get("confidence", 0.0)),
+                "family_reason": fam_info.get("reason") or "",
             }
             targets.append(t)
 
-        # Body params
-        for p in b_params:
-            ctrl = _rand_control()
+        # Skip multipart/form-data for now (engine doesn't synthesize proper multipart bodies)
+        if ctype == "multipart/form-data":
+            # Still allow query targets above; no body targets generated.
+            pass
+        else:
+            # Form body params
+            if ctype != "application/json":
+                for p in f_params:
+                    ctrl = _rand_control()
+                    # x-www-form-urlencoded (string)
+                    ft = {**form_template, p: ctrl} if form_template else {p: ctrl}
+                    body = "&".join(f"{k}={quote_plus(str(v))}" for k, v in ft.items())
+                    headers_body = _merge_headers(headers, {"Content-Type": "application/x-www-form-urlencoded"})
+
+                    fam_info = choose_family({
+                        "url": url,
+                        "method": method,
+                        "in": "form",
+                        "target_param": p,
+                        "content_type": "application/x-www-form-urlencoded",
+                        "control_value": ctrl,
+                    }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
+
+                    family = fam_info.get("family") or "base"
+                    payloads = _plan_from_family(family, p, method, ctype, path)
+
+                    key = _dedupe_key(method, url, "body", p, "application/x-www-form-urlencoded")
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    t = {
+                        "id": str(uuid.uuid4()),
+                        "method": method,
+                        "url": url,
+                        "in": "body",
+                        "in_detail": "form",
+                        "target_param": p,
+                        "content_type": "application/x-www-form-urlencoded",
+                        "headers": headers_body,
+                        "body": body,
+                        "control_value": ctrl,
+                        "payloads": payloads,
+                        "timeout": float(timeout_s),
+                        "priority": _priority_score(method, url, p),
+                        "family_hint": family,
+                        "family_confidence": float(fam_info.get("confidence", 0.0)),
+                        "family_reason": fam_info.get("reason") or "",
+                    }
+                    targets.append(t)
+
+            # JSON body params
             if ctype == "application/json":
-                body = {**json_template, p: ctrl} if json_template else {p: ctrl}
-                headers_body = _merge_headers(headers, {"Content-Type": "application/json"})
-            else:
-                # x-www-form-urlencoded (string)
-                ft = {**form_template, p: ctrl} if form_template else {p: ctrl}
-                body = "&".join(f"{k}={quote_plus(str(v))}" for k, v in ft.items())
-                headers_body = _merge_headers(headers, {"Content-Type": "application/x-www-form-urlencoded"})
+                for p in j_params:
+                    ctrl = _rand_control()
+                    body = {**json_template, p: ctrl} if json_template else {p: ctrl}
+                    headers_body = _merge_headers(headers, {"Content-Type": "application/json"})
 
-            key = _dedupe_key(method, url, "body", p, ctype)
-            if key in seen:
-                continue
-            seen.add(key)
+                    fam_info = choose_family({
+                        "url": url,
+                        "method": method,
+                        "in": "json",
+                        "target_param": p,
+                        "content_type": "application/json",
+                        "control_value": ctrl,
+                    }) if _HAS_FAMILY_ROUTER else {"family": "base", "confidence": 0.0, "reason": "router_unavailable"}
 
-            t = {
-                "id": str(uuid.uuid4()),
-                "method": method,
-                "url": url,
-                "in": "body",
-                "target_param": p,
-                "content_type": ctype,
-                "headers": headers_body,
-                "body": body,
-                "control_value": ctrl,
-                "payloads": _payload_plan(p, method, ctype, path),
-                "timeout": float(timeout_s),
-                "priority": _priority_score(method, url, p),
-            }
-            targets.append(t)
+                    family = fam_info.get("family") or "base"
+                    payloads = _plan_from_family(family, p, method, ctype, path)
+
+                    key = _dedupe_key(method, url, "body", p, "application/json")
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    t = {
+                        "id": str(uuid.uuid4()),
+                        "method": method,
+                        "url": url,
+                        "in": "body",
+                        "in_detail": "json",
+                        "target_param": p,
+                        "content_type": "application/json",
+                        "headers": headers_body,
+                        "body": body,
+                        "control_value": ctrl,
+                        "payloads": payloads,
+                        "timeout": float(timeout_s),
+                        "priority": _priority_score(method, url, p),
+                        "family_hint": family,
+                        "family_confidence": float(fam_info.get("confidence", 0.0)),
+                        "family_reason": fam_info.get("reason") or "",
+                    }
+                    targets.append(t)
 
     # Sort by priority desc (so the fuzzer hits juicier params first)
     targets.sort(key=lambda t: t.get("priority", 0.0), reverse=True)
@@ -677,7 +874,7 @@ def _add_priority_scores(targets: List[Dict[str, Any]]) -> None:
         else:
             lp = p.lower()
             lu = u.lower()
-            if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url"}:
+            if lp in {"id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url","redirect_uri","next","continue","dest"}:
                 score += 0.6
             if any(x in lu for x in ("/login", "/auth", "/admin", "/search", "/redirect", "/report", "/download", "/rest/products/search", "/rest/user/login")):
                 score += 0.25

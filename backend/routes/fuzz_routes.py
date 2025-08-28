@@ -12,51 +12,66 @@ from pydantic import BaseModel, Field
 from urllib.parse import urlparse
 
 # ---- engines ----
-from ..modules.fuzzer_core import run_fuzz                           # primary (verification-first)
+from ..modules.fuzzer_core import run_fuzz  # primary (verification-first)
 try:
     # optional, legacy ffuf runner used inside _fuzz_targets_ffuf()
-    from ..modules.fuzzer_ffuf import run_ffuf                       # type: ignore
+    from ..modules.fuzzer_ffuf import run_ffuf  # type: ignore
 except Exception:  # pragma: no cover
     run_ffuf = None  # type: ignore
 
 # ---- builders ----
 # New builder that consumes merged endpoints from crawl_result.json
-from ..modules.target_builder import build_targets                    # type: ignore
+from ..modules.target_builder import build_targets  # type: ignore
 
 # ---- optional ML/feature plumbing (safe fallbacks) ----
 try:
-    from ..modules.feature_extractor import FeatureExtractor          # type: ignore
+    from ..modules.feature_extractor import FeatureExtractor  # type: ignore
 except Exception:  # pragma: no cover
     class FeatureExtractor:  # minimal stub
         def extract_features(self, *a, **kw): return {}
+
 try:
-    from ..modules.recommender import Recommender                     # type: ignore
+    from ..modules.recommender import Recommender  # type: ignore
 except Exception:  # pragma: no cover
     class Recommender:  # minimal stub
         def load(self): ...
         def recommend(self, *a, **kw): return []
 
+def _init_reco() -> Optional[Recommender]:
+    """Instantiate and best-effort load recommender."""
+    try:
+        r = Recommender()
+        try:
+            if hasattr(r, "load"):
+                r.load()  # may no-op
+        except Exception:
+            logging.exception("Recommender.load() failed; continuing with object anyway")
+        return r
+    except Exception:
+        logging.exception("Failed to initialize Recommender")
+        return None
+
 # ---- DB (optional) ----
 try:
-    from ..db import SessionLocal                                     # type: ignore
-    from ..models import ScanJob, JobPhase                             # type: ignore
+    from ..db import SessionLocal  # type: ignore
+    from ..models import ScanJob, JobPhase  # type: ignore
 except Exception:  # pragma: no cover
     SessionLocal, ScanJob, JobPhase = None, None, None
 
 # ---- filesystem layout ----
-REPO_ROOT  = Path(__file__).resolve().parents[2]
-DATA_DIR   = REPO_ROOT / "data"
-JOBS_DIR   = DATA_DIR / "jobs"
-RESULTS_DIR= DATA_DIR / "results"
-FFUF_TMP   = DATA_DIR / "results" / "ffuf"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
+JOBS_DIR = DATA_DIR / "jobs"
+RESULTS_DIR = DATA_DIR / "results"
+FFUF_TMP = DATA_DIR / "results" / "ffuf"
 for _p in (JOBS_DIR, RESULTS_DIR, FFUF_TMP):
     _p.mkdir(parents=True, exist_ok=True)
 
 # ---- optional evidence sink ----
 try:
-    from ..modules.evidence_sink import persist_evidence              # type: ignore
+    from ..modules.evidence_sink import persist_evidence  # type: ignore
 except Exception:  # pragma: no cover
-    def persist_evidence(**kwargs):                                   # type: ignore
+    def persist_evidence(**kwargs):  # type: ignore
         return {"endpoint_id": None, "test_case_id": None, "evidence_id": None}
 
 router = APIRouter()
@@ -79,11 +94,11 @@ class FuzzTarget(BaseModel):
 
 
 class EndpointShape(BaseModel):
-    """High-level endpoint selector from the UI."""
+    """High-level endpoint selector from the UI (method + exact URL)."""
     method: str
     url: str
-    params: Optional[List[str]] = None     # if provided, restrict to these param names
-    body_keys: Optional[List[str]] = None  # informational; we match by param
+    # If provided, restrict to these parameter names across ANY location (query|form|json)
+    params: Optional[List[str]] = None
 
 
 class FuzzByJobPayload(BaseModel):
@@ -118,14 +133,27 @@ def _filter_endpoints_by_selection(
     endpoints: List[Dict[str, Any]],
     selection: Optional[List[EndpointShape]],
 ) -> List[Dict[str, Any]]:
-    """Filter merged endpoints (from crawler) by method+url and optional param list (affects param_locs)."""
+    """
+    Filter merged endpoints (from crawler) by method+url and optional param list.
+    If params are provided, trim param_locs to those names across query|form|json.
+    """
     if not selection:
         return endpoints
-    # Build a map of (METHOD URL)-> allowed params set or None (means all)
+
+    # Map "METHOD URL" -> allowed set (None = all params)
     allow: Dict[str, Optional[set]] = {}
     for s in selection:
         key = _key(s.method, s.url)
-        allow[key] = set(s.params) if s.params else None
+        allow[key] = set([p for p in (s.params or []) if p]) if s.params else None
+
+    def _names(items):
+        out = []
+        for it in items or []:
+            if isinstance(it, str):
+                out.append(it)
+            elif isinstance(it, dict) and it.get("name"):
+                out.append(it["name"])
+        return out
 
     filtered: List[Dict[str, Any]] = []
     for ep in endpoints:
@@ -134,19 +162,35 @@ def _filter_endpoints_by_selection(
             continue
         allowed = allow[key]
         if allowed is None:
-            filtered.append(ep)
+            # Normalize convenience fields even if we accept all params
+            ep2 = dict(ep)
+            locs = dict(ep2.get("param_locs") or {})
+            ep2["param_locs"] = {
+                "query": _names(locs.get("query")),
+                "form": _names(locs.get("form")),
+                "json": _names(locs.get("json")),
+            }
+            ep2["query_keys"] = ep2["param_locs"]["query"]
+            ep2["body_keys"] = ep2["param_locs"]["form"] or ep2["param_locs"]["json"]
+            ep2["content_type"] = ep.get("content_type_hint") or ep.get("content_type")
+            filtered.append(ep2)
             continue
-        # Shallow copy and trim param_locs/query/body keys to allowed set
+
+        # Trim to allowed names
         ep2 = dict(ep)
         locs = dict(ep2.get("param_locs") or {})
-        q = [p for p in (locs.get("query") or []) if p in allowed]
-        b = [p for p in (locs.get("body") or []) if p in allowed]
-        if not q and not b:
+        qn = [n for n in _names(locs.get("query")) if n in allowed]
+        fn = [n for n in _names(locs.get("form")) if n in allowed]
+        jn = [n for n in _names(locs.get("json")) if n in allowed]
+        if not (qn or fn or jn):
             continue
-        ep2["param_locs"] = {"query": q, "body": b, "header": [], "cookie": []}
-        ep2["query_keys"] = q
-        ep2["body_keys"] = b
+        ep2["param_locs"] = {"query": qn, "form": fn, "json": jn}
+        # legacy helpers for any old code paths
+        ep2["query_keys"] = qn
+        ep2["body_keys"] = fn if fn else jn
+        ep2["content_type"] = ep.get("content_type_hint") or ep.get("content_type")
         filtered.append(ep2)
+
     return filtered
 
 
@@ -192,6 +236,106 @@ def _build_global_headers(payload: Optional[FuzzByJobPayload]) -> Dict[str, str]
         # last-write-wins; explicit extras override Authorization if they choose to
         gh[k] = v
     return gh
+
+
+def _hostname_of(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    try:
+        return urlparse(url).netloc or None
+    except Exception:
+        return None
+
+
+def _post_normalize_row_for_ui(one: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Make sure the row contains:
+      - signals.verify (dup of top-level verify if needed)
+      - signals.open_redirect.{open_redirect,location,location_host}
+      - origin: 'ml' | 'curated'
+      - ranker_meta (and mirror ranker_score top-level for legacy)
+      - method upper-cased; family present when we can infer it
+    """
+    out = dict(one or {})
+    signals = dict(out.get("signals") or {})
+    # Copy verify up into signals.verify if present elsewhere
+    verify = out.get("verify") or signals.get("verify") or (out.get("response_meta") or {}).get("verify")
+    if isinstance(verify, dict):
+        signals["verify"] = verify
+
+    # Open-redirect consolidation
+    loc = None
+    if isinstance(verify, dict):
+        loc = verify.get("location")
+    open_redirect = signals.get("external_redirect") or signals.get("open_redirect", {}).get("open_redirect")
+    open_redirect_obj = dict(signals.get("open_redirect") or {})
+    if loc is not None:
+        open_redirect_obj["location"] = loc
+    if "open_redirect" not in open_redirect_obj and isinstance(open_redirect, bool):
+        open_redirect_obj["open_redirect"] = open_redirect
+    if "location_host" not in open_redirect_obj and loc:
+        open_redirect_obj["location_host"] = _hostname_of(loc)
+    if open_redirect_obj:
+        signals["open_redirect"] = open_redirect_obj
+
+    # Ensure booleans exist (even if falsey) for UI safety
+    for k in ("sql_error", "boolean_sqli", "time_sqli", "xss_reflected", "external_redirect"):
+        if k not in signals:
+            signals[k] = bool(signals.get(k))
+
+    out["signals"] = signals
+
+    # Origin determination
+    origin_existing = (out.get("origin") or (out.get("meta") or {}).get("origin") or "").strip().lower()
+    is_ml_flags = any([
+        bool(out.get("is_ml")),
+        isinstance(out.get("ml"), (dict, bool)) and out.get("ml") not in (False, None),
+        isinstance(out.get("ranker_meta"), dict) and (
+            "ranker_score" in out["ranker_meta"]
+            or "family_probs" in out["ranker_meta"]
+            or "model_ids" in out["ranker_meta"]
+        ),
+        isinstance(out.get("ml_meta"), dict),
+        isinstance(out.get("ranker"), dict),
+        isinstance((out.get("payload_id") or ""), str) and out.get("payload_id", "").lower().startswith("ml-"),
+        origin_existing == "ml",
+    ])
+    out["origin"] = "ml" if is_ml_flags else "curated"
+
+    # Ranker meta mirroring (so UI always finds something)
+    rm = out.get("ranker_meta") or out.get("ranker") or out.get("ml_meta") or {}
+    if not isinstance(rm, dict):
+        rm = {}
+    # If no family chosen, but we have "family", mirror it
+    if "family_chosen" not in rm and out.get("family"):
+        rm["family_chosen"] = out.get("family")
+    out["ranker_meta"] = rm
+    if "ranker_score" in rm and "ranker_score" not in out:
+        try:
+            out["ranker_score"] = float(rm["ranker_score"])
+        except Exception:
+            pass
+
+    # Method normalization
+    if out.get("method"):
+        out["method"] = str(out["method"]).upper()
+
+    # Family fallback if missing (very light heuristic)
+    if not out.get("family"):
+        param = (out.get("param") or "").lower()
+        url_l = (out.get("url") or "").lower()
+        if param in {"to", "return_to", "redirect", "url", "next", "callback", "continue"} or "redirect" in url_l:
+            out["family"] = "redirect"
+        elif param in {"q", "query", "search", "comment", "message", "content", "text", "title", "name"}:
+            out["family"] = "xss"
+        else:
+            out["family"] = "sqli"
+
+    return out
+
+
+def _post_normalize_results_for_ui(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [_post_normalize_row_for_ui(r) for r in (rows or [])]
 
 
 # =========================
@@ -291,12 +435,12 @@ def _guess_label(payload: str) -> str:
     s = (payload or "").lower()
     if any(x in s for x in ("<script", "onerror=", "onload=", "alert(")): return "xss"
     if any(x in s for x in ("http://", "https://", "//")): return "redirect"
-    if any(x in s for x in (" or 1=1", "'--", "\"--")): return "sqli"
+    if any(x in s for x in (" or 1=1", "'--", "\"--", "union select", "sleep(")): return "sqli"
     return "benign"
 
 # optional ML delta scorer
 try:
-    from ..modules.ml.delta_scorer import DeltaScorer                # type: ignore
+    from ..modules.ml.delta_scorer import DeltaScorer  # type: ignore
     DELTA_SCORER: Optional[DeltaScorer] = DeltaScorer()
     try:
         DELTA_SCORER.load()
@@ -370,6 +514,10 @@ def _fuzz_targets_ffuf(
     results: List[Dict[str, Any]] = []
 
     for t in targets:
+        # Determine family up-front and use it consistently (ML + fallback)
+        content_type = (t.meta or {}).get("headers", {}).get("Content-Type")
+        family = _choose_family(t.method, t.url, t.param, content_type)
+
         # feature extraction (best-effort; does not block)
         try:
             feats = fe.extract_features(t.url, t.param, payload="' OR 1=1 --", method=t.method)
@@ -377,13 +525,24 @@ def _fuzz_targets_ffuf(
             logging.exception("feature_extractor failed for %s %s", t.url, t.param)
             feats = None
 
-        # payload selection (ML or fallback)
+        # payload selection (ML or fallback) — now passing 'family' into the recommender
+        used_fallback = False
         try:
             if reco is not None and feats is not None:
                 try:
-                    pairs = reco.recommend(feats, top_n=top_n, threshold=threshold)  # [(payload, prob), ...]
+                    pairs = reco.recommend(
+                        feats,
+                        top_n=top_n,
+                        threshold=threshold,
+                        family=family,  # <-- critical fix
+                    )  # [(payload, prob), ...]
                 except TypeError:
-                    pairs = reco.recommend(feats, top_n=top_n)  # legacy signature
+                    # legacy signature without threshold
+                    pairs = reco.recommend(
+                        feats,
+                        top_n=top_n,
+                        family=family,  # <-- critical fix
+                    )
                 candidates = [(p, float(conf)) for p, conf in (pairs or [])]
             else:
                 candidates = []
@@ -392,7 +551,7 @@ def _fuzz_targets_ffuf(
             candidates = []
 
         if not candidates:
-            family = _choose_family(t.method, t.url, t.param, (t.meta or {}).get("headers", {}).get("Content-Type"))
+            used_fallback = True
             for p in _fallback_payloads_for_family(family):
                 candidates.append((p, 0.0))
 
@@ -451,6 +610,15 @@ def _fuzz_targets_ffuf(
                     derived_conf = _derive_confidence_fallback(float(base_conf or 0.0), len(ffuf_out.get("matches") or []), external_redirect)
 
                 matches = ffuf_out.get("matches") or []
+
+                # --- Construct result with ML/ranker + origin + signals.verify ---
+                used_ml = not used_fallback and (reco is not None) and (feats is not None)
+                ranker_meta = {
+                    "family_chosen": family,
+                    "ranker_score": float(base_conf or 0.0) if used_ml else None,
+                    "family_probs": {},
+                } if used_ml else {}
+
                 one = {
                     "url": t.url,
                     "param": t.param,
@@ -461,7 +629,22 @@ def _fuzz_targets_ffuf(
                     "verify": verify_meta,
                     "baseline": baseline_meta,
                     "delta": delta,
-                    "signals": {"external_redirect": external_redirect},
+                    "family": family,
+                    # Origin & ranker
+                    "origin": "ml" if used_ml else "curated",
+                    "ranker_meta": ranker_meta,
+                    "ranker_score": ranker_meta.get("ranker_score"),
+                    "ml": {"enabled": True, "ranker": ranker_meta} if used_ml else False,
+                    # Signals: include external + open_redirect shape + dup verify for UI
+                    "signals": {
+                        "external_redirect": external_redirect,
+                        "verify": verify_meta or {},
+                        "open_redirect": {
+                            "open_redirect": external_redirect,
+                            "location": (verify_meta or {}).get("location"),
+                            "location_host": _hostname_of((verify_meta or {}).get("location")),
+                        },
+                    },
                     "ffuf": {
                         "match_count": len(matches),
                         "errors": ffuf_out.get("errors"),
@@ -479,20 +662,28 @@ def _fuzz_targets_ffuf(
                         ],
                     },
                 }
-                results.append(one)
 
-                # optional: persist to your evidence sink
+                results.append(_post_normalize_row_for_ui(one))
+
+                # optional: persist to your evidence sink (unified locations)
                 if t.job_id:
                     try:
                         label = _guess_label(payload)
+                        body_type = (t.meta or {}).get("body_type")
+                        if body_type == "json":
+                            locs = {"json": [t.param]}
+                        elif body_type == "form":
+                            locs = {"form": [t.param]}
+                        else:
+                            locs = {"query": [t.param]}
                         persist_evidence(
                             job_id=t.job_id,
                             method=t.method,
                             url=t.url,
-                            param_locs={"body": [t.param]} if ((t.meta or {}).get("body_type") in {"json","form"}) else {"query": [t.param]},
+                            param_locs=locs,
                             param=t.param,
                             family=label,
-                            payload_id="ffuf",
+                            payload_id=("ml-ffuf" if used_ml else "ffuf"),
                             request_meta={"headers": eff_headers},
                             response_meta={"verify": verify_meta, "baseline": baseline_meta, "delta": delta},
                             signals={"external_redirect": external_redirect, "ffuf_match_count": len(matches)},
@@ -504,7 +695,7 @@ def _fuzz_targets_ffuf(
 
             except Exception as e:
                 logging.exception("ffuf run failed for %s %s", t.url, t.param)
-                results.append({
+                results.append(_post_normalize_row_for_ui({
                     "url": t.url,
                     "param": t.param,
                     "method": t.method,
@@ -513,7 +704,9 @@ def _fuzz_targets_ffuf(
                     "stage": "ffuf",
                     "error": str(e),
                     "meta": t.meta,
-                })
+                    "family": family,
+                    "origin": "curated",
+                }))
             finally:
                 try:
                     payload_file.unlink(missing_ok=True)
@@ -540,9 +733,43 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
     # Normalize bearer before handing to builder (builder will set header)
     norm = _normalize_bearer(bearer_token)
     # build_targets writes targets.json and returns its path
-    targets_path = build_targets(eps, job_dir, bearer_token=(norm.split(" ", 1)[1] if norm else None))  # pass raw token if builder expects it
+    # NOTE: builder expects raw token without the "Bearer " prefix
+    raw_token = norm.split(" ", 1)[1] if norm else None
+    targets_path = build_targets(eps, job_dir, bearer_token=raw_token)  # writes <job_dir>/targets.json
     evidence_path = run_fuzz(job_dir, targets_path, out_dir=job_dir / "results")
-    return _read_evidence(evidence_path)
+    rows = _read_evidence(evidence_path)
+
+    # Best-effort normalization so UI always sees origin/ranker_meta/signals.verify
+    normed: List[Dict[str, Any]] = []
+    for r in rows:
+        # Try to surface 'verify' if present in response_meta or nested signals
+        verify = (
+            (r.get("signals") or {}).get("verify")
+            or (r.get("response_meta") or {}).get("verify")
+            or r.get("verify")
+        )
+        if verify:
+            r.setdefault("signals", {}).setdefault("verify", verify)
+            r.setdefault("signals", {}).setdefault("open_redirect", {})
+            r["signals"]["open_redirect"].setdefault("location", verify.get("location"))
+            r["signals"]["open_redirect"].setdefault("location_host", _hostname_of(verify.get("location")))
+
+        # Mirror any nested ML/ranker into ranker_meta for consistency
+        if "ranker_meta" not in r:
+            for k in ("ranker", "ml_meta",):
+                if isinstance(r.get(k), dict):
+                    r["ranker_meta"] = dict(r[k])  # shallow copy
+
+        # If there is an explicit origin/flag, keep it; else infer later
+        if "origin" not in r:
+            if r.get("is_ml") or isinstance(r.get("ml"), (dict, bool)):
+                r["origin"] = "ml"
+            elif isinstance(r.get("payload_id"), str) and r["payload_id"].lower().startswith("ml-"):
+                r["origin"] = "ml"
+
+        normed.append(_post_normalize_row_for_ui(r))
+
+    return normed
 
 
 # =========================
@@ -551,7 +778,7 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
 @router.post("/fuzz")
 def fuzz_many(
     targets: List[FuzzTarget],
-    reco: Optional[Recommender] = Depends(lambda: Recommender() if Recommender else None),  # keep legacy dep
+    reco: Optional[Recommender] = Depends(_init_reco),  # explicit load path
 ):
     """
     Legacy endpoint: fuzz an explicit list of FuzzTarget items via ffuf flow.
@@ -568,7 +795,7 @@ def fuzz_many(
 def fuzz_by_job(
     job_id: str,
     payload: Optional[FuzzByJobPayload] = None,
-    reco: Optional[Recommender] = Depends(lambda: Recommender() if Recommender else None),
+    reco: Optional[Recommender] = Depends(_init_reco),
 ):
     """
     Run fuzzing for a job. Engines:
@@ -596,7 +823,7 @@ def fuzz_by_job(
     results: List[Dict[str, Any]] = []
 
     if engine in {"ffuf", "hybrid"}:
-        # Build legacy per-param targets from captured traffic (query-only fallback)
+        # Build legacy per-param targets from captured traffic (query-only fallback for ffuf simplicity)
         blob = _load_crawl(job_id)
         base_host = urlparse(blob.get("target") or blob.get("target_url") or "").netloc
         raw_targets = blob.get("captured_requests") or []
@@ -620,7 +847,7 @@ def fuzz_by_job(
                         )
                     )
         if payload and payload.selection:
-            tmp_targets = [FuzzTarget(**t.dict()) for t in _filter_targets_by_selection([t.dict() for t in tmp_targets], payload.selection)]
+            tmp_targets = [FuzzTarget(**t.dict()) for t in _filter_endpoints_by_selection([t.dict() for t in tmp_targets], payload.selection)]
         results_ffuf = _fuzz_targets_ffuf(
             tmp_targets,
             reco=reco,
