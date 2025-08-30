@@ -1,7 +1,7 @@
 {
   "feature_dim": 17,
   "feature_names": null,
-  "note": "Rankers expect [endpoint_feature_vector] + [payload_desc(5)] at inference.",
+  "note": "Rankers expect [endpoint_feature_vector] + [payload_desc(20)] at inference.",
   "families_trained": [
     "sqli",
     "xss",

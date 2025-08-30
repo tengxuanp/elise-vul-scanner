@@ -65,7 +65,8 @@ except Exception:
 # Singletons & caches
 _FEATURE_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
 try:
-    from .feature_extractor import FeatureExtractor  # payload-agnostic endpoint features
+    # payload-agnostic endpoint features
+    from .feature_extractor import FeatureExtractor  # type: ignore
     _FE = FeatureExtractor(headless=True)  # type: ignore
 except Exception:
     _FE = None
@@ -99,7 +100,9 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "method": method,
         "in": loc,
+        "injection_mode": loc,              # hint for recommender heuristics
         "content_type": ct,
+        "headers": dict(t.get("headers") or {}),
         "url": url,
         "param": param,
         "path_depth": depth(url),
@@ -108,26 +111,48 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
-    """Cache payload-agnostic endpoint features."""
+    """Cache payload-agnostic endpoint features (robust to extractor API changes)."""
     k = _endpoint_key(t)
     if k in _FEATURE_CACHE:
         return _FEATURE_CACHE[k]
-    feats: Dict[str, Any]
+
+    feats: Dict[str, Any] = {}
     if _FE is not None:
         try:
-            feats = _FE.extract_features(  # type: ignore[attr-defined]
-                t.get("url"),
-                t.get("target_param"),
-                payload="",  # payload-agnostic
-                method=t.get("method") or "GET",
-                content_type=t.get("content_type"),
-            )
+            # Prefer the new endpoint-only API if present
+            if hasattr(_FE, "extract_endpoint_features"):
+                raw = _FE.extract_endpoint_features(
+                    url=t.get("url"),
+                    param=t.get("target_param") or t.get("param"),
+                    method=(t.get("method") or "GET"),
+                    content_type=t.get("content_type"),
+                    headers=t.get("headers"),
+                )
+            else:
+                # Older API sometimes returns (vec, meta)
+                raw = _FE.extract_features(
+                    t.get("url"),
+                    t.get("target_param") or t.get("param"),
+                    payload="",  # payload-agnostic
+                    method=(t.get("method") or "GET"),
+                    content_type=t.get("content_type"),
+                )
+
+            if isinstance(raw, dict):
+                feats = raw
+            elif isinstance(raw, tuple) and len(raw) >= 2 and isinstance(raw[1], dict):
+                # (vec, meta) -> use meta as endpoint features
+                feats = dict(raw[1])
+            else:
+                feats = _cheap_target_vector(t)
         except Exception:
             feats = _cheap_target_vector(t)
     else:
         feats = _cheap_target_vector(t)
+
     _FEATURE_CACHE[k] = feats
     return feats
+
 
 
 # ---- canonical payload pool access ------------------------------------------
@@ -162,9 +187,33 @@ def payload_pool_for(family: str) -> List[str]:
     return []
 
 
+# ---- helpers for negative feedback → recommender penalty --------------------
+
+def _has_any_signal(detector_hits: Dict[str, bool]) -> bool:
+    return any([
+        detector_hits.get("sql_error"),
+        detector_hits.get("boolean_sqli"),
+        detector_hits.get("time_sqli"),
+        detector_hits.get("xss_js"),
+        (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
+        detector_hits.get("open_redirect"),
+    ])
+
+
+def _is_negative_attempt(detector_hits: Dict[str, bool], status_delta: int, len_delta: int, ms_delta: int) -> bool:
+    return (not _has_any_signal(detector_hits)) and (status_delta == 0 and len_delta == 0 and ms_delta == 0)
+
+
+def _bump_fail(feedback: Dict[str, int], fam: str, detector_hits: Dict[str, bool], status_delta: int, len_delta: int, ms_delta: int) -> None:
+    if not fam:
+        return
+    if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
+        feedback[fam] = int(feedback.get(fam, 0)) + 1
+
+
 # ---- Stage-A wrapper ---------------------------------------------------------
 
-def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
+def _stage_a_decision(t: Dict[str, Any], *, recent_fail_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     Ask the Stage-A decider for family distribution + authoritative decision.
 
@@ -194,9 +243,11 @@ def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
     if _RECO is not None and hasattr(_RECO, "recommend_with_meta"):
         try:
             feats = _endpoint_features(t)
-            # We don't actually need real ranking here; we just want the meta.family_probs
-            # Use a tiny dummy pool and let recommender pick a family.
-            recs, meta = _RECO.recommend_with_meta(feats, pool=["*"], top_n=1, threshold=0.0, family=None)  # type: ignore[arg-type]
+            # We don't actually need ranking here; we just want the meta.family_probs.
+            fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
+            _recs, meta = _RECO.recommend_with_meta(
+                feats, pool=["*"], top_n=1, threshold=0.0, family=None, feedback=fb  # type: ignore[arg-type]
+            )
             fam = meta.get("family") or None
             fam_probs = dict(meta.get("family_probs") or {})
             fam_decision = str(meta.get("family_decision") or "prior")
@@ -209,7 +260,7 @@ def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 families_to_try = [x for x, _ in ranked[:max(1, DEFAULT_EXPLORE_TOPK)]]
             return {
-                "family_top": family_top,
+                "family_top": fam or family_top,
                 "family_probs": fam_probs,
                 "threshold_passed": threshold_passed,
                 "families_to_try": families_to_try,
@@ -245,6 +296,8 @@ def _rank_payloads_for_family(
     family: str,
     top_n: int = 3,
     threshold: float = 0.2,
+    *,
+    recent_fail_counts: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Tuple[str, float]], Dict[str, Any]]:
     """
     Stage B: per-family payload ranking via LTR; fallback to curated pool.
@@ -258,7 +311,10 @@ def _rank_payloads_for_family(
     if _RECO is not None:
         try:
             if hasattr(_RECO, "recommend_with_meta"):
-                recs, meta = _RECO.recommend_with_meta(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
+                fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
+                recs, meta = _RECO.recommend_with_meta(
+                    feats, pool=pool, top_n=top_n, threshold=threshold, family=fam, feedback=fb  # type: ignore[arg-type]
+                )
                 return ([(p, float(prob)) for (p, prob) in recs], meta or {})
             else:
                 recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
@@ -685,6 +741,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
     results_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = results_dir / "evidence.jsonl"
 
+    # Track recent per-family negatives to inform the ranker penalty
+    recent_fail_counts: Dict[str, int] = {"sqli": 0, "xss": 0, "redirect": 0}
+
     # We want 3xx Location for open-redirect detection -> don't auto-follow
     with httpx.Client(follow_redirects=False) as client, evidence_path.open("w", encoding="utf-8") as fout:
         for t in targets:
@@ -894,7 +953,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # -------------------- STAGE A+B (ML-ranked payloads) --------------------
             feats = _endpoint_features(t)
-            decision = _stage_a_decision(t)
+            decision = _stage_a_decision(t, recent_fail_counts=recent_fail_counts)
             family_probs = decision.get("family_probs", {})
             family_top = decision.get("family_top")
             threshold_passed = bool(decision.get("threshold_passed"))
@@ -910,7 +969,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # Execute per plan
             for fam, top_n in plan:
-                recs, meta = _rank_payloads_for_family(feats, fam, top_n=top_n, threshold=0.2)
+                recs, meta = _rank_payloads_for_family(
+                    feats, fam, top_n=top_n, threshold=0.2, recent_fail_counts=recent_fail_counts
+                )
                 # Nothing to do
                 if not recs:
                     continue
@@ -1024,16 +1085,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
 
                     # Clamp model confidence if we have neither detector signals nor deltas
-                    has_signal = any([
-                        detector_hits.get("sql_error"),
-                        detector_hits.get("boolean_sqli"),
-                        detector_hits.get("time_sqli"),
-                        detector_hits.get("xss_js"),
-                        (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
-                        detector_hits.get("open_redirect"),
-                    ])
-                    has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
-                    if not has_signal and not has_delta:
+                    if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
                         ml_conf = 0.0
 
                     # Strong oracles dominate (floors)
@@ -1050,6 +1102,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     # Final confidence
                     conf = max(conf_heur, ml_conf, conf_stage_ab)
                     inferred = _infer_class(detector_hits, status_delta, len_delta)
+
+                    # Update recent-fail counts to inform the next ranking round
+                    _bump_fail(recent_fail_counts, fam, detector_hits, status_delta, len_delta, ms_delta)
 
                     # Attempt (with provenance)
                     _append_evidence_line(
@@ -1247,16 +1302,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
 
                 # Clamp model confidence if no signals and no deltas
-                has_signal = any([
-                    detector_hits.get("sql_error"),
-                    detector_hits.get("boolean_sqli"),
-                    detector_hits.get("time_sqli"),
-                    detector_hits.get("xss_js"),
-                    (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
-                    detector_hits.get("open_redirect"),
-                ])
-                has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
-                if not has_signal and not has_delta:
+                if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
                     ml_conf = 0.0
 
                 # Strong oracles dominate (floors)
@@ -1266,6 +1312,10 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     ml_conf = max(ml_conf, 0.85)
                 if time_sqli:
                     ml_conf = max(ml_conf, 0.95)
+
+                # Update recent-fail counts (assign by inferred family for curated loop)
+                fam_guess = _payload_family(payload)
+                _bump_fail(recent_fail_counts, fam_guess, detector_hits, status_delta, len_delta, ms_delta)
 
                 conf = max(conf_heur, ml_conf)
                 inferred = _infer_class(detector_hits, status_delta, len_delta)
@@ -1283,7 +1333,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "headers": h1,
                         "body": b1,
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam_guess,
                         "payload_origin": "curated",
                         "ranker_meta": None,
                         "detector_hits": detector_hits,
@@ -1327,7 +1377,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "url": t["url"],
                         "content_type": t.get("content_type"),
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam_guess,
                         "payload_origin": "curated",
                         "ranker_meta": None,
                         "detector_hits": detector_hits,

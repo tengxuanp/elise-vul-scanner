@@ -1,4 +1,3 @@
-# backend/modules/ml/train_ranker.py
 from __future__ import annotations
 
 """
@@ -33,6 +32,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
@@ -103,17 +103,67 @@ def _payload_family_from_id(pid: Optional[str]) -> str:
     return "base"
 
 
+# -------------------- Expanded payload descriptor (20 dims) ------------------
+
+_BASE64ISH_RE = re.compile(r'^[A-Za-z0-9+/=]{12,}$')
+
 def _payload_desc_from_body(payload: str) -> List[float]:
-    """Mirror backend/modules/recommender._payload_desc for raw payload strings."""
+    """
+    Expanded, deterministic payload features (MUST match recommender._payload_desc).
+    20 features: [len, specials, xss/script, xss/event, has_img, has_svg, has_js_url,
+                  starts_angle, attr_breakout, close_script, sqli/union, sqli/or1eq1,
+                  sqli/comment, sqli/timefn, is_numeric_like, redir/proto_rel,
+                  redir/double_urlenc, redir/js_location, redir/http, looks_base64]
+    """
     s = payload or ""
-    specials = sum(1 for ch in s if not ch.isalnum())
     lower = s.lower()
+    specials = sum(1 for ch in s if not ch.isalnum())
+
+    # XSS cues
+    has_script_tag    = "<script" in lower or "</script>" in lower
+    has_event_attr    = ("onerror=" in lower) or ("onload=" in lower) or ("onclick=" in lower)
+    has_img           = "<img" in lower
+    has_svg           = "<svg" in lower
+    has_js_url        = "javascript:" in lower
+    starts_with_angle = s[:1] in "<>"
+    has_attr_breakout = (('"' in s or "'" in s) and (" on" in lower or "javascript:" in lower))
+    has_close_script  = "</script>" in lower
+
+    # SQLi cues
+    has_union         = "union select" in lower
+    has_or_1eq1       = (" or 1=1" in lower) or ("' or" in lower) or ('" or' in lower)
+    has_comment       = "--" in lower or "/*" in lower or "*/" in lower
+    has_time_fn       = "sleep(" in lower or "benchmark(" in lower or "waitfor" in lower
+    is_numeric_like   = lower.strip().isdigit() or lower.strip().replace(".", "", 1).isdigit()
+
+    # Redirect cues
+    is_proto_rel      = lower.startswith("//")
+    has_double_urlenc = "%252f%252f" in lower or "%2f%2f" in lower
+    has_js_location   = "window.location" in lower
+    has_http          = lower.startswith("http://") or lower.startswith("https://")
+    looks_base64      = bool(_BASE64ISH_RE.match(s))
+
     return [
-        float(len(s)),
-        float(specials),
-        1.0 if ("<script" in lower or "onerror=" in lower or "onload=" in lower) else 0.0,  # XSS-ish
-        1.0 if (" or 1=1" in lower or "union select" in lower or "waitfor" in lower or "sleep(" in lower) else 0.0,  # SQLi-ish
-        1.0 if (lower.startswith("http") or lower.startswith("//")) else 0.0,  # Redirect-ish
+        float(len(s)),                # 0 length
+        float(specials),              # 1 specials
+        1.0 if has_script_tag else 0.0,     # 2
+        1.0 if has_event_attr else 0.0,     # 3
+        1.0 if has_img else 0.0,            # 4
+        1.0 if has_svg else 0.0,            # 5
+        1.0 if has_js_url else 0.0,         # 6
+        1.0 if starts_with_angle else 0.0,  # 7
+        1.0 if has_attr_breakout else 0.0,  # 8
+        1.0 if has_close_script else 0.0,   # 9
+        1.0 if has_union else 0.0,          # 10
+        1.0 if has_or_1eq1 else 0.0,        # 11
+        1.0 if has_comment else 0.0,        # 12
+        1.0 if has_time_fn else 0.0,        # 13
+        1.0 if is_numeric_like else 0.0,    # 14
+        1.0 if is_proto_rel else 0.0,       # 15
+        1.0 if has_double_urlenc else 0.0,  # 16
+        1.0 if has_js_location else 0.0,    # 17
+        1.0 if has_http else 0.0,           # 18
+        1.0 if looks_base64 else 0.0,       # 19
     ]
 
 
@@ -121,22 +171,79 @@ def _payload_desc_from_id(pid: Optional[str]) -> List[float]:
     """
     Fallback when we don't have the raw body (LTR rows). Provide a stable,
     family-aware descriptor so training stays aligned with runtime.
+    We approximate booleans from the payload_id pattern.
     """
-    fam = _payload_family_from_id(pid)
-    # Proxy typical stats per family
-    if fam == "xss":
+    s = (pid or "").lower()
+
+    # Family proxies for length/specials
+    if s.startswith("xss."):
         length_proxy, specials = 40.0, 8.0
-        xssish, sqliish, redir = 1.0, 0.0, 0.0
-    elif fam == "sqli":
+        has_script_tag = "script" in s
+        has_event_attr = any(k in s for k in ("onerror", "onload", "onclick"))
+        has_img        = "img" in s
+        has_svg        = "svg" in s
+        has_js_url     = "javascript" in s and "url" in s
+        starts_angle   = True  # most xss oneliners start with a tag/attr
+        attr_breakout  = "breakout" in s or "attr" in s
+        close_script   = "script_injection" in s
+        union = or1eq1 = comment = timefn = isnum = False
+        proto_rel = ("protocol_relative" in s)
+        double_urlenc = ("double_urlencode" in s)
+        js_loc = "js_location" in s
+        has_http = ("http" in s and "javascript" not in s)
+        looks_b64 = False
+
+    elif s.startswith("sqli."):
         length_proxy, specials = 28.0, 5.0
-        xssish, sqliish, redir = 0.0, 1.0, 0.0
-    elif fam == "redirect":
+        has_script_tag = has_event_attr = has_img = has_svg = has_js_url = starts_angle = attr_breakout = close_script = False
+        union     = "union" in s
+        or1eq1    = "boolean" in s or "or1eq1" in s or "numeric_or1eq1" in s
+        comment   = "comment" in s or "stack_comment" in s or "inline_comment" in s
+        timefn    = "sleep" in s or "benchmark" in s
+        isnum     = "numeric" in s
+        proto_rel = double_urlenc = js_loc = False
+        has_http  = False
+        looks_b64 = False
+
+    elif s.startswith(("redir.", "redirect.")):
         length_proxy, specials = 24.0, 3.0
-        xssish, sqliish, redir = 0.0, 0.0, 1.0
+        has_script_tag = has_event_attr = has_img = has_svg = False
+        has_js_url     = "javascript" in s
+        starts_angle = attr_breakout = close_script = False
+        union = or1eq1 = comment = timefn = isnum = False
+        proto_rel     = "protocol_relative" in s
+        double_urlenc = "double_urlencode" in s
+        js_loc        = "js_location" in s
+        has_http      = "http" in s
+        looks_b64     = "base64" in s
     else:
+        # base/unknown
         length_proxy, specials = 18.0, 2.0
-        xssish, sqliish, redir = 0.0, 0.0, 0.0
-    return [length_proxy, specials, xssish, sqliish, redir]
+        has_script_tag = has_event_attr = has_img = has_svg = has_js_url = starts_angle = attr_breakout = close_script = False
+        union = or1eq1 = comment = timefn = isnum = False
+        proto_rel = double_urlenc = js_loc = has_http = looks_b64 = False
+
+    return [
+        length_proxy, specials,
+        1.0 if has_script_tag else 0.0,
+        1.0 if has_event_attr else 0.0,
+        1.0 if has_img else 0.0,
+        1.0 if has_svg else 0.0,
+        1.0 if has_js_url else 0.0,
+        1.0 if starts_angle else 0.0,
+        1.0 if attr_breakout else 0.0,
+        1.0 if close_script else 0.0,
+        1.0 if union else 0.0,
+        1.0 if or1eq1 else 0.0,
+        1.0 if comment else 0.0,
+        1.0 if timefn else 0.0,
+        1.0 if isnum else 0.0,
+        1.0 if proto_rel else 0.0,
+        1.0 if double_urlenc else 0.0,
+        1.0 if js_loc else 0.0,
+        1.0 if has_http else 0.0,
+        1.0 if looks_b64 else 0.0,
+    ]
 
 
 def _endpoint_vec(fe: FeatureExtractor, t: Dict[str, Any]) -> List[float]:
@@ -502,15 +609,6 @@ def _reliability_bins(endpoint_ids: List[str], y_true: np.ndarray, y_score: np.n
 
 # ============================= Train / Eval ==================================
 
-@dataclass
-class LTRDataset:
-    X: np.ndarray
-    y: np.ndarray
-    group: List[int]
-    payloads: List[str]
-    endpoint_ids: List[str]
-
-
 def _train_ranker(
     dataset: LTRDataset,
     n_estimators: int = 300,
@@ -650,7 +748,7 @@ def train_one_family(
         "queries_val": len(ds_va.group),
         "metrics": metrics,
         "reliability_bins": calib,
-        "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
+        "feature_dim_note": "Each row = endpoint_vec + payload_desc(20). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
         "objective": "rank:pairwise",
         "min_group_train": min_g,
         "params": {
@@ -724,7 +822,7 @@ def main() -> None:
     meta = {
         "feature_dim": len(_endpoint_vec(fe, {"url": "", "param": "", "method": "GET", "content_type": None, "headers": None})),
         "feature_names": None,  # not needed (numeric vector in stable order)
-        "note": "Rankers expect [endpoint_feature_vector] + [payload_desc(5)] at inference.",
+        "note": "Rankers expect [endpoint_feature_vector] + [payload_desc(20)] at inference.",
         "families_trained": [k for k, _ in summaries.items()],
     }
     (out_dir / "recommender_meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")

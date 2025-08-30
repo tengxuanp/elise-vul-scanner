@@ -35,7 +35,7 @@ try:
 except Exception:  # pragma: no cover
     class Recommender:  # minimal stub
         def load(self): ...
-        def recommend(self, *a, **kw): return []
+        def recommend_with_meta(self, *a, **kw): return [], {"used_path": "heuristic"}
 
 def _init_reco() -> Optional[Recommender]:
     """Instantiate and best-effort load recommender."""
@@ -79,6 +79,16 @@ fe = FeatureExtractor()
 
 # Cache latest results by job for simple polling
 LATEST_RESULTS: Dict[str, List[Dict[str, Any]]] = {}
+
+# ML-used paths for clear “origin” labeling
+_ML_USED_PATHS = {
+    "family_ranker",
+    "plugin",
+    "generic_pairwise",
+    "generic_predict_proba",
+    "generic_decision_function",
+    "generic_predict",
+}
 
 
 # =========================
@@ -285,28 +295,29 @@ def _post_normalize_row_for_ui(one: Dict[str, Any]) -> Dict[str, Any]:
 
     out["signals"] = signals
 
-    # Origin determination
-    origin_existing = (out.get("origin") or (out.get("meta") or {}).get("origin") or "").strip().lower()
-    is_ml_flags = any([
-        bool(out.get("is_ml")),
-        isinstance(out.get("ml"), (dict, bool)) and out.get("ml") not in (False, None),
-        isinstance(out.get("ranker_meta"), dict) and (
-            "ranker_score" in out["ranker_meta"]
-            or "family_probs" in out["ranker_meta"]
-            or "model_ids" in out["ranker_meta"]
-        ),
-        isinstance(out.get("ml_meta"), dict),
-        isinstance(out.get("ranker"), dict),
-        isinstance((out.get("payload_id") or ""), str) and out.get("payload_id", "").lower().startswith("ml-"),
-        origin_existing == "ml",
-    ])
-    out["origin"] = "ml" if is_ml_flags else "curated"
+    # Origin determination (keep if explicitly set; else infer)
+    if "origin" not in out:
+        origin_existing = (out.get("origin") or (out.get("meta") or {}).get("origin") or "").strip().lower()
+        is_ml_flags = any([
+            bool(out.get("is_ml")),
+            isinstance(out.get("ml"), (dict, bool)) and out.get("ml") not in (False, None),
+            isinstance(out.get("ranker_meta"), dict) and (
+                "ranker_score" in out["ranker_meta"]
+                or "family_probs" in out["ranker_meta"]
+                or "model_ids" in out["ranker_meta"]
+                or out["ranker_meta"].get("used_path") in _ML_USED_PATHS
+            ),
+            isinstance(out.get("ml_meta"), dict),
+            isinstance(out.get("ranker"), dict),
+            isinstance((out.get("payload_id") or ""), str) and out.get("payload_id", "").lower().startswith("ml-"),
+            origin_existing == "ml",
+        ])
+        out["origin"] = "ml" if is_ml_flags else "curated"
 
     # Ranker meta mirroring (so UI always finds something)
     rm = out.get("ranker_meta") or out.get("ranker") or out.get("ml_meta") or {}
     if not isinstance(rm, dict):
         rm = {}
-    # If no family chosen, but we have "family", mirror it
     if "family_chosen" not in rm and out.get("family"):
         rm["family_chosen"] = out.get("family")
     out["ranker_meta"] = rm
@@ -361,11 +372,11 @@ def _url_with_replaced_param(url: str, param: str, value: str) -> str:
 def _build_request_with_value(
     t: "FuzzTarget",
     value: str,
-    global_headers: Optional[Dict[str, str]] = None,      # NEW
+    global_headers: Optional[Dict[str, str]] = None,
 ) -> Tuple[str, str, Dict[str, str], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
     method = (t.method or "GET").upper()
     headers = _merge_headers((t.meta or {}).get("headers") or {}, t.headers)
-    headers = _merge_headers(headers, global_headers or {})            # NEW
+    headers = _merge_headers(headers, global_headers or {})
     body = (t.meta or {}).get("body")
     body_type = (t.meta or {}).get("body_type")
     if method == "GET":
@@ -505,7 +516,7 @@ def _fuzz_targets_ffuf(
     reco: Optional[Recommender],
     top_n: int = 3,
     threshold: float = 0.2,
-    global_headers: Optional[Dict[str, str]] = None,   # NEW
+    global_headers: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, Any]]:
     """Legacy ffuf-based fuzz. Keep for compatibility; prefer core engine."""
     if run_ffuf is None:
@@ -525,35 +536,32 @@ def _fuzz_targets_ffuf(
             logging.exception("feature_extractor failed for %s %s", t.url, t.param)
             feats = None
 
-        # payload selection (ML or fallback) — now passing 'family' into the recommender
-        used_fallback = False
+        # payload selection (ML or fallback) — now using recommend_with_meta
+        candidates: List[Tuple[str, float]] = []
+        ranker_meta: Dict[str, Any] = {}
         try:
-            if reco is not None and feats is not None:
-                try:
-                    pairs = reco.recommend(
-                        feats,
-                        top_n=top_n,
-                        threshold=threshold,
-                        family=family,  # <-- critical fix
-                    )  # [(payload, prob), ...]
-                except TypeError:
-                    # legacy signature without threshold
-                    pairs = reco.recommend(
-                        feats,
-                        top_n=top_n,
-                        family=family,  # <-- critical fix
-                    )
+            if reco is not None and feats is not None and hasattr(reco, "recommend_with_meta"):
+                pairs, meta = reco.recommend_with_meta(
+                    feats=feats,
+                    top_n=top_n,
+                    threshold=threshold,
+                    family=family,   # critical: keep the family consistent
+                )
                 candidates = [(p, float(conf)) for p, conf in (pairs or [])]
-            else:
-                candidates = []
+                ranker_meta = dict(meta or {})
         except Exception:
-            logging.exception("recommender failed; falling back")
+            logging.exception("recommender.recommend_with_meta failed; falling back")
             candidates = []
 
+        used_fallback = False
         if not candidates:
             used_fallback = True
             for p in _fallback_payloads_for_family(family):
                 candidates.append((p, 0.0))
+            ranker_meta = {}
+
+        # Decide origin up-front based on ranker_meta.used_path
+        origin = "ml" if (ranker_meta.get("used_path") in _ML_USED_PATHS) else "curated"
 
         # baseline request (seed if available)
         baseline_meta = None
@@ -571,7 +579,7 @@ def _fuzz_targets_ffuf(
             try:
                 # headers for ffuf subprocess
                 eff_headers = _merge_headers((t.meta or {}).get("headers") or {}, t.headers)
-                eff_headers = _merge_headers(eff_headers, global_headers or {})   # NEW
+                eff_headers = _merge_headers(eff_headers, global_headers or {})
 
                 ffuf_out = run_ffuf(  # type: ignore
                     url=t.url,
@@ -611,14 +619,7 @@ def _fuzz_targets_ffuf(
 
                 matches = ffuf_out.get("matches") or []
 
-                # --- Construct result with ML/ranker + origin + signals.verify ---
-                used_ml = not used_fallback and (reco is not None) and (feats is not None)
-                ranker_meta = {
-                    "family_chosen": family,
-                    "ranker_score": float(base_conf or 0.0) if used_ml else None,
-                    "family_probs": {},
-                } if used_ml else {}
-
+                # Construct result with full ranker_meta + truthful origin
                 one = {
                     "url": t.url,
                     "param": t.param,
@@ -631,10 +632,10 @@ def _fuzz_targets_ffuf(
                     "delta": delta,
                     "family": family,
                     # Origin & ranker
-                    "origin": "ml" if used_ml else "curated",
-                    "ranker_meta": ranker_meta,
-                    "ranker_score": ranker_meta.get("ranker_score"),
-                    "ml": {"enabled": True, "ranker": ranker_meta} if used_ml else False,
+                    "origin": origin if not used_fallback else "curated",
+                    "ranker_meta": ranker_meta if not used_fallback else {},
+                    "ranker_score": float(base_conf or 0.0) if not used_fallback else None,
+                    "ml": {"enabled": True, "ranker": ranker_meta} if (origin == "ml" and not used_fallback) else False,
                     # Signals: include external + open_redirect shape + dup verify for UI
                     "signals": {
                         "external_redirect": external_redirect,
@@ -661,6 +662,8 @@ def _fuzz_targets_ffuf(
                             } for m in matches[:3]
                         ],
                     },
+                    # Payload id for provenance
+                    "payload_id": "ml-ffuf" if (origin == "ml" and not used_fallback) else "ffuf",
                 }
 
                 results.append(_post_normalize_row_for_ui(one))
@@ -683,12 +686,13 @@ def _fuzz_targets_ffuf(
                             param_locs=locs,
                             param=t.param,
                             family=label,
-                            payload_id=("ml-ffuf" if used_ml else "ffuf"),
+                            payload_id=("ml-ffuf" if (origin == "ml" and not used_fallback) else "ffuf"),
                             request_meta={"headers": eff_headers},
                             response_meta={"verify": verify_meta, "baseline": baseline_meta, "delta": delta},
                             signals={"external_redirect": external_redirect, "ffuf_match_count": len(matches)},
                             confidence=float(min(1.0, max(0.0, derived_conf))),
                             label=label,
+                            ranker_meta=ranker_meta if not used_fallback else {},
                         )
                     except Exception:
                         logging.exception("persist_evidence failed")
@@ -853,7 +857,7 @@ def fuzz_by_job(
             reco=reco,
             top_n=(payload.top_n if payload else 3),
             threshold=(payload.threshold if payload else 0.2),
-            global_headers=global_headers,                               # NEW
+            global_headers=global_headers,
         )
         results.extend(results_ffuf)
 

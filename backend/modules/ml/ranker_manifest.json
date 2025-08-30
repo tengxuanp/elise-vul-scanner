@@ -7,42 +7,42 @@
       "samples_val": 648,
       "queries_val": 54,
       "metrics": {
-        "NDCG@3": 0.24973735595728894,
-        "Hit@1": 0.35185185185185186,
-        "Hit@3": 0.7592592592592593,
-        "Hit@5": 0.9444444444444444,
+        "NDCG@3": 0.3610508291855819,
+        "Hit@1": 0.46296296296296297,
+        "Hit@3": 0.9444444444444444,
+        "Hit@5": 1.0,
         "queries": 54
       },
       "reliability_bins": [
         {
           "bin": 0,
-          "p_mean": 0.08333333333333333,
-          "emp_rate": 0.39814814814814814,
-          "count": 648
+          "p_mean": 0.040617169973305285,
+          "emp_rate": 0.3509127789046653,
+          "count": 493
         },
         {
           "bin": 1,
-          "p_mean": 0.15000000000000002,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.1334008629470063,
+          "emp_rate": 0.5063291139240507,
+          "count": 79
         },
         {
           "bin": 2,
-          "p_mean": 0.25,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.24621051063581173,
+          "emp_rate": 0.5945945945945946,
+          "count": 37
         },
         {
           "bin": 3,
-          "p_mean": 0.35000000000000003,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.3589488532297511,
+          "emp_rate": 0.6176470588235294,
+          "count": 34
         },
         {
           "bin": 4,
-          "p_mean": 0.45,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.42460342540208484,
+          "emp_rate": 0.4,
+          "count": 5
         },
         {
           "bin": 5,
@@ -75,7 +75,7 @@
           "count": 0
         }
       ],
-      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(20). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
       "objective": "rank:pairwise",
       "min_group_train": 12,
       "params": {
@@ -98,30 +98,30 @@
       "samples_val": 624,
       "queries_val": 52,
       "metrics": {
-        "NDCG@3": 0.5011815874606632,
-        "Hit@1": 0.6153846153846154,
-        "Hit@3": 0.9807692307692307,
+        "NDCG@3": 0.5414697354232229,
+        "Hit@1": 0.8461538461538461,
+        "Hit@3": 1.0,
         "Hit@5": 1.0,
         "queries": 52
       },
       "reliability_bins": [
         {
           "bin": 0,
-          "p_mean": 0.08333333333333333,
-          "emp_rate": 0.6506410256410257,
-          "count": 624
+          "p_mean": 0.06562453412795714,
+          "emp_rate": 0.6132478632478633,
+          "count": 468
         },
         {
           "bin": 1,
-          "p_mean": 0.15000000000000002,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.13048878859101634,
+          "emp_rate": 0.7465753424657534,
+          "count": 146
         },
         {
           "bin": 2,
-          "p_mean": 0.25,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.2236354893827675,
+          "emp_rate": 1.0,
+          "count": 10
         },
         {
           "bin": 3,
@@ -166,7 +166,7 @@
           "count": 0
         }
       ],
-      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(20). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
       "objective": "rank:pairwise",
       "min_group_train": 12,
       "params": {
@@ -189,8 +189,8 @@
       "samples_val": 369,
       "queries_val": 41,
       "metrics": {
-        "NDCG@3": 0.6341463414634146,
-        "Hit@1": 0.7560975609756098,
+        "NDCG@3": 1.0,
+        "Hit@1": 1.0,
         "Hit@3": 1.0,
         "Hit@5": 1.0,
         "queries": 41
@@ -198,27 +198,27 @@
       "reliability_bins": [
         {
           "bin": 0,
-          "p_mean": 0.05,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.03240948628036435,
+          "emp_rate": 0.573170731707317,
+          "count": 246
         },
         {
           "bin": 1,
-          "p_mean": 0.11111111111111115,
-          "emp_rate": 0.7154471544715447,
-          "count": 369
+          "p_mean": 0.18833895890248323,
+          "emp_rate": 1.0,
+          "count": 26
         },
         {
           "bin": 2,
-          "p_mean": 0.25,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.25805490866636044,
+          "emp_rate": 1.0,
+          "count": 37
         },
         {
           "bin": 3,
-          "p_mean": 0.35000000000000003,
-          "emp_rate": 0.0,
-          "count": 0
+          "p_mean": 0.30970703038184116,
+          "emp_rate": 1.0,
+          "count": 60
         },
         {
           "bin": 4,
@@ -257,7 +257,7 @@
           "count": 0
         }
       ],
-      "feature_dim_note": "Each row = endpoint_vec + payload_desc(5). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
+      "feature_dim_note": "Each row = endpoint_vec + payload_desc(20). Endpoint vec from FeatureExtractor.extract_endpoint_features(...).",
       "objective": "rank:pairwise",
       "min_group_train": 9,
       "params": {

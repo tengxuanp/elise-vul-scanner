@@ -18,6 +18,11 @@ const hasNum = (v) => typeof v === "number" && isFinite(v);
 const cn = (...xs) => xs.filter(Boolean).join(" ");
 const rowKey = (row, idx) => `${row.method}|${row.url}|${row.param}|${idx}`;
 
+const isMLUsedPath = (usedPath = "") => {
+  const s = String(usedPath || "").toLowerCase();
+  return s === "family_ranker" || s === "plugin" || s.startsWith("generic");
+};
+
 /** Extract plain names from arrays that can contain strings or {name: "..."} dicts */
 const namesFrom = (xs) => {
   if (!Array.isArray(xs)) return [];
@@ -160,6 +165,18 @@ const uiPriority = (ep) => {
 
 /** Robust origin derivation across different backends/result shapes */
 function deriveOrigin(one = {}) {
+  // Prefer explicit used_path from backend if present
+  const usedPath =
+    one?.ranker_meta?.used_path ||
+    one?.ranker_meta?.ranker?.used_path ||
+    one?.ml?.used_path ||
+    one?.used_path ||
+    null;
+  if (usedPath) {
+    if (isMLUsedPath(usedPath)) return "ml";
+    if (String(usedPath).toLowerCase() === "heuristic" || String(usedPath).toLowerCase() === "none") return "curated";
+  }
+
   // Simple booleans/flags commonly used
   if (one.is_ml === true || one.ml === true || one?.payload?.ml === true) return "ml";
 
@@ -834,8 +851,20 @@ export default function CrawlAndFuzzPage() {
         one.family ||
         (typeof sigLegacy.type === "string" ? sigLegacy.type : null);
 
-      // ML provenance (robust)
-      const origin = deriveOrigin(one);
+      // ML provenance (prefer backend used_path when present)
+      const usedPath =
+        one?.ranker_meta?.used_path ||
+        one?.ranker_meta?.ranker?.used_path ||
+        one?.ml?.used_path ||
+        one?.used_path ||
+        null;
+
+      const origin = (() => {
+        if (usedPath) {
+          return isMLUsedPath(usedPath) ? "ml" : (String(usedPath).toLowerCase() === "heuristic" || String(usedPath).toLowerCase() === "none") ? "curated" : deriveOrigin(one);
+        }
+        return deriveOrigin(one);
+      })();
 
       // normalize ranker meta (support a lot of shapes, and synthesize a fallback)
       const ranker_meta = normalizeRankerMeta(
@@ -877,8 +906,9 @@ export default function CrawlAndFuzzPage() {
         confidence,
         payload,
         family: fam,
-        origin,            // "ml" | "curated"
-        ranker_meta,       // { family_probs, family_chosen, ranker_score, model_ids }
+        origin,                 // "ml" | "curated"
+        ranker_meta,            // { family_probs, family_chosen, ranker_score, model_ids, maybe _synthetic }
+        ranker_used_path: usedPath || null, // <- surfaced for UI/debug
         severity,
         delta: {
           status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
@@ -1416,6 +1446,14 @@ export default function CrawlAndFuzzPage() {
                       row.severity === "med" ? "bg-amber-50" :
                       row.origin === "ml" ? "bg-indigo-50/30" : "";
 
+                    // derive ML vs heuristic label for ranker cell
+                    const usedPath = String(row?.ranker_used_path || "").toLowerCase();
+                    const rankerIsML = isMLUsedPath(usedPath);
+                    const rankerScore =
+                      typeof row?.ranker_meta?.ranker_score === "number"
+                        ? row.ranker_meta.ranker_score.toFixed(3)
+                        : "—";
+
                     return (
                       <tr key={k} className={cn("border-t align-top hover:bg-gray-50", rowBg)}>
                         {/* sticky cols */}
@@ -1456,8 +1494,10 @@ export default function CrawlAndFuzzPage() {
                         <td className="p-2 w-56">
                           {row?.ranker_meta?.family_probs ? <FamilyProbsBar probs={row.ranker_meta.family_probs} /> : <span className="text-gray-400">—</span>}
                           <div className="text-[10px] text-gray-500 mt-1">
-                            score: <span className="font-mono">{typeof row?.ranker_meta?.ranker_score === "number" ? row.ranker_meta.ranker_score.toFixed(3) : "—"}</span>
-                            {row?.ranker_meta?._synthetic ? <span className="ml-1 text-gray-400">(heuristic)</span> : null}
+                            score: <span className="font-mono">{rankerScore}</span>
+                            <span className="ml-1 text-gray-400">
+                              {rankerIsML ? "(ML)" : row?.ranker_meta?._synthetic ? "(heuristic)" : ""}
+                            </span>
                           </div>
                         </td>
                         <td className="p-2 min-w-[280px]">
@@ -1599,6 +1639,8 @@ export default function CrawlAndFuzzPage() {
                       <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
                       <div className="text-xs">chosen: <code>{fm.family_chosen || "—"}</code></div>
                       <div className="text-xs">score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code></div>
+                      {/** backend used_path (if available) */}
+                      <div className="text-[10px] text-gray-400 mt-1">{row.ranker_used_path ? `used_path: ${row.ranker_used_path}` : ""}</div>
                     </div>
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Model IDs</div>
