@@ -50,6 +50,7 @@ def _env_true(name: str, default: bool = False) -> bool:
 
 _DEBUG_STATE = {"enabled": _env_true("ELISE_ML_DEBUG", False)}
 STRICT_SHAPE = _env_true("ELISE_STRICT_SHAPE", True)  # hard-fail on feature dim mismatches
+REQUIRE_RANKER = _env_true("ELISE_REQUIRE_RANKER", False)
 
 def _is_debug() -> bool:
     return _DEBUG_STATE["enabled"] or _env_true("ELISE_ML_DEBUG", False)
@@ -539,6 +540,9 @@ class Recommender:
         self.family_clf: Any = None
         self.family_classes: Optional[List[str]] = None
 
+        # last error encountered by per-family ranker
+        self._last_ranker_error: Optional[str] = None
+
     # ---------------------- lifecycle ----------------------------------------
 
     def load(self) -> None:
@@ -648,6 +652,7 @@ class Recommender:
             return None
 
         fam = (family or "").lower()
+        self._last_ranker_error = None
         try:
             endpoint_meta = self._endpoint_meta_from_feats(feats)
             candidates = [{"payload_id": None, "payload": p} for p in pool]
@@ -703,7 +708,10 @@ class Recommender:
             }
             return ([(p, float(pr)) for (p, pr, _r) in ranked_pairs], meta)
         except Exception as e:
-            log.exception("Family ranker (infer_ranker) failed for '%s': %s. Falling back.", fam, e)
+            self._last_ranker_error = str(e)
+            log.exception("Family ranker (infer_ranker) failed for '%s': %s", fam, e)
+            if REQUIRE_RANKER:
+                raise
             return None
 
     def _predict_family(self, feats: Any, prob_threshold: float = 0.55) -> Tuple[str, Dict[str, float], str]:
@@ -893,6 +901,9 @@ class Recommender:
                 if not str(meta_out.get("source", "")).startswith("ml:"):
                     meta_out["source"] = f"ml:{fam}"
                 return out, meta_out
+        else:
+            if self._last_ranker_error:
+                meta_out["ranker_error"] = self._last_ranker_error
 
         # 2) Plugin path (authoritative if available)
         if self.plugin_fn:
