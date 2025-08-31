@@ -98,6 +98,7 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
             return 0
 
     return {
+        # numeric-ish endpoint features
         "method": method,
         "in": loc,
         "injection_mode": loc,              # hint for recommender heuristics
@@ -107,14 +108,37 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
         "param": param,
         "path_depth": depth(url),
         "param_len": len(param),
+        # keep aliases the recommender looks for
+        "path": url,
+        "param_name": param,
+        "mode": loc,
     }
 
 
 def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
-    """Cache payload-agnostic endpoint features (robust to extractor API changes)."""
+    """
+    Cache payload-agnostic endpoint features (robust to extractor API changes).
+
+    IMPORTANT: We always include lightweight META fields required by the
+    recommender/LTR ranker: url, param, method, content_type, headers,
+    and injection_mode/mode — even when FeatureExtractor is present.
+    """
     k = _endpoint_key(t)
     if k in _FEATURE_CACHE:
         return _FEATURE_CACHE[k]
+
+    # Meta overlay used by the ranker (and by heuristics)
+    meta_overlay = {
+        "url": t.get("url") or "",
+        "path": t.get("url") or "",
+        "param": (t.get("target_param") or t.get("param") or ""),
+        "param_name": (t.get("target_param") or t.get("param") or ""),
+        "method": (t.get("method") or "GET"),
+        "content_type": t.get("content_type"),
+        "headers": dict(t.get("headers") or {}),
+        "injection_mode": (t.get("in") or "query"),
+        "mode": (t.get("in") or "query"),
+    }
 
     feats: Dict[str, Any] = {}
     if _FE is not None:
@@ -139,7 +163,7 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
             if isinstance(raw, dict):
-                feats = raw
+                feats = dict(raw)
             elif isinstance(raw, tuple) and len(raw) >= 2 and isinstance(raw[1], dict):
                 # (vec, meta) -> use meta as endpoint features
                 feats = dict(raw[1])
@@ -149,6 +173,11 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
             feats = _cheap_target_vector(t)
     else:
         feats = _cheap_target_vector(t)
+
+    # Merge in the meta overlay (without clobbering existing concrete values)
+    for mk, mv in meta_overlay.items():
+        if mk not in feats or feats[mk] in (None, ""):
+            feats[mk] = mv
 
     _FEATURE_CACHE[k] = feats
     return feats
@@ -852,7 +881,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "headers": hX,
                             "body": bX,
                             "payload_string": pX,
-                            "payload_family_used": _payload_family(pX),
+                            "payload_family_used": "sqli",  # boolean oracle implies sqli intent
                             "status": stX,
                             "length": len(bodyX_full),
                             "elapsed_ms": elapsedX,
@@ -861,7 +890,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_origin": "curated",
                             "ranker_meta": {
                                 "family_probs": None,
-                                "family_chosen": "sqli",  # boolean oracle implies sqli intent
+                                "family_chosen": "sqli",
                                 "ranker_score": None,
                                 "model_ids": None,
                             },
@@ -984,8 +1013,11 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     repeats = 3 if _looks_time_based(payload) else 1
                     r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
 
-                    # Build common ranker_meta (Stage-A + Stage-B)
+                    # Build common ranker_meta (Stage-A + Stage-B) and FLATTEN key bits from meta
                     family_prob = float(family_probs.get(fam, 0.0))
+                    meta = meta or {}
+
+                    # Flattened fields for UI + keep raw in ranker_raw
                     ranker_meta = {
                         "family_probs": family_probs,
                         "family_top": family_top,
@@ -995,8 +1027,19 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "decision_reason": decision.get("decision_reason"),
                         "min_prob": decision.get("min_prob"),
                         "ranker_score": float(p_ml),
-                        "ranker": (meta or {}),
+                        "used_path": meta.get("used_path"),
+                        "model_ids": meta.get("model_ids"),
+                        "scores": meta.get("scores"),
+                        "feature_dim": meta.get("feature_dim"),
+                        "expected_total_dim": meta.get("expected_total_dim"),
+                        "ranker_raw": meta,  # full copy for debugging
                     }
+
+                    # Convenience fields at row level
+                    row_ranker_used = ranker_meta.get("used_path")
+                    row_model_path = (ranker_meta.get("model_ids") or {}).get("ranker_path")
+                    scores_list = ranker_meta.get("scores") or []
+                    row_top_prob = float(scores_list[0]["prob"]) if scores_list else float(p_ml)
 
                     if err1 is not None:
                         _append_evidence_line(
@@ -1012,6 +1055,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                                 "payload_family_used": fam or _payload_family(payload),
                                 "payload_origin": "ml",
                                 "ranker_meta": ranker_meta,
+                                "ranker_used_path": row_ranker_used,
+                                "ranker_model_path": row_model_path,
+                                "ranker_top_prob": row_top_prob,
                                 "url": u1,
                                 "headers": h1,
                                 "body": b1,
@@ -1123,6 +1169,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_family_used": fam or _payload_family(payload),
                             "payload_origin": "ml",
                             "ranker_meta": ranker_meta,
+                            "ranker_used_path": row_ranker_used,
+                            "ranker_model_path": row_model_path,
+                            "ranker_top_prob": row_top_prob,
                             "detector_hits": detector_hits,
                             "inferred_vuln_class": inferred,
                             "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE, "stage_ab_p": conf_stage_ab},
@@ -1168,6 +1217,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_family_used": fam or _payload_family(payload),
                             "payload_origin": "ml",
                             "ranker_meta": ranker_meta,
+                            "ranker_used_path": row_ranker_used,
+                            "ranker_model_path": row_model_path,
+                            "ranker_top_prob": row_top_prob,
                             "detector_hits": detector_hits,
                             "inferred_vuln_class": inferred,
                             "control_value": t["control_value"],

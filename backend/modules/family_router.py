@@ -102,41 +102,37 @@ def _filter_pool_by_context(pool: List[str], family: str, context: Optional[Dict
     Non-destructive: if filtering would empty the pool, return the original pool.
     Mirrors the recommender’s filtering rules to keep Stage-A/B consistent.
     """
-    if not pool:
-        return pool
-    if not isinstance(context, dict):
+    if not pool or not isinstance(context, dict):
         return pool
 
     ct = str((context.get("content_type") or "")).lower()
     mode = str((context.get("injection_mode") or context.get("mode") or "")).lower()
 
     out = list(pool)
-
     try:
         if family == "xss":
-            # For JSON body injection, avoid payloads with naked angle brackets (breaks JSON too early)
+            # For JSON body injection, avoid heavy tag payloads that break JSON prematurely
             if mode == "json":
-                filtered = [p for p in out if "\"</" not in p and "<script" not in p]
+                filtered = [p for p in out if "<script" not in p.lower() and "<svg" not in p.lower() and "<img" not in p.lower()]
                 if filtered:
                     out = filtered
-            # For headers mode, prefer javascript: or event-attr style over full <script>
+            # For headers mode, prefer javascript: or event attributes
             if mode == "headers":
-                filtered = [p for p in out if "javascript:" in p or "onerror=" in p or "onload=" in p] or out
-                out = filtered
-
-            # Pure JSON responses downweight tag-based payloads as well (keep conservative)
+                filtered = [p for p in out if ("javascript:" in p.lower()) or ("onerror=" in p.lower()) or ("onload=" in p.lower())]
+                if filtered:
+                    out = filtered
+            # Pure JSON responses also de-emphasize tag-based payloads
             if "application/json" in ct:
-                filtered = [p for p in out if "javascript:" in p or "onerror=" in p or "onload=" in p] or out
+                filtered = [p for p in out if ("javascript:" in p.lower()) or ("onerror=" in p.lower()) or ("onload=" in p.lower())] or out
                 out = filtered
 
         elif family == "sqli":
-            # Path-only injection often tolerates short boolean tests better than UNION
+            # Path injections: prefer short booleans over UNION
             if mode == "path":
                 filtered = [p for p in out if "union select" not in p.lower()] or out
                 out = filtered
 
         # redirect rarely needs filtering
-
     except Exception:
         return pool
 
@@ -447,12 +443,11 @@ class FamilyClassifier:
         if self.model is not None:
             try:
                 x = self._featurize_target(t)
-                raw = self._predict_model([x])  # -> [probs or scores] length 4 expected
-                if raw is not None and len(raw) == 4 and all(isinstance(v, (int, float)) for v in raw):
-                    p = raw
-                else:
-                    # If model outputs logits/scores, softmax them
-                    p = self._softmax(raw or [1.0, 1.0, 1.0, 0.1])
+                raw = self._predict_model([x])  # -> 4 probs or scores
+                # Ensure 4-dim; if not, use a sane prior (XSS/SQLi/Redirect with tiny 'base')
+                if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+                    raw = [1.0, 1.0, 1.0, 0.1]
+                p = self._softmax(list(raw))
                 # Optional per-class calibration
                 if self.cal is not None:
                     try:
@@ -488,11 +483,12 @@ class FamilyClassifier:
         # predict_proba preferred
         if hasattr(m, "predict_proba"):
             proba = m.predict_proba(X)  # type: ignore
+            # Shape may be (n_samples, n_classes)
             try:
-                return [float(v) for v in proba[0]]  # type: ignore[index]
+                row = proba[0]  # type: ignore[index]
+                return [float(v) for v in row]
             except Exception:
-                # Some models return shape (n_samples, n_classes); fall back
-                return [float(proba[0])]  # type: ignore[index]
+                pass
         # decision_function/logits
         if hasattr(m, "decision_function"):
             df = m.decision_function(X)  # type: ignore
@@ -500,7 +496,10 @@ class FamilyClassifier:
             try:
                 return [float(x) for x in row]  # type: ignore[call-overload]
             except Exception:
-                return [float(row)]  # type: ignore[arg-type]
+                try:
+                    return [float(row)]  # type: ignore[arg-type]
+                except Exception:
+                    return []
         # fallback to predict → one-hot guess
         if hasattr(m, "predict"):
             y = m.predict(X)  # type: ignore
@@ -597,16 +596,6 @@ def decide_family(
     """
     Authoritative Stage-A decision with thresholding and *explicit* exploration plan.
     This eliminates the mismatch where Stage-B was ranking the wrong family.
-
-    Returns:
-      {
-        "family_top": "sqli" | "xss" | "redirect" | "base",
-        "family_probs": {"sqli":..., "xss":..., "redirect":..., "base":...},
-        "threshold_passed": True|False,
-        "families_to_try": ["sqli"] or ["sqli","xss"] when exploring,
-        "decision_reason": "ml_argmax" | "rule_argmax" | "below_threshold_explore",
-        "min_prob": float
-      }
     """
     # 1) Get probabilities (ML if available, else rules)
     clf = _clf()

@@ -88,6 +88,7 @@ _ML_USED_PATHS = {
     "generic_predict_proba",
     "generic_decision_function",
     "generic_predict",
+    "legacy_recommend",  # include legacy recommender path as ML
 }
 
 
@@ -758,17 +759,89 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
             r["signals"]["open_redirect"].setdefault("location", verify.get("location"))
             r["signals"]["open_redirect"].setdefault("location_host", _hostname_of(verify.get("location")))
 
-        # Mirror any nested ML/ranker into ranker_meta for consistency
-        if "ranker_meta" not in r:
-            for k in ("ranker", "ml_meta",):
-                if isinstance(r.get(k), dict):
-                    r["ranker_meta"] = dict(r[k])  # shallow copy
+        # ---- Canonicalize ML/ranker metadata so the UI can detect ML properly ----
+        # Gather possible raw containers
+        raw_rm: Dict[str, Any] = {}
+        for k in ("ranker_meta", "ranker", "ml_meta"):
+            if isinstance(r.get(k), dict):
+                try:
+                    # do not overwrite existing keys already present in raw_rm
+                    for kk, vv in r[k].items():
+                        raw_rm.setdefault(kk, vv)
+                except Exception:
+                    pass
+        if isinstance(r.get("ml"), dict):
+            ml = r["ml"]
+            for k in ("ranker_meta", "ranker"):
+                if isinstance(ml.get(k), dict):
+                    for kk, vv in ml[k].items():
+                        raw_rm.setdefault(kk, vv)
 
-        # If there is an explicit origin/flag, keep it; else infer later
+        # Collect probabilities (support many key names; prefer ranker_meta first)
+        family_probs = None
+        for container in (raw_rm, r):
+            for alt in ("family_probs", "probs", "family_probabilities", "probabilities", "per_family", "ranker_probs", "ml_probs"):
+                val = container.get(alt)
+                if isinstance(val, dict) and val:
+                    family_probs = dict(val)
+                    break
+            if family_probs:
+                break
+
+        if family_probs:
+            # keep only the three we render; renormalize
+            picked = {}
+            for k, v in family_probs.items():
+                try:
+                    kl = str(k).lower()
+                    if kl in {"sqli", "xss", "redirect"}:
+                        picked[kl] = float(v)
+                except Exception:
+                    continue
+            s = sum(picked.values())
+            if s > 0:
+                family_probs = {k: (v / s) for k, v in picked.items()}
+            else:
+                family_probs = picked
+
+        # Score
+        ranker_score = None
+        for alt in ("ranker_score", "score", "rank_score"):
+            val = raw_rm.get(alt, r.get(alt))
+            if isinstance(val, (int, float)):
+                ranker_score = float(val)
+                break
+
+        # Chosen family and models
+        family_chosen = raw_rm.get("family_chosen") or r.get("family")
+        model_ids = raw_rm.get("model_ids") or raw_rm.get("models") or r.get("model_ids") or r.get("models")
+
+        # used_path: if ML-ish fields exist and none present, stamp a standard value
+        has_ml_fields = bool(family_probs) or isinstance(ranker_score, (int, float)) or (isinstance(model_ids, (list, tuple)) and len(model_ids) > 0)
+        used_path = raw_rm.get("used_path")
+        if has_ml_fields and not used_path:
+            used_path = "family_ranker"
+
+        # Persist canonicalized ranker_meta back if anything present
+        canonical_rm: Dict[str, Any] = {}
+        if family_probs:
+            canonical_rm["family_probs"] = family_probs
+        if family_chosen:
+            canonical_rm["family_chosen"] = family_chosen
+        if isinstance(ranker_score, (int, float)):
+            canonical_rm["ranker_score"] = float(ranker_score)
+        if model_ids:
+            canonical_rm["model_ids"] = model_ids
+        if used_path:
+            canonical_rm["used_path"] = used_path
+        if canonical_rm:
+            r["ranker_meta"] = canonical_rm
+
+        # If there is an explicit origin/flag, keep it; else infer as ML if we have ML-ish fields
         if "origin" not in r:
-            if r.get("is_ml") or isinstance(r.get("ml"), (dict, bool)):
-                r["origin"] = "ml"
-            elif isinstance(r.get("payload_id"), str) and r["payload_id"].lower().startswith("ml-"):
+            if has_ml_fields or r.get("is_ml") or isinstance(r.get("ml"), (dict, bool)) or (
+                isinstance(r.get("payload_id"), str) and r["payload_id"].lower().startswith("ml-")
+            ):
                 r["origin"] = "ml"
 
         normed.append(_post_normalize_row_for_ui(r))

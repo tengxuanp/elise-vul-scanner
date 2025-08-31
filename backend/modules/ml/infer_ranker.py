@@ -11,16 +11,10 @@ We read recommender_meta.json (if present) to discover:
   - payload_feature_names (order matters; OPTIONAL — we still enforce 20 dims)
   - endpoint_dims / payload_dims / expected_total_dim
 
-Public API:
-  rank_payloads(endpoint_meta, family, candidates, *, model_dir=None, top_k=None) -> List[dict]
-    endpoint_meta: dict with keys {url, param, method, content_type, headers}
-    family: "sqli" | "xss" | "redirect"
-    candidates: list[dict] with at least:
-      {
-        "payload_id": "sqli.union.null",
-        "payload": "...' UNION SELECT NULL-- -",
-        ... # any extra fields preserved as-is
-      }
+Public API (signature-flex):
+  rank_payloads(endpoint_meta, family, candidates, *, model_dir=None, top_k=None)
+  rank_payloads(family, endpoint_meta, candidates, top_k)
+  rank_payloads(context=..., family=..., candidates=..., top_k=..., model_dir=...)
 
 Returns: same dicts sorted by predicted relevance desc (optionally truncated to top_k),
 with extra keys: ranker_score, ranker_used_model, ranker_feature_dim_total.
@@ -71,8 +65,9 @@ _META: Dict[str, Any] = {}
 # keep the extractor lightweight (no navigation)
 _FE = FeatureExtractor(headless=True)
 
-
-# --------------- meta / config ----------------
+# --------------------------------------------------------------------------- #
+# Meta / config
+# --------------------------------------------------------------------------- #
 
 def _load_meta(meta_path: Path = META_PATH) -> Dict[str, Any]:
     global _META
@@ -85,7 +80,6 @@ def _load_meta(meta_path: Path = META_PATH) -> Dict[str, Any]:
             if "endpoint_dims" not in _META:
                 _META["endpoint_dims"] = _META.get("feature_dim") or _META.get("endpoint_feature_dim")
             if "payload_dims" not in _META:
-                # If names present, take len; else leave None (we'll infer 20)
                 _META["payload_dims"] = _META.get("payload_feature_dim") or (
                     len(_META.get("payload_feature_names", [])) or None
                 )
@@ -116,10 +110,12 @@ def _model_base_dir(user_model_dir: Optional[str]) -> Path:
 
 
 def _model_path_for(family: str, model_dir: Optional[str]) -> Path:
+    family = "redirect" if family == "open_redirect" else family
     return _model_base_dir(model_dir) / MODEL_FILENAMES[family]
 
 
 def _load_model(family: str, model_dir: Optional[str]) -> Any:
+    family = "redirect" if family == "open_redirect" else family
     key = f"{family}::{_model_base_dir(model_dir)}"
     if key in _MODELS:
         return _MODELS[key]
@@ -139,7 +135,9 @@ def _load_model(family: str, model_dir: Optional[str]) -> Any:
         return None
 
 
-# --------------- endpoint features ----------------
+# --------------------------------------------------------------------------- #
+# Endpoint features
+# --------------------------------------------------------------------------- #
 
 def _endpoint_vec(endpoint_meta: Dict[str, Any]) -> List[float]:
     """
@@ -181,7 +179,9 @@ def _endpoint_vec(endpoint_meta: Dict[str, Any]) -> List[float]:
     return vec
 
 
-# --------------- payload descriptor (EXACT same 20-dim as training) ----------
+# --------------------------------------------------------------------------- #
+# Payload descriptor (EXACT same 20-dim as training)
+# --------------------------------------------------------------------------- #
 
 _BASE64ISH_RE = re.compile(r'^[A-Za-z0-9+/=]{12,}$')
 
@@ -328,7 +328,9 @@ def _payload_desc(payload: Optional[str], payload_id: Optional[str]) -> List[flo
     return _payload_desc_from_id(payload_id)
 
 
-# --------------- heuristic fallback ----------------
+# --------------------------------------------------------------------------- #
+# Heuristic fallback
+# --------------------------------------------------------------------------- #
 
 def _fallback_score(payload: str, family: str, param_name: str) -> float:
     """Cheap deterministic scoring; better than random, worse than ML."""
@@ -356,16 +358,62 @@ def _fallback_score(payload: str, family: str, param_name: str) -> float:
     return score
 
 
-# --------------- public API ----------------
+# --------------------------------------------------------------------------- #
+# Dispatcher + scoring helpers
+# --------------------------------------------------------------------------- #
 
-def rank_payloads(
-    endpoint_meta: Dict[str, Any],
-    family: str,
-    candidates: List[Dict[str, Any]],
-    *,
-    model_dir: Optional[str] = None,
-    top_k: Optional[int] = None,
-) -> List[Dict[str, Any]]:
+def _pick_scores(model: Any, X: np.ndarray) -> np.ndarray:
+    """Try common scikit interfaces; return 1D float array."""
+    if hasattr(model, "predict"):
+        y = model.predict(X)  # type: ignore
+        y = np.asarray(y, dtype=float).reshape(-1)
+        return y
+    if hasattr(model, "decision_function"):
+        y = model.decision_function(X)  # type: ignore
+        y = np.asarray(y, dtype=float).reshape(-1)
+        return y
+    if hasattr(model, "predict_proba"):
+        proba = model.predict_proba(X)  # type: ignore
+        proba = np.asarray(proba, dtype=float)
+        # take positive-class if binary; else max class prob
+        if proba.ndim == 2 and proba.shape[1] >= 2:
+            return proba[:, -1].reshape(-1)
+        return proba.reshape(-1)
+    # last resort: callable
+    y = model(X)  # type: ignore
+    return np.asarray(y, dtype=float).reshape(-1)
+
+
+def _unpack_args(*args, **kwargs) -> Tuple[Dict[str, Any], str, List[Dict[str, Any]], Optional[str], Optional[int]]:
+    """
+    Accept all expected calling styles and normalize.
+    Returns: (endpoint_meta, family, candidates, model_dir, top_k)
+    """
+    if args and isinstance(args[0], dict):
+        endpoint_meta = args[0]
+        family = args[1] if len(args) > 1 else kwargs.get("family")
+        candidates = args[2] if len(args) > 2 else kwargs.get("candidates")
+    elif args and isinstance(args[0], str):
+        family = args[0]
+        endpoint_meta = args[1] if len(args) > 1 else kwargs.get("context") or kwargs.get("endpoint_meta")
+        candidates = args[2] if len(args) > 2 else kwargs.get("candidates")
+    else:
+        endpoint_meta = kwargs.get("context") or kwargs.get("endpoint_meta") or {}
+        family = kwargs.get("family")
+        candidates = kwargs.get("candidates")
+
+    model_dir = kwargs.get("model_dir")
+    top_k = kwargs.get("top_k")
+    if family is None or candidates is None:
+        raise TypeError("rank_payloads requires (endpoint_meta, family, candidates) or keyword equivalents.")
+    return dict(endpoint_meta), str(family), list(candidates), model_dir, (int(top_k) if top_k is not None else None)
+
+
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
+
+def rank_payloads(*args, **kwargs) -> List[Dict[str, Any]]:
     """
     Score and rank candidate payloads for a given endpoint/param family.
 
@@ -373,7 +421,8 @@ def rank_payloads(
     Adds keys: ranker_score, ranker_used_model, ranker_feature_dim_total.
     Raises: ValueError on feature-shape mismatches.
     """
-    family = (family or "").lower()
+    endpoint_meta, family, candidates, model_dir, top_k = _unpack_args(*args, **kwargs)
+    family = ("redirect" if family == "open_redirect" else family).lower()
     if family not in MODEL_FILENAMES:
         return candidates[:top_k] if top_k else list(candidates)
 
@@ -410,7 +459,7 @@ def rank_payloads(
     # Enforce dimensions: if meta missed payload/total dims, infer safely now
     ep_dim, pay_dim, total_expected = _expected_dims()
     if pay_dim is None:
-        _META["payload_dims"] = 20  # we KNOW this is 20 by construction
+        _META["payload_dims"] = 20  # fixed by construction
         pay_dim = 20
     if total_expected is None and ep_dim is not None and pay_dim is not None:
         _META["expected_total_dim"] = int(ep_dim) + int(pay_dim)
@@ -425,7 +474,9 @@ def rank_payloads(
             )
 
     X = np.asarray(rows, dtype=float)
-    scores = model.predict(X)
+
+    # Score
+    scores = _pick_scores(model, X)
 
     order = list(np.argsort(-scores))
     if top_k is not None:

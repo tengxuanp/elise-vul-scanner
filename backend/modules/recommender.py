@@ -19,8 +19,11 @@ except Exception:  # numpy is optional; we degrade gracefully
 # Delegate per-family LTR to the authoritative inference module
 try:
     from .ml.infer_ranker import rank_payloads as ltr_rank_payloads  # type: ignore
-except Exception:
+except Exception as _e:
     ltr_rank_payloads = None  # type: ignore
+    logging.getLogger(__name__).warning(
+        "Per-family ranker unavailable (ml.infer_ranker import failed): %s", _e
+    )
 
 try:
     import joblib  # used only for family_clf and optional generic .joblib model
@@ -68,29 +71,41 @@ if _is_debug():
 
 # ---- configuration -----------------------------------------------------------
 
-ML_DIR = Path(__file__).resolve().parent / "ml"
+# Resolve the base dir for ML artifacts (env override supported)
+def _model_base_dir() -> Path:
+    env_dir = os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
+    if env_dir:
+        return Path(env_dir)
+    return Path(__file__).resolve().parent / "ml"
+
+ML_BASE = _model_base_dir()
+ML_DIR = Path(__file__).resolve().parent / "ml"  # historical location (still used for legacy files)
 
 # Legacy / generic model (not per-family). Kept for backward compatibility.
 MODEL_PATHS = [
-    ML_DIR / "recommender_model.pkl",
+    ML_BASE / "recommender_model.pkl",
+    ML_BASE / "recommender_model.joblib",
+    ML_DIR / "recommender_model.pkl",      # fallback to old location
     ML_DIR / "recommender_model.joblib",
 ]
 PIPELINE_PATHS = [
-    ML_DIR / "feature_pipeline.pkl",          # optional transformer for feats
+    ML_BASE / "feature_pipeline.pkl",
+    ML_DIR / "feature_pipeline.pkl",       # fallback
 ]
 META_PATHS = [
-    ML_DIR / "recommender_meta.json",         # {"feature_dim": N, "endpoint_feature_names": [...], ...}
+    ML_BASE / "recommender_meta.json",
+    ML_DIR / "recommender_meta.json",      # fallback
 ]
 
 # Per-family LTR ranker file locations (existence check only; loading is done in infer_ranker)
 RANKER_PATHS = {
-    "sqli": ML_DIR / "ranker_sqli.joblib",
-    "xss": ML_DIR / "ranker_xss.joblib",
-    "redirect": ML_DIR / "ranker_redirect.joblib",
+    "sqli": (ML_BASE / "ranker_sqli.joblib"),
+    "xss": (ML_BASE / "ranker_xss.joblib"),
+    "redirect": (ML_BASE / "ranker_redirect.joblib"),
 }
 
 # Optional FAMILY CLASSIFIER to choose a family when caller doesn't pass one
-FAMILY_CLF_PATH = ML_DIR / "family_clf.joblib"  # sklearn pipeline with predict_proba
+FAMILY_CLF_PATH = (ML_BASE / "family_clf.joblib") if (ML_BASE / "family_clf.joblib").exists() else (ML_DIR / "family_clf.joblib")
 
 # Per-family minimum probability thresholds (after softmax over rank scores)
 # Overridable via ELISE_FAM_THRESHOLDS env (e.g., "sqli:0.2,xss:0.2,redirect:0.18")
@@ -325,7 +340,7 @@ def _payload_desc(payload: str) -> List[float]:
     has_union         = "union select" in lower
     has_or_1eq1       = (" or 1=1" in lower) or ("' or" in lower) or ('" or' in lower)
     has_comment       = "--" in lower or "/*" in lower or "*/" in lower
-    has_time_fn     = ("sleep(" in lower) or ("benchmark(" in lower) or ("waitfor" in lower)
+    has_time_fn       = ("sleep(" in lower) or ("benchmark(" in lower) or ("waitfor" in lower)
     is_numeric_like   = lower.strip().isdigit() or lower.strip().replace(".", "", 1).isdigit()
 
     # Redirect cues
@@ -394,18 +409,23 @@ def default_payloads_by_family(family: str, *, context: Optional[Dict[str, Any]]
     """
     Return canonical payload pool for a family (via family_router if available).
     We best-effort pass context to family_router if it accepts it.
+    Always returns a list, even if router hands us a set/generator.
     """
     fam = (family or "").lower()
     if _payload_pool_for:
         try:
-            return list(_payload_pool_for(fam, context=context))  # type: ignore
+            res = _payload_pool_for(fam, context=context)  # type: ignore
         except TypeError:
             try:
-                return list(_payload_pool_for(fam))  # type: ignore
+                res = _payload_pool_for(fam)  # type: ignore
             except Exception:
-                pass
+                res = None
         except Exception:
-            pass
+            res = None
+        try:
+            return list(res) if res is not None else []
+        except Exception:
+            return []
     # minimal fallback
     if fam == "sqli":
         return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
@@ -431,11 +451,11 @@ def _filter_pool_by_context(pool: List[str], family: str, hints: Dict[str, Any])
     try:
         if family == "xss":
             if mode == "json":
-                filtered = [p for p in pool if "\"</" not in p and "<script" not in p]
-                if filtered:
-                    out = filtered
+                # Keep quote-breakouts (common in JSON reflection); only drop literal <script>
+                filtered = [p for p in pool if "<script" not in p.lower()] or pool
+                out = filtered
             if mode == "headers":
-                filtered = [p for p in out if "javascript:" in p or "onerror=" in p or "onload=" in p] or out
+                filtered = [p for p in out if ("javascript:" in p or "onerror=" in p or "onload=" in p)] or out
                 out = filtered
         elif family == "sqli":
             if mode == "path":
@@ -464,6 +484,27 @@ def _parse_family_thresholds_env(env_str: str) -> Dict[str, float]:
         except Exception:
             continue
     return out
+
+# ---- LTR shim (tolerate signature drift) ------------------------------------
+
+def _call_ltr(endpoint_meta: Dict[str, Any], fam: str, candidates: List[Dict[str, Any]], top_k: int):
+    if ltr_rank_payloads is None:
+        return None
+    try:
+        return ltr_rank_payloads(endpoint_meta, fam, candidates, top_k=top_k)
+    except TypeError:
+        try:
+            return ltr_rank_payloads(fam, endpoint_meta, candidates, top_k)
+        except TypeError:
+            try:
+                return ltr_rank_payloads(context=endpoint_meta, family=fam, candidates=candidates, top_k=top_k)
+            except TypeError:
+                try:
+                    return ltr_rank_payloads(context=endpoint_meta, family=fam, candidates=candidates)
+                except Exception:
+                    return None
+    except Exception:
+        return None
 
 # ---- recommender -------------------------------------------------------------
 
@@ -562,16 +603,17 @@ class Recommender:
             try:
                 self.family_clf = joblib.load(FAMILY_CLF_PATH)
                 self.family_classes = list(getattr(self.family_clf, "classes_", []) or ["sqli", "xss", "redirect", "base"])
-                log.info("Loaded family classifier: %s (classes=%s)", FAMILY_CLF_PATH, self.family_classes)
+                log.info("Loaded family classifier: %s (classes=%s)", FAMILY_CLF_PATH, self.family_clf.classes_ if hasattr(self.family_clf, "classes_") else None)
             except Exception as e:
                 log.exception("Failed to load family classifier '%s': %s", FAMILY_CLF_PATH, e)
                 self.family_clf, self.family_classes = None, None
 
         self.ready = True
+        # Report existence using the env-resolved base dir
         log.info(
-            "Recommender ready: plugin=%s, model=%s, pipeline=%s, feature_dim=%s, rankers_exist=%s, family_clf=%s",
+            "Recommender ready: plugin=%s, model=%s, pipeline=%s, feature_dim=%s, rankers_exist=%s, family_clf=%s, model_dir=%s",
             bool(self.plugin_fn), bool(self.model), bool(self.pipeline), self._feature_dim,
-            {k: p.exists() for k, p in RANKER_PATHS.items()}, bool(self.family_clf),
+            {k: p.exists() for k, p in RANKER_PATHS.items()}, bool(self.family_clf), str(ML_BASE),
         )
 
     # ---------------------- internals ----------------------------------------
@@ -594,7 +636,11 @@ class Recommender:
         return {"url": "", "param": "", "method": "GET", "content_type": None, "headers": None}
 
     def _rank_with_family_ranker(
-        self, family: str, feats: Any, pool: List[str]
+        self,
+        family: str,
+        feats: Any,
+        pool: List[str],
+        fam_probs: Optional[Dict[str, float]] = None,
     ) -> Optional[Tuple[List[Tuple[str, float]], Dict[str, Any]]]:
         """
         Delegate to ml.infer_ranker.rank_payloads and convert raw scores → softmax probs.
@@ -607,35 +653,44 @@ class Recommender:
         try:
             endpoint_meta = self._endpoint_meta_from_feats(feats)
             candidates = [{"payload_id": None, "payload": p} for p in pool]
-            ranked = ltr_rank_payloads(endpoint_meta, fam, candidates, top_k=len(pool))
+            ranked = _call_ltr(endpoint_meta, fam, candidates, top_k=len(pool))
             if not isinstance(ranked, list) or not ranked:
                 return None
 
-            # Extract raw scores if provided; otherwise enforce a monotonic sequence
+            # Extract raw scores & whether a real model was used
             raw_scores: List[float] = []
             payloads_out: List[str] = []
-            used_path = None
+            used_model_path = None
             total_dim = None
             for i, item in enumerate(ranked):
                 payloads_out.append(str(item.get("payload", "")))
                 rs = item.get("ranker_score")
                 if rs is None:
-                    # Preserve order from infer_ranker if it didn't attach scores
-                    rs = float(len(ranked) - i)
+                    rs = float(len(ranked) - i)  # deterministic fallback if not attached
                 raw_scores.append(float(rs))
-                used_path = used_path or item.get("ranker_used_model")
+                if item.get("ranker_used_model"):
+                    used_model_path = item.get("ranker_used_model")
                 total_dim = total_dim or item.get("ranker_feature_dim_total")
 
             probs = _softmax(raw_scores)
             ranked_pairs = list(zip(payloads_out, probs, raw_scores))  # [(payload, prob, raw)]
             ranked_pairs.sort(key=lambda x: x[1], reverse=True)
 
+            model_used = bool(used_model_path)
+            used_path_label = "family_ranker" if model_used else "heuristic"
+
             meta = {
-                "used_path": "family_ranker",
+                "used_path": used_path_label,
                 "family": fam,
+                # preserve family probs if we had them; else make a degenerate dist so UI won't synthesize
+                "family_probs": (fam_probs if fam_probs else {
+                    "sqli": 1.0 if fam == "sqli" else 0.0,
+                    "xss": 1.0 if fam == "xss" else 0.0,
+                    "redirect": 1.0 if fam == "redirect" else 0.0,
+                }),
                 "scores": [{"payload": p, "raw": float(r), "prob": float(pr)} for (p, pr, r) in ranked_pairs],
                 "model_ids": {
-                    "ranker_path": str(used_path) if used_path else (
+                    "ranker_path": str(used_model_path) if used_model_path else (
                         str(RANKER_PATHS.get(fam)) if RANKER_PATHS.get(fam) and RANKER_PATHS[fam].exists() else None
                     ),
                     "plugin": os.getenv(PLUGIN_ENV) or None,
@@ -681,6 +736,8 @@ class Recommender:
                 fam_sorted = sorted(probs.items(), key=lambda kv: kv[1], reverse=True)
                 top_f, top_p = fam_sorted[0][0], fam_sorted[0][1]
                 reason = "model_confident" if top_p >= prob_threshold else "below_threshold_explore"
+                # normalize alias if any
+                probs = {("redirect" if k == "open_redirect" else k): float(v) for k, v in probs.items()}
                 return top_f, probs, reason
             except Exception as e:
                 log.exception("Family classifier failed: %s; falling back to priors", e)
@@ -795,10 +852,17 @@ class Recommender:
         meta_out["applied_threshold"] = eff_threshold
 
         # 1) Per-family LTR ranker (authoritative if available and we know the family)
-        ranked_with_meta = self._rank_with_family_ranker(fam, feats, pool_list)
+        ranked_with_meta = self._rank_with_family_ranker(fam, feats, pool_list, fam_probs=fam_probs or None)
         if ranked_with_meta:
             ranked, m = ranked_with_meta
+            # keep previously-computed family_probs if the ranker didn't provide them
             meta_out.update(m)
+            if not meta_out.get("family_probs"):
+                meta_out["family_probs"] = fam_probs or {
+                    "sqli": 1.0 if fam == "sqli" else 0.0,
+                    "xss": 1.0 if fam == "xss" else 0.0,
+                    "redirect": 1.0 if fam == "redirect" else 0.0,
+                }
 
             # Adaptive cap: don't let an overly-high threshold discard all candidates
             best_penalized = max((max(0.0, s - penalty) for (_p, s) in ranked), default=0.0)
@@ -819,7 +883,6 @@ class Recommender:
             if out:
                 meta_out["ranker_score"] = float(out[0][1])
                 meta_out["top_payload"] = out[0][0]
-                meta_out["used_path"] = "family_ranker"
                 return out, meta_out
 
         # 2) Plugin path (authoritative if available)
