@@ -44,6 +44,8 @@ FEATURES: List[str] = [
 
 _USE_ML: bool = os.getenv("ELISE_USE_ML", "1") != "0"
 _DEBUG: bool = os.getenv("ELISE_ML_DEBUG", "0") == "1"
+# If set, do not silently fall back when models are missing or broken
+_REQUIRE_RANKER: bool = os.getenv("ELISE_REQUIRE_RANKER", "0") == "1"
 
 _DEFAULT_MODEL_DIR = Path(__file__).with_name("ml")
 MODEL_DIR: Path = Path(os.getenv("ELISE_ML_MODEL_DIR", str(_DEFAULT_MODEL_DIR)))
@@ -233,12 +235,16 @@ def _vector_for_model(feats: Dict[str, float], model: Optional[object], fam: str
 # ----------------- Model loading / prediction -----------------
 
 def _load_model_for(fam: str) -> Optional[object]:
+    """Load model for the given family or raise if it cannot be loaded."""
     if not _USE_ML:
         return None
     fam = _family_alias(fam)
     key = fam or "generic"
     if key in _MODELS:
-        return _MODELS[key]
+        mdl = _MODELS[key]
+        if mdl is None:
+            raise RuntimeError(f"ML model for {key} previously failed to load")
+        return mdl
 
     path: Optional[Path] = None
     if fam in MODEL_FILES:
@@ -246,18 +252,22 @@ def _load_model_for(fam: str) -> Optional[object]:
     elif GENERIC_MODEL_PATH:
         path = GENERIC_MODEL_PATH
 
-    try:
-        if path and path.exists():
-            mdl = joblib.load(path)
-            _MODELS[key] = mdl
-            _dbg(f"loaded {key} model from {path}")
-            return mdl
-        _dbg(f"model path not found for {key}: {path}")
-    except Exception as e:
-        _dbg(f"failed to load {key} model at {path}: {e}")
+    if not path or not path.exists():
+        msg = f"model path not found for {key}: {path}"
+        _MODELS[key] = None
+        _dbg(msg)
+        raise RuntimeError(msg)
 
-    _MODELS[key] = None
-    return None
+    try:
+        mdl = joblib.load(path)
+        _MODELS[key] = mdl
+        _dbg(f"loaded {key} model from {path}")
+        return mdl
+    except Exception as e:
+        msg = f"failed to load {key} model at {path}: {e}"
+        _MODELS[key] = None
+        _dbg(msg)
+        raise RuntimeError(msg)
 
 
 def _predict_with_model(model: object, feats: Dict[str, float], fam: str) -> Dict[str, Any]:
@@ -308,9 +318,24 @@ def predict_proba(attempt: Dict[str, Any]) -> Dict[str, Any]:
     feats = featurize(attempt)
     fam = (attempt.get("payload_family_used") or attempt.get("family_hint") or "").lower()
 
-    model = _load_model_for(fam)
+    err_msg: Optional[str] = None
+    try:
+        model = _load_model_for(fam)
+    except Exception as e:
+        if _REQUIRE_RANKER:
+            raise
+        err_msg = str(e)
+        _dbg(err_msg)
+        model = None
     if model is None and GENERIC_MODEL_PATH:
-        model = _load_model_for("generic")
+        try:
+            model = _load_model_for("generic")
+        except Exception as e:
+            if _REQUIRE_RANKER:
+                raise
+            err_msg = str(e)
+            _dbg(err_msg)
+            model = None
 
     if model is not None:
         try:
@@ -325,7 +350,10 @@ def predict_proba(attempt: Dict[str, Any]) -> Dict[str, Any]:
 
     # Fallback path
     proba = _fallback_logistic(feats)
-    return {"p": proba, "feats": feats if _DEBUG else None, "source": "fallback"}
+    payload = {"p": proba, "feats": feats if _DEBUG else None, "source": "fallback"}
+    if err_msg:
+        payload["ranker_error"] = err_msg
+    return payload
 
 
 # ----------------- Diagnostics -----------------
