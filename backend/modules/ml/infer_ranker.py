@@ -106,8 +106,11 @@ def _model_base_dir(user_model_dir: Optional[str]) -> Path:
     # Allow env override; fallback to this module dir
     env_dir = os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
     base = user_model_dir or env_dir
-    return Path(base) if base else ML_DIR
-
+    if base:
+        p = Path(base)
+        if p.exists() and any((p / name).exists() for name in MODEL_FILENAMES.values()):
+            return p
+    return ML_DIR
 
 def _model_path_for(family: str, model_dir: Optional[str]) -> Path:
     family = "redirect" if family == "open_redirect" else family

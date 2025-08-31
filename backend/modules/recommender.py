@@ -75,7 +75,9 @@ if _is_debug():
 def _model_base_dir() -> Path:
     env_dir = os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
     if env_dir:
-        return Path(env_dir)
+        p = Path(env_dir)
+        if p.exists() and any((p / f"ranker_{fam}.joblib").exists() for fam in ("sqli", "xss", "redirect")):
+            return p
     return Path(__file__).resolve().parent / "ml"
 
 ML_BASE = _model_base_dir()
