@@ -39,6 +39,14 @@ try:
 except Exception as e:
     raise SystemExit("joblib is required. Add `joblib` to backend/requirements.txt") from e
 
+# Optional XGBoost JSON fallback for artifact/runtime mismatch
+try:
+    import xgboost as xgb  # type: ignore
+    _XGB_OK = True
+except Exception:
+    xgb = None  # type: ignore
+    _XGB_OK = False
+
 # Endpoint features must MATCH the training extractor.
 try:
     from ..feature_extractor import FeatureExtractor
@@ -103,8 +111,8 @@ def _expected_dims() -> Tuple[Optional[int], Optional[int], Optional[int]]:
 
 
 def _model_base_dir(user_model_dir: Optional[str]) -> Path:
-    # Allow env override; fallback to this module dir
-    env_dir = os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
+    # Env override precedence: ELISE_ML_MODEL_DIR > MODEL_DIR > ELISE_MODEL_DIR
+    env_dir = os.getenv("ELISE_ML_MODEL_DIR") or os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
     base = user_model_dir or env_dir
     if base:
         p = Path(base)
@@ -118,24 +126,43 @@ def _model_path_for(family: str, model_dir: Optional[str]) -> Path:
 
 
 def _load_model(family: str, model_dir: Optional[str]) -> Any:
+    """Load joblib model; if that fails and a .json booster exists, load booster as fallback."""
     family = "redirect" if family == "open_redirect" else family
-    key = f"{family}::{_model_base_dir(model_dir)}"
+    base_dir = _model_base_dir(model_dir)
+    key = f"{family}::{base_dir}"
     if key in _MODELS:
         return _MODELS[key]
-    path = _model_path_for(family, model_dir)
-    if not path.exists():
-        log.warning("[LTR] Model missing for %s at %s (fallback → heuristic).", family, path)
+
+    jl_path = base_dir / MODEL_FILENAMES[family]
+    if not jl_path.exists():
+        log.warning("[LTR] Model missing for %s at %s (fallback → heuristic).", family, jl_path)
         _MODELS[key] = None
         return None
+
+    # Try joblib first
     try:
-        mdl = joblib.load(path)
+        mdl = joblib.load(jl_path)
         _MODELS[key] = mdl
-        log.info("[LTR] Loaded %s model: %s", family, path)
+        log.info("[LTR] Loaded %s model: %s", family, jl_path)
         return mdl
     except Exception as e:
-        log.error("[LTR] Failed to load model for %s at %s: %s (fallback → heuristic).", family, path, e)
-        _MODELS[key] = None
-        return None
+        log.error("[LTR] joblib load failed for %s at %s: %s", family, jl_path, e)
+
+    # Try JSON booster fallback if available
+    json_path = jl_path.with_suffix(".json")
+    if _XGB_OK and json_path.exists():
+        try:
+            booster = xgb.Booster()  # type: ignore[attr-defined]
+            booster.load_model(str(json_path))
+            _MODELS[key] = ("booster", booster)
+            log.info("[LTR] Loaded %s booster JSON: %s", family, json_path)
+            return _MODELS[key]
+        except Exception as e2:
+            log.error("[LTR] booster JSON load failed for %s at %s: %s", family, json_path, e2)
+
+    _MODELS[key] = None
+    log.warning("[LTR] No usable model for %s; using heuristic.", family)
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -365,23 +392,41 @@ def _fallback_score(payload: str, family: str, param_name: str) -> float:
 # Dispatcher + scoring helpers
 # --------------------------------------------------------------------------- #
 
+def _sigmoid(x: np.ndarray | float) -> np.ndarray | float:
+    return 1.0 / (1.0 + np.exp(-x))
+
 def _pick_scores(model: Any, X: np.ndarray) -> np.ndarray:
-    """Try common scikit interfaces; return 1D float array."""
+    """Try common interfaces, then Booster JSON; return 1D float array."""
+    # XGBoost Booster fallback
+    if isinstance(model, tuple) and model and model[0] == "booster":
+        if not _XGB_OK:
+            raise RuntimeError("XGBoost booster present but xgboost not installed")
+        dmat = xgb.DMatrix(X.astype(np.float32))  # type: ignore
+        y = model[1].predict(dmat)  # type: ignore[index]
+        return np.asarray(y, dtype=float).reshape(-1)
+
+    # scikit-style models
+    if hasattr(model, "predict_proba"):
+        try:
+            proba = model.predict_proba(X)  # type: ignore
+            proba = np.asarray(proba, dtype=float)
+            if proba.ndim == 2 and proba.shape[1] >= 2:
+                return proba[:, -1].reshape(-1)
+            return proba.reshape(-1)
+        except Exception as e:
+            log.info("[LTR] predict_proba failed; trying predict(): %s", e)
+
     if hasattr(model, "predict"):
         y = model.predict(X)  # type: ignore
         y = np.asarray(y, dtype=float).reshape(-1)
-        return y
+        # For rankers/regressors, squash for stability; ranking invariant.
+        return np.asarray(_sigmoid(y), dtype=float).reshape(-1)
+
     if hasattr(model, "decision_function"):
         y = model.decision_function(X)  # type: ignore
         y = np.asarray(y, dtype=float).reshape(-1)
-        return y
-    if hasattr(model, "predict_proba"):
-        proba = model.predict_proba(X)  # type: ignore
-        proba = np.asarray(proba, dtype=float)
-        # take positive-class if binary; else max class prob
-        if proba.ndim == 2 and proba.shape[1] >= 2:
-            return proba[:, -1].reshape(-1)
-        return proba.reshape(-1)
+        return np.asarray(_sigmoid(y), dtype=float).reshape(-1)
+
     # last resort: callable
     y = model(X)  # type: ignore
     return np.asarray(y, dtype=float).reshape(-1)
@@ -432,7 +477,7 @@ def rank_payloads(*args, **kwargs) -> List[Dict[str, Any]]:
     # Prepare endpoint vector (validates shape; may infer ep_dim if meta lacked it)
     ep_vec = _endpoint_vec(endpoint_meta)
 
-    # Load model
+    # Load model (joblib → booster JSON fallback)
     model = _load_model(family, model_dir=model_dir)
     used_model_path = str(_model_path_for(family, model_dir))
     if model is None:

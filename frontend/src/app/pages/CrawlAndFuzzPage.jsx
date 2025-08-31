@@ -25,10 +25,11 @@ const rowKey = (row) => {
 
 /** Consider more ML path spellings; explicitly exclude heuristic/none */
 const isMLUsedPath = (usedPath = "") => {
-  const s = String(usedPath || "").toLowerCase();
+  const parts = Array.isArray(usedPath) ? usedPath : [usedPath];
+  const s = parts.map((x) => String(x || "").toLowerCase()).join("|");
   if (!s) return false;
-  if (s === "heuristic" || s === "none") return false;
-  return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|generic[-_ ]|plugin|ranker)/.test(s);
+  if (/\b(heuristic|none)\b/.test(s)) return false;
+  return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(s);
 };
 
 /** Extract plain names from arrays that can contain strings or {name: "..."} dicts */
@@ -203,9 +204,21 @@ function deriveOrigin(one = {}) {
     one.ml_meta ||
     (one.ml && (one.ml.ranker_meta || one.ml.ranker)) ||
     {};
-  const probs = rm.family_probs || rm.probs || rm.family_probabilities || rm.probabilities;
+  const probs =
+    rm.family_probs ||
+    rm.probs ||
+    rm.family_probabilities ||
+    rm.probabilities;
+
+  // NEW: treat array **or object** model_ids as ML
+  const hasModelIds =
+    !!rm.model_ids &&
+    ((Array.isArray(rm.model_ids) && rm.model_ids.length > 0) ||
+     (rm.model_ids && typeof rm.model_ids === "object" && Object.keys(rm.model_ids).length > 0));
+
   if (
-    (isNonEmptyObj(rm) && (hasNum(rm.ranker_score) || isNonEmptyObj(probs) || isNonEmptyArray(rm.model_ids))) ||
+    (isNonEmptyObj(rm) &&
+      (hasNum(rm.ranker_score) || isNonEmptyObj(probs) || hasModelIds)) ||
     hasNum(one.ranker_score) ||
     isNonEmptyObj(one.ranker_probs) ||
     isNonEmptyObj(one.ml_probs)
@@ -268,6 +281,7 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
     if (strong.redirect) redirect += 0.6;
   } else if (famGuess) {
     if (famGuess === "sqli") sqli += Math.max(0.2, Math.min(0.7, confidence));
+    if (famGuess === "xss") sqli += 0;
     if (famGuess === "xss") xss += Math.max(0.2, Math.min(0.7, confidence));
     if (famGuess === "redirect") redirect += Math.max(0.2, Math.min(0.7, confidence));
   }
@@ -301,19 +315,24 @@ function extractFeatureDim(container = {}) {
 }
 
 /** Normalize ranker meta into a consistent shape */
-function normalizeRankerMeta(mRaw = {}, oneRow = {}) {
+function normalizeRankerMeta(mRaw = {}, oneRowRaw = {}, synthHints = null) {
   const fm = mRaw || {};
+  const row = oneRowRaw || {};
 
-  // dig into typical containers
+  // search across many likely containers, INCLUDING the original row
   const containers = [
     fm,
     fm.ranker_meta,
     fm.ranker,
     fm.ml_meta,
     fm.meta,
-    (oneRow.ml || {}),
-    oneRow,
-  ];
+    row.ranker_meta,
+    row.ranker,
+    row.ml_meta,
+    row.meta,
+    row.ml,
+    row,
+  ].filter((c) => c && typeof c === "object");
 
   let family_probs = {};
   let family_chosen = null;
@@ -322,24 +341,59 @@ function normalizeRankerMeta(mRaw = {}, oneRow = {}) {
   let feature_dim_total = null;
 
   for (const c of containers) {
-    if (!c || typeof c !== "object") continue;
-    if (!isNonEmptyObj(family_probs)) family_probs = extractFamilyProbs(c);
+    // family probs under many names
+    if (!isNonEmptyObj(family_probs)) {
+      const cand =
+        c.family_probs ||
+        c.probs ||
+        c.family_probabilities ||
+        c.probabilities ||
+        c.per_family ||
+        c.perFamily ||
+        null;
+      if (isNonEmptyObj(cand)) family_probs = cand;
+    }
+
     if (!family_chosen) family_chosen = c.family_chosen || c.family || c.chosen_family || c.chosen;
-    if (!hasNum(ranker_score)) ranker_score = hasNum(c.ranker_score) ? c.ranker_score : (hasNum(c.score) ? c.score : null);
-    if (!isNonEmptyArray(model_ids)) model_ids = c.model_ids || c.models || null;
-    if (!hasNum(feature_dim_total)) feature_dim_total = extractFeatureDim(c);
+
+    if (!hasNum(ranker_score)) {
+      ranker_score = hasNum(c.ranker_score) ? c.ranker_score : (hasNum(c.score) ? c.score : null);
+    }
+
+    // accept arrays, objects, or strings for model identifiers
+    if (!model_ids) {
+      const mid = c.model_ids || c.models || c.model_id || c.model || c.model_name || null;
+      if (
+        (Array.isArray(mid) && mid.length > 0) ||
+        (mid && typeof mid === "object" && Object.keys(mid).length > 0) ||
+        (typeof mid === "string" && mid.trim())
+      ) {
+        model_ids = mid;
+      }
+    }
+
+    if (!hasNum(feature_dim_total)) {
+      const dims =
+        c.feature_dim_total ??
+        c.ranker_feature_dim_total ??
+        c.dim_total ??
+        c.total_dim ??
+        c.feat_dim ??
+        (c.ranker && c.ranker.feature_dim_total) ??
+        (c.ranker && c.ranker.dim_total) ??
+        (c.ml && c.ml.feature_dim_total);
+      if (hasNum(dims) && dims > 0) feature_dim_total = dims;
+    }
   }
 
-  // normalize to 0..1 and keep only the 3 families we show
-  const entries = Object.entries(family_probs || {}).map(([k, v]) => [k.toLowerCase(), Number(v) || 0]);
+  // normalize probs to {sqli,xss,redirect} and 0..1
   const picked = {};
-  for (const [k, v] of entries) {
-    if (["sqli", "xss", "redirect"].includes(k)) picked[k] = v;
+  for (const [k, v] of Object.entries(family_probs || {})) {
+    const key = String(k).toLowerCase();
+    if (["sqli", "xss", "redirect"].includes(key)) picked[key] = Number(v) || 0;
   }
   const sum = Object.values(picked).reduce((a, b) => a + b, 0);
-  if (sum > 0) {
-    Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
-  }
+  if (sum > 0) Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
 
   const meta = {
     family_probs: picked,
@@ -349,14 +403,26 @@ function normalizeRankerMeta(mRaw = {}, oneRow = {}) {
     feature_dim_total: hasNum(feature_dim_total) ? feature_dim_total : null,
   };
 
-  // If still empty, synthesize a useful fallback so the Ranker column isn't blank.
-  if (!isNonEmptyObj(meta.family_probs)) {
-    const synthetic = synthesizeRankerMetaFromSignals(oneRow.signals || {}, oneRow.family || null, oneRow.confidence || 0);
+  // If still empty, synthesize a fallback so the column isn't blank
+  const needSynthetic =
+    !isNonEmptyObj(meta.family_probs) &&
+    !hasNum(meta.ranker_score) &&
+    !(meta.model_ids) &&
+    !hasNum(meta.feature_dim_total);
+
+  if (needSynthetic) {
+    // pull hints (our already-computed signals) if provided
+    const h = synthHints || {};
+    const synthetic = synthesizeRankerMetaFromSignals(
+      h.signals || {},
+      h.family || null,
+      h.confidence || 0
+    );
     if (synthetic) return synthetic;
   }
-
   return meta;
 }
+
 
 /** ===== UI atoms ===== */
 const Badge = ({ children, tone = "default", title }) => {
@@ -851,24 +917,10 @@ export default function CrawlAndFuzzPage() {
         one?.used_path ||
         null;
 
-      const origin = (() => {
-        if (usedPath) {
-          return isMLUsedPath(usedPath)
-            ? "ml"
-            : (String(usedPath).toLowerCase() === "heuristic" || String(usedPath).toLowerCase() === "none")
-              ? "curated"
-              : deriveOrigin(one);
-        }
-        return deriveOrigin(one);
-      })();
-
-      // normalize ranker meta (support a lot of shapes, and synthesize a fallback)
+      // normalize ranker meta (now we pass the FULL original row + hints)
       const ranker_meta = normalizeRankerMeta(
-        one.ranker_meta ||
-          one.ranker ||
-          one.ml_meta ||
-          (one.ml && (one.ml.ranker_meta || one.ml.ranker)) ||
-          {},
+        one.ranker_meta || one.ranker || one.ml_meta || (one.ml && (one.ml.ranker_meta || one.ml.ranker)) || {},
+        one,
         {
           signals: {
             sql_error: sqlErr,
@@ -879,9 +931,29 @@ export default function CrawlAndFuzzPage() {
           },
           family: fam || null,
           confidence,
-          ml: one.ml || {},
         }
       );
+
+      // infer origin again using what we learned
+      const baseOrigin = deriveOrigin({ ...one, ranker_meta: one.ranker_meta || one.ranker || {}, ml: one.ml || {} });
+
+      // treat model ids (array/object/string), probs/score/dims, or used_path as ML
+      const metaHasModelIds =
+        !!ranker_meta?.model_ids &&
+        (
+          (Array.isArray(ranker_meta.model_ids) && ranker_meta.model_ids.length > 0) ||
+          (typeof ranker_meta.model_ids === "object" && Object.keys(ranker_meta.model_ids).length > 0) ||
+          (typeof ranker_meta.model_ids === "string" && ranker_meta.model_ids.trim())
+        );
+
+      const metaSuggestsML =
+        isMLUsedPath(usedPath) ||
+        metaHasModelIds ||
+        isNonEmptyObj(ranker_meta.family_probs) ||
+        hasNum(ranker_meta.ranker_score) ||
+        hasNum(ranker_meta.feature_dim_total);
+
+      const origin = metaSuggestsML ? "ml" : baseOrigin;
 
       // severity (transparent math)
       const severityScore =
@@ -1457,9 +1529,24 @@ export default function CrawlAndFuzzPage() {
 
                     // derive ML vs heuristic label for ranker cell
                     const usedPath = String(row?.ranker_used_path || "").toLowerCase();
+
+                    // accept arrays/objects/strings for model ids
+                    const hasModelIds =
+                      !!row?.ranker_meta?.model_ids &&
+                      (
+                        (Array.isArray(row.ranker_meta.model_ids) && row.ranker_meta.model_ids.length > 0) ||
+                        (typeof row.ranker_meta.model_ids === "object" && Object.keys(row.ranker_meta.model_ids).length > 0) ||
+                        (typeof row.ranker_meta.model_ids === "string" && row.ranker_meta.model_ids.trim())
+                      );
+
                     const rankerIsML =
                       isMLUsedPath(usedPath) ||
-                      (Array.isArray(row?.ranker_meta?.model_ids) && row.ranker_meta.model_ids.length > 0);
+                      hasModelIds ||
+                      (!!row?.ranker_meta && !row.ranker_meta._synthetic && (
+                        isNonEmptyObj(row.ranker_meta.family_probs) ||
+                        hasNum(row.ranker_meta.ranker_score) ||
+                        hasNum(row.ranker_meta.feature_dim_total)
+                      ));
 
                     const rankerScore =
                       typeof row?.ranker_meta?.ranker_score === "number"

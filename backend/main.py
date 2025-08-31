@@ -35,6 +35,15 @@ def _include_optional_router(app: FastAPI, modname: str, tag: str, prefix: str =
         logging.warning(f"Router '{modname}' not mounted ({e}).")
 
 
+def _env_true(name: str, default: bool = False) -> bool:
+    v = str(os.getenv(name, "")).strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Optional dev-time auto-create of DB tables
@@ -52,7 +61,12 @@ async def lifespan(app: FastAPI):
 
 # ----------------------------- app -----------------------------
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+# Honor LOG_LEVEL if present; otherwise auto-enable DEBUG when ELISE_ML_DEBUG=1
+_DEFAULT_LEVEL = "DEBUG" if _env_true("ELISE_ML_DEBUG", False) else "INFO"
+_LOG_LEVEL = os.getenv("LOG_LEVEL", _DEFAULT_LEVEL)
+logging.basicConfig(level=_LOG_LEVEL)
+logging.info("Starting API (LOG_LEVEL=%s, ELISE_ML_DEBUG=%s, ELISE_ML_MODEL_DIR=%s)",
+             _LOG_LEVEL, _env_true("ELISE_ML_DEBUG", False), os.getenv("ELISE_ML_MODEL_DIR") or "-")
 
 app = FastAPI(
     title="Automated Web Vulnerability Assessment API",
@@ -77,7 +91,7 @@ app.add_middleware(
 _include_optional_router(app, "crawl_routes", "Crawl")
 _include_optional_router(app, "category_routes", "Categorization")
 _include_optional_router(app, "probe_routes", "Probe")
-_include_optional_router(app, "recommend_routes", "Recommender")
+_include_optional_router(app, "recommend_routes", "Recommender")  # exposes /api/recommend_payloads and /api/diagnostics/ltr
 _include_optional_router(app, "job_routes", "Job")
 _include_optional_router(app, "fuzz_routes", "Fuzzing")
 _include_optional_router(app, "evidence_routes", "Evidence")
@@ -93,4 +107,9 @@ def root():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {
+        "status": "ok",
+        "log_level": _LOG_LEVEL,
+        "ml_debug": _env_true("ELISE_ML_DEBUG", False),
+        "model_dir": os.getenv("ELISE_ML_MODEL_DIR") or os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR") or None,
+    }

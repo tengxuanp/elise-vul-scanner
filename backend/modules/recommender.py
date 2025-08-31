@@ -48,13 +48,10 @@ def _env_true(name: str, default: bool = False) -> bool:
         return False
     return default
 
-_DEBUG_STATE = {
-    "enabled": _env_true("ELISE_ML_DEBUG", False)
-}
+_DEBUG_STATE = {"enabled": _env_true("ELISE_ML_DEBUG", False)}
 STRICT_SHAPE = _env_true("ELISE_STRICT_SHAPE", True)  # hard-fail on feature dim mismatches
 
 def _is_debug() -> bool:
-    # dynamic: honors both process env and runtime switch
     return _DEBUG_STATE["enabled"] or _env_true("ELISE_ML_DEBUG", False)
 
 def set_ml_debug(enabled: bool) -> None:
@@ -64,7 +61,6 @@ def set_ml_debug(enabled: bool) -> None:
     os.environ["ELISE_ML_DEBUG"] = "1" if enabled else "0"
     log.info("ML debug %s", "ENABLED" if enabled else "DISABLED")
 
-# initialize logger level once on import
 log.setLevel(logging.DEBUG if _is_debug() else logging.INFO)
 if _is_debug():
     log.debug("ELISE_ML_DEBUG enabled -> verbose logging (STRICT_SHAPE=%s)", STRICT_SHAPE)
@@ -73,7 +69,8 @@ if _is_debug():
 
 # Resolve the base dir for ML artifacts (env override supported)
 def _model_base_dir() -> Path:
-    env_dir = os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
+    # Precedence: ELISE_ML_MODEL_DIR > MODEL_DIR > ELISE_MODEL_DIR
+    env_dir = os.getenv("ELISE_ML_MODEL_DIR") or os.getenv("MODEL_DIR") or os.getenv("ELISE_MODEL_DIR")
     if env_dir:
         p = Path(env_dir)
         if p.exists() and any((p / f"ranker_{fam}.joblib").exists() for fam in ("sqli", "xss", "redirect")):
@@ -453,7 +450,6 @@ def _filter_pool_by_context(pool: List[str], family: str, hints: Dict[str, Any])
     try:
         if family == "xss":
             if mode == "json":
-                # Keep quote-breakouts (common in JSON reflection); only drop literal <script>
                 filtered = [p for p in pool if "<script" not in p.lower()] or pool
                 out = filtered
             if mode == "headers":
@@ -679,16 +675,18 @@ class Recommender:
             ranked_pairs.sort(key=lambda x: x[1], reverse=True)
 
             model_used = bool(used_model_path)
-            used_path_label = "family_ranker" if model_used else "heuristic"
+            ml_label = f"ml:{'redirect' if fam == 'open_redirect' else fam}"
+            used_path_label = ml_label if model_used else "heuristic"
 
             meta = {
                 "used_path": used_path_label,
-                "family": fam,
-                # preserve family probs if we had them; else make a degenerate dist so UI won't synthesize
+                "source": used_path_label,
+                "strategy": ("ml" if model_used else "heuristic"),
+                "family": 'redirect' if fam == 'open_redirect' else fam,
                 "family_probs": (fam_probs if fam_probs else {
                     "sqli": 1.0 if fam == "sqli" else 0.0,
                     "xss": 1.0 if fam == "xss" else 0.0,
-                    "redirect": 1.0 if fam == "redirect" else 0.0,
+                    "redirect": 1.0 if fam in ("redirect", "open_redirect") else 0.0,
                 }),
                 "scores": [{"payload": p, "raw": float(r), "prob": float(pr)} for (p, pr, r) in ranked_pairs],
                 "model_ids": {
@@ -701,6 +699,7 @@ class Recommender:
                 },
                 "feature_dim": self._feature_dim,
                 "expected_total_dim": total_dim or ((self._feature_dim + 20) if self._feature_dim is not None else None),
+                "dim": total_dim,
             }
             return ([(p, float(pr)) for (p, pr, _r) in ranked_pairs], meta)
         except Exception as e:
@@ -818,6 +817,8 @@ class Recommender:
 
         meta_out: Dict[str, Any] = {
             "used_path": "none",
+            "source": "none",
+            "strategy": "none",
             "family": fam,
             "family_probs": fam_probs or None,
             "family_decision": fam_decision,
@@ -885,6 +886,12 @@ class Recommender:
             if out:
                 meta_out["ranker_score"] = float(out[0][1])
                 meta_out["top_payload"] = out[0][0]
+                # ensure UI sees ML explicitly
+                meta_out["strategy"] = "ml"
+                if not str(meta_out.get("used_path", "")).startswith("ml:"):
+                    meta_out["used_path"] = f"ml:{fam}"
+                if not str(meta_out.get("source", "")).startswith("ml:"):
+                    meta_out["source"] = f"ml:{fam}"
                 return out, meta_out
 
         # 2) Plugin path (authoritative if available)
@@ -905,6 +912,8 @@ class Recommender:
                 out = [(p, s) for (p, s, _raw) in penalized if s >= eff_threshold][: max(1, top_n)]
                 meta_out.update({
                     "used_path": "plugin",
+                    "source": "plugin",
+                    "strategy": "plugin",
                     "scores": [{"payload": p, "raw": float(raw), "prob": float(prob)} for p, prob, raw in ranked_pairs],
                     "penalty_applied": penalty,
                 })
@@ -964,6 +973,8 @@ class Recommender:
                     out = [(p, s) for (p, s, _raw) in penalized if s >= eff_threshold][: max(1, top_n)]
                     meta_out.update({
                         "used_path": "generic_pairwise",
+                        "source": "generic_pairwise",
+                        "strategy": "generic",
                         "scores": [{"payload": p, "raw": float(raw), "prob": float(prob)} for p, prob, raw in ranked_pairs],
                         "penalty_applied": penalty,
                     })
@@ -988,6 +999,8 @@ class Recommender:
                         except Exception:
                             single_score = float(proba[0])  # type: ignore
                         meta_out["used_path"] = "generic_predict_proba"
+                        meta_out["source"] = "generic_predict_proba"
+                        meta_out["strategy"] = "generic"
                     elif hasattr(self.model, "decision_function"):
                         df = self.model.decision_function(arr)  # type: ignore
                         if isinstance(df, (list, tuple)):
@@ -995,10 +1008,14 @@ class Recommender:
                         else:
                             single_score = float(df)      # type: ignore
                         meta_out["used_path"] = "generic_decision_function"
+                        meta_out["source"] = "generic_decision_function"
+                        meta_out["strategy"] = "generic"
                     elif hasattr(self.model, "predict"):
                         y = self.model.predict(arr)  # type: ignore
                         single_score = float(y[0]) if isinstance(y, (list, tuple)) else float(y)  # type: ignore
                         meta_out["used_path"] = "generic_predict"
+                        meta_out["source"] = "generic_predict"
+                        meta_out["strategy"] = "generic"
 
                     if single_score is not None:
                         try:
@@ -1042,6 +1059,8 @@ class Recommender:
 
         meta_out.update({
             "used_path": "heuristic",
+            "source": "heuristic",
+            "strategy": "heuristic",
             "scores": [{"payload": p, "raw": float(raw), "prob": float(prob)} for p, prob, raw in ranked_pairs],
             "penalty_applied": penalty,
         })
