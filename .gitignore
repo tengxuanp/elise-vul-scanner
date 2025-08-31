@@ -12,3 +12,4 @@ frontend/.next/
 frontend/.turbo/
 frontend/.vercel/
 playwright/.cache/
+.env

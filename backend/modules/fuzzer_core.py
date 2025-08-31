@@ -74,6 +74,20 @@ except Exception:
 _FAM = FamilyClassifier() if FamilyClassifier else None
 _RECO = Recommender() if Recommender else None
 
+# Load the ML recommender if available
+if _RECO is not None:
+    try:
+        print(f"DEBUG: Loading ML Recommender: {_RECO}")
+        _RECO.load()
+        print(f"DEBUG: ML Recommender loaded successfully: {_RECO}")
+        print(f"DEBUG: Recommender ready: {getattr(_RECO, 'ready', 'N/A')}")
+        print(f"DEBUG: Recommender meta: {getattr(_RECO, 'meta', {})}")
+    except Exception as e:
+        print(f"DEBUG: Failed to load ML Recommender: {e}")
+        _RECO = None
+else:
+    print("DEBUG: No Recommender available to load")
+
 # Defaults if router constants are missing
 DEFAULT_MIN_PROB = float(_ROUTER_MIN_PROB) if _ROUTER_MIN_PROB is not None else 0.55
 DEFAULT_EXPLORE_TOPK = int(_ROUTER_EXPLORE_TOPK) if _ROUTER_EXPLORE_TOPK is not None else 2
@@ -339,17 +353,22 @@ def _rank_payloads_for_family(
 
     if _RECO is not None:
         try:
+            print(f"DEBUG: Using ML recommender for family {fam}")
             if hasattr(_RECO, "recommend_with_meta"):
                 fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
                 recs, meta = _RECO.recommend_with_meta(
                     feats, pool=pool, top_n=top_n, threshold=threshold, family=fam, feedback=fb  # type: ignore[arg-type]
                 )
+                print(f"DEBUG: ML recommender returned {len(recs)} results, meta: {meta}")
                 return ([(p, float(prob)) for (p, prob) in recs], meta or {})
             else:
                 recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
                 return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam})
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG: ML recommender failed: {e}")
             pass
+    else:
+        print(f"DEBUG: No ML recommender available (_RECO is None)")
 
     # Fallback: naive order, uniform score
     out = [(p, 0.2) for p in pool[:top_n]]
@@ -1040,6 +1059,11 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     row_model_path = (ranker_meta.get("model_ids") or {}).get("ranker_path")
                     scores_list = ranker_meta.get("scores") or []
                     row_top_prob = float(scores_list[0]["prob"]) if scores_list else float(p_ml)
+                    
+                    # Debug logging for ML metadata
+                    print(f"DEBUG: ranker_meta.used_path = {ranker_meta.get('used_path')}")
+                    print(f"DEBUG: row_ranker_used = {row_ranker_used}")
+                    print(f"DEBUG: meta object = {meta}")
 
                     if err1 is not None:
                         _append_evidence_line(
@@ -1111,24 +1135,30 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         status_delta, len_delta, ms_delta,
                     )
 
-                    # Attempt-level ML (old path)
+                    # Attempt-level ML (use family ranking results)
                     try:
-                        ml_features = {
-                            "detector_hits": detector_hits,
-                            "status_delta": status_delta,
-                            "len_delta": len_delta,
-                            "latency_ms_delta": ms_delta,
-                            "payload_family_used": fam or _payload_family(payload),
-                            "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
-                            "method": method,
-                            "in": t["in"],
-                        }
-                        ml_out = _ranker_predict(ml_features)
+                        # Use the family ranking results instead of separate ML prediction
+                        if ranker_meta and ranker_meta.get("used_path"):
+                            ml_src = str(ranker_meta.get("used_path"))
+                            ml_conf = float(ranker_meta.get("ranker_score", 0.0))
+                        else:
+                            # Fallback to old ML path if no family ranking
+                            ml_features = {
+                                "detector_hits": detector_hits,
+                                "status_delta": status_delta,
+                                "len_delta": len_delta,
+                                "latency_ms_delta": ms_delta,
+                                "payload_family_used": fam or _payload_family(payload),
+                                "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
+                                "method": method,
+                                "in": t["in"],
+                            }
+                            ml_out = _ranker_predict(ml_features)
+                            ml_conf = float(ml_out.get("p", 0.0))
+                            ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
                     except Exception:
-                        ml_out = {"p": 0.0, "source": "fallback_error"}
-
-                    ml_conf = float(ml_out.get("p", 0.0))
-                    ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
+                        ml_conf = 0.0
+                        ml_src = "fallback_error"
 
                     # Clamp model confidence if we have neither detector signals nor deltas
                     if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):

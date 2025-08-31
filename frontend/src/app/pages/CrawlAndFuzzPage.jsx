@@ -29,6 +29,8 @@ const isMLUsedPath = (usedPath = "") => {
   const s = parts.map((x) => String(x || "").toLowerCase()).join("|");
   if (!s) return false;
   if (/\b(heuristic|none)\b/.test(s)) return false;
+  // Check for ml:family patterns (e.g., ml:sqli, ml:xss)
+  if (/ml:[a-z]+/.test(s)) return true;
   return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(s);
 };
 
@@ -573,7 +575,7 @@ export default function CrawlAndFuzzPage() {
   const [strongOnly, setStrongOnly] = useState(false);
 
   // Engine selector (auto uses ML+curated on backend)
-  const [engineMode, setEngineMode] = useState("auto"); // "auto" | "ml" | "core"
+  const [engineMode, setEngineMode] = useState("auto"); // "auto" | "core" | "ffuf"
 
   // Extra filters / view / pagination
   const [methodFilter, setMethodFilter] = useState("all");
@@ -746,7 +748,7 @@ export default function CrawlAndFuzzPage() {
     try {
       const data = await fuzzByJob(jobId, mkFuzzOpts());
       setFuzzSummary(data);
-      toast.success(`Fuzzed all endpoints (${engineMode})`);
+      toast.success(`Fuzzed all endpoints (${engineMode === "core" ? "ML" : engineMode})`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz ALL failed");
@@ -785,7 +787,7 @@ export default function CrawlAndFuzzPage() {
 
       const data = await fuzzSelected(jobId, selection, mkFuzzOpts());
       setFuzzSummary(data);
-      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (${engineMode})`);
+      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (${engineMode === "core" ? "ML" : engineMode})`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz Selected failed");
@@ -1216,15 +1218,16 @@ export default function CrawlAndFuzzPage() {
           <span className="font-mono">job_id:</span>
           <span className="font-mono">{jobId}</span>
           <span className="ml-4 text-gray-500">Engine:</span>
+          {/* Note: "core" engine uses the ML ranker, "ffuf" is legacy without ML */}
           <select
             className="border p-1 rounded text-sm"
             value={engineMode}
             onChange={(e) => setEngineMode(e.target.value)}
-            title="ML/core engine selection for fuzzing"
+            title="Engine selection: auto=ML+curated, core=ML only, ffuf=no ML"
           >
             <option value="auto">auto (ML + curated)</option>
-            <option value="ml">ml only</option>
-            <option value="core">core only (no ML)</option>
+            <option value="core">core (with ML)</option>
+            <option value="ffuf">ffuf only (no ML)</option>
           </select>
           <span className="ml-4 text-gray-500">Core engine uses cookies from crawl and optional bearer:</span>
           <input
@@ -1248,7 +1251,7 @@ export default function CrawlAndFuzzPage() {
       {/* Controls */}
       <div className="flex flex-wrap gap-2 items-center sticky top-0 z-20 bg-white/90 backdrop-blur border-b py-2 px-1">
         <button className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60" onClick={onFuzzAll} disabled={!jobId || loadingFuzz} type="button">
-          {loadingFuzz ? "Fuzzing…" : `Fuzz ALL (${engineMode})`}
+          {loadingFuzz ? "Fuzzing…" : `Fuzz ALL (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
@@ -1256,7 +1259,7 @@ export default function CrawlAndFuzzPage() {
           disabled={!jobId || loadingFuzz || selectedKeys.size === 0}
           type="button"
         >
-          {`Fuzz Selected (${engineMode})`}
+          {`Fuzz Selected (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
         <button className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60" onClick={downloadReport} disabled={!jobId} type="button">
           Download Report
@@ -1529,6 +1532,8 @@ export default function CrawlAndFuzzPage() {
 
                     // derive ML vs heuristic label for ranker cell
                     const usedPath = String(row?.ranker_used_path || "").toLowerCase();
+                    const mlSource = String(row?.ml?.source || "").toLowerCase();
+                    const rankerMetaUsedPath = String(row?.ranker_meta?.used_path || "").toLowerCase();
 
                     // accept arrays/objects/strings for model ids
                     const hasModelIds =
@@ -1539,14 +1544,34 @@ export default function CrawlAndFuzzPage() {
                         (typeof row.ranker_meta.model_ids === "string" && row.ranker_meta.model_ids.trim())
                       );
 
+                    // Debug logging for ML detection
+                    console.log("Debug ML detection:", {
+                      usedPath: row?.ranker_used_path,
+                      mlSource: row?.ml?.source,
+                      rankerMetaUsedPath: row?.ranker_meta?.used_path,
+                      hasModelIds,
+                      familyProbs: row?.ranker_meta?.family_probs,
+                      rankerScore: row?.ranker_meta?.ranker_score,
+                      featureDim: row?.ranker_meta?.feature_dim_total
+                    });
+                    
                     const rankerIsML =
                       isMLUsedPath(usedPath) ||
+                      isMLUsedPath(mlSource) ||
+                      isMLUsedPath(rankerMetaUsedPath) ||
                       hasModelIds ||
-                      (!!row?.ranker_meta && !row.ranker_meta._synthetic && (
+                      // If we have family probabilities and ranker score, this is ML
+                      (!!row?.ranker_meta?.family_probs && 
+                       typeof row?.ranker_meta?.ranker_score === "number" &&
+                       row?.ranker_meta?.ranker_score > 0) ||
+                      // Fallback: if we have any ML-like data, consider it ML
+                      (!!row?.ranker_meta && !row?.ranker_meta._synthetic && (
                         isNonEmptyObj(row.ranker_meta.family_probs) ||
                         hasNum(row.ranker_meta.ranker_score) ||
                         hasNum(row.ranker_meta.feature_dim_total)
                       ));
+                    
+                    console.log("rankerIsML result:", rankerIsML);
 
                     const rankerScore =
                       typeof row?.ranker_meta?.ranker_score === "number"
@@ -1563,7 +1588,7 @@ export default function CrawlAndFuzzPage() {
                         <td className="p-2 w-24 sticky left-0 z-10 bg-white"><SeverityBadge sev={row.severity} /></td>
                         <td className="p-2 w-28 sticky left-24 z-10 bg-white"><ConfMeter v={Number(row.confidence || 0)} /></td>
 
-                        <td className="p-2 w-24 whitespace-nowrap">
+                        <td className="p-2 w-24 whitespace-nowrap" data-origin={row.origin}>
                           <div className="inline-block min-w-[56px]">
                             <OriginBadge origin={row.origin} />
                           </div>
@@ -1594,7 +1619,7 @@ export default function CrawlAndFuzzPage() {
                           </div>
                         </td>
 
-                        <td className="p-2 w-56">
+                        <td className="p-2 w-56" data-ranker={rankerIsML ? "ML" : row?.ranker_meta?._synthetic ? "heuristic" : ""}>
                           {row?.ranker_meta?.family_probs ? <FamilyProbsBar probs={row.ranker_meta.family_probs} /> : <span className="text-gray-400">—</span>}
                           <div className="text-[10px] text-gray-500 mt-1">
                             {dimPrefix}score: <span className="font-mono">{rankerScore}</span>

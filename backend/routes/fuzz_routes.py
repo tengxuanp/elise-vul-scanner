@@ -30,12 +30,8 @@ except Exception:  # pragma: no cover
     class FeatureExtractor:  # minimal stub
         def extract_features(self, *a, **kw): return {}
 
-try:
-    from ..modules.recommender import Recommender  # type: ignore
-except Exception:  # pragma: no cover
-    class Recommender:  # minimal stub
-        def load(self): ...
-        def recommend_with_meta(self, *a, **kw): return [], {"used_path": "heuristic"}
+# Import the real Recommender - no stub fallback
+from ..modules.recommender import Recommender  # type: ignore
 
 def _init_reco() -> Optional[Recommender]:
     """Instantiate and best-effort load recommender."""
@@ -816,11 +812,14 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
         family_chosen = raw_rm.get("family_chosen") or r.get("family")
         model_ids = raw_rm.get("model_ids") or raw_rm.get("models") or r.get("model_ids") or r.get("models")
 
-        # used_path: if ML-ish fields exist and none present, stamp a standard value
+        # used_path: preserve existing ML path or stamp standard value if missing
         has_ml_fields = bool(family_probs) or isinstance(ranker_score, (int, float)) or (isinstance(model_ids, (list, tuple)) and len(model_ids) > 0)
         used_path = raw_rm.get("used_path")
-        if has_ml_fields and not used_path:
-            used_path = "family_ranker"
+        # CRITICAL: Preserve the original used_path from evidence - don't overwrite ML paths!
+        if raw_rm.get("used_path") and raw_rm.get("used_path").startswith("ml:"):
+            used_path = raw_rm.get("used_path")  # Keep "ml:redirect", "ml:sqli", etc.
+        elif has_ml_fields and not used_path:
+            used_path = "family_ranker"  # Only use fallback if no ML path exists
 
         # Persist canonicalized ranker_meta back if anything present
         canonical_rm: Dict[str, Any] = {}
@@ -836,6 +835,10 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
             canonical_rm["used_path"] = used_path
         if canonical_rm:
             r["ranker_meta"] = canonical_rm
+        
+        # Preserve the original ranker_used_path from evidence
+        if r.get("ranker_used_path"):
+            r["ranker_used_path"] = r["ranker_used_path"]
 
         # If there is an explicit origin/flag, keep it; else infer as ML if we have ML-ish fields
         if "origin" not in r:
