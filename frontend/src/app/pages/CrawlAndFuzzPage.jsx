@@ -34,7 +34,7 @@ const isMLUsedPath = (usedPath = "") => {
   return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(s);
 };
 
-/** Extract plain names from arrays that can contain strings or {name: "..."} dicts */
+/** Extract plain names from arrays that can contain strings or {name: "…"} dicts */
 const namesFrom = (xs) => {
   if (!Array.isArray(xs)) return [];
   const out = [];
@@ -283,7 +283,6 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
     if (strong.redirect) redirect += 0.6;
   } else if (famGuess) {
     if (famGuess === "sqli") sqli += Math.max(0.2, Math.min(0.7, confidence));
-    if (famGuess === "xss") sqli += 0;
     if (famGuess === "xss") xss += Math.max(0.2, Math.min(0.7, confidence));
     if (famGuess === "redirect") redirect += Math.max(0.2, Math.min(0.7, confidence));
   }
@@ -574,6 +573,21 @@ const SortHeader = ({ fieldKey, label, current, set }) => {
   );
 };
 
+/** === Collapsible section header component === */
+const CollapsibleHeader = ({ title, expanded, onToggle, children, count }) => (
+  <div className="flex items-center justify-between">
+    <button
+      onClick={onToggle}
+      className="flex items-center gap-2 text-lg font-semibold hover:text-blue-600 transition-colors cursor-pointer"
+    >
+      <span className="text-lg">{expanded ? '▼' : '▶'}</span>
+      <span>{title}</span>
+      {count !== undefined && <span className="text-sm text-gray-500">({count})</span>}
+    </button>
+    {children}
+  </div>
+);
+
 /** ===== Page ===== */
 export default function CrawlAndFuzzPage() {
   const [jobId, setJobId] = useState(null);
@@ -608,6 +622,10 @@ export default function CrawlAndFuzzPage() {
   const [viewMode, setViewMode] = useState("table");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+
+  // Collapsible sections state
+  const [endpointsExpanded, setEndpointsExpanded] = useState(true);
+  const [capturedRequestsExpanded, setCapturedRequestsExpanded] = useState(false);
 
   // internal guard so we only try categorized-endpoints once per crawl
   const [triedCategorized, setTriedCategorized] = useState(false);
@@ -1222,10 +1240,10 @@ export default function CrawlAndFuzzPage() {
   };
 
   return (
-    <div className="p-4 space-y-4">
-      <header className="flex items-center justify-between gap-2">
+    <div className="max-w-full overflow-hidden p-4 space-y-4">
+      <header className="flex items-center justify-between gap-2 flex-wrap">
         <h1 className="text-2xl font-semibold">Crawl &amp; Fuzz</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <TogglePill active={compact} onClick={() => setCompact((v) => !v)} toneActive="slate">
             {compact ? "Compact: On" : "Compact: Off"}
           </TogglePill>
@@ -1260,7 +1278,7 @@ export default function CrawlAndFuzzPage() {
           </select>
           <span className="ml-4 text-gray-500">Core engine uses cookies from crawl and optional bearer:</span>
           <input
-            className="border p-1 rounded min-w-[260px]"
+            className="border p-1 rounded min-w-[200px] max-w-full"
             placeholder="Optional bearer token for fuzz (Authorization: Bearer ...)"
             value={fuzzBearer}
             onChange={(e) => setFuzzBearer(e.target.value)}
@@ -1269,7 +1287,7 @@ export default function CrawlAndFuzzPage() {
       )}
 
       {/* Quick stats */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <StatCard label="Target" value={<span className="text-sm font-mono break-all">{targetUrl || "—"}</span>} />
         <StatCard label="Endpoints" value={counts.endpoints} />
         <StatCard label="Visible" value={counts.visible} />
@@ -1278,25 +1296,25 @@ export default function CrawlAndFuzzPage() {
       </div>
 
       {/* Controls */}
-      <div className="flex flex-wrap gap-2 items-center sticky top-0 z-20 bg-white/90 backdrop-blur border-b py-2 px-1">
-        <button className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60" onClick={onFuzzAll} disabled={!jobId || loadingFuzz} type="button">
+      <div className="flex flex-wrap gap-2 items-center sticky top-0 z-20 bg-white/90 backdrop-blur border-b py-2 px-1 max-w-full">
+        <button className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60 text-sm" onClick={onFuzzAll} disabled={!jobId || loadingFuzz} type="button">
           {loadingFuzz ? "Fuzzing…" : `Fuzz ALL (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
         <button
-          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
+          className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60 text-sm"
           onClick={onFuzzSelected}
           disabled={!jobId || loadingFuzz || selectedKeys.size === 0}
           type="button"
         >
           {`Fuzz Selected (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
-        <button className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60" onClick={downloadReport} disabled={!jobId} type="button">
+        <button className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60 text-sm" onClick={downloadReport} disabled={!jobId} type="button">
           Download Report
         </button>
 
         <div className="ml-auto flex items-center gap-2 flex-wrap">
           {/* Family */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             <label className="text-xs text-gray-500">Family:</label>
             <TogglePill active={familiesSelected.has("sqli")} onClick={() => toggleFamily("sqli")}>SQLi</TogglePill>
             <TogglePill active={familiesSelected.has("xss")} onClick={() => toggleFamily("xss")}>XSS</TogglePill>
@@ -1340,12 +1358,12 @@ export default function CrawlAndFuzzPage() {
           {/* Confidence slider */}
           <div className="flex items-center gap-2">
             <label className="text-xs text-gray-500">Min conf:</label>
-            <input type="range" min="0" max="1" step="0.05" value={minConf} onChange={(e) => setMinConf(Number(e.target.value))} className="w-28" />
+            <input type="range" min="0" max="1" step="0.05" value={minConf} onChange={(e) => setMinConf(Number(e.target.value))} className="w-20" />
             <span className="text-xs font-mono">{minConf.toFixed(2)}</span>
           </div>
 
           {/* Signal toggles */}
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1 flex-wrap">
             <label className="text-xs text-gray-500">Signals:</label>
             <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={onlySqlError} onChange={(e) => setOnlySqlError(e.target.checked)} /> SQL err</label>
             <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={onlyXssRef} onChange={(e) => setOnlyXssRef(e.target.checked)} /> XSS refl</label>
@@ -1375,9 +1393,9 @@ export default function CrawlAndFuzzPage() {
           </select>
 
           {/* Search + export */}
-          <input className="border p-2 rounded min-w-[260px]" placeholder="Search (URL, param, payload, origin…)" value={filter} onChange={(e) => setFilter(e.target.value)} />
-          <button className="border px-3 py-2 rounded" onClick={copyJson} title="Copy filtered JSON" type="button">Copy JSON</button>
-          <button className="border px-3 py-2 rounded" onClick={downloadCsv} title="Download filtered CSV" type="button">CSV</button>
+          <input className="border p-2 rounded min-w-[200px] max-w-full" placeholder="Search (URL, param, payload, origin…)" value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <button className="border px-3 py-2 rounded text-sm" onClick={copyJson} title="Copy filtered JSON" type="button">Copy JSON</button>
+          <button className="border px-3 py-2 rounded text-sm" onClick={downloadCsv} title="Download filtered CSV" type="button">CSV</button>
 
           {/* Cards toggle */}
           <TogglePill active={viewMode === "cards"} onClick={() => setViewMode(v => v === "cards" ? "table" : "cards")} toneActive="teal">
@@ -1396,82 +1414,103 @@ export default function CrawlAndFuzzPage() {
 
       {/* Endpoint selection list */}
       <section className="space-y-2">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Endpoints</h2>
-          <div className="flex items-center gap-2">
-            <button className="border px-3 py-1.5 rounded" onClick={selectAllVisible} type="button">Select all (visible)</button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectTopNVisible(20)} title="Select top 20 visible by priority" type="button">Select top 20</button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("redirect")} type="button">Select redirects</button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("xss")} type="button">Select XSS</button>
-            <button className="border px-3 py-1.5 rounded" onClick={() => selectFamilyVisible("sqli")} type="button">Select SQLi</button>
-            <button className="border px-3 py-1.5 rounded" onClick={clearSelection} type="button">Clear</button>
+        <CollapsibleHeader
+          title="Endpoints"
+          expanded={endpointsExpanded}
+          onToggle={() => setEndpointsExpanded(!endpointsExpanded)}
+          count={filtered.length}
+        >
+          <div className="flex items-center gap-2 flex-wrap">
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={selectAllVisible} type="button">Select all (visible)</button>
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={() => selectTopNVisible(20)} title="Select top 20 visible by priority" type="button">Select top 20</button>
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={() => selectFamilyVisible("redirect")} type="button">Select redirects</button>
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={() => selectFamilyVisible("xss")} type="button">Select XSS</button>
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={() => selectFamilyVisible("sqli")} type="button">Select SQLi</button>
+            <button className="border px-3 py-1.5 rounded text-sm" onClick={clearSelection} type="button">Clear</button>
           </div>
-        </div>
+        </CollapsibleHeader>
 
-        <div className="border rounded max-h-80 overflow-auto">
-          {filtered.length === 0 ? (
-            <div className="p-3 text-gray-500">No endpoints</div>
-          ) : (
-            filtered.map((ep) => {
-              const checked = selectedKeys.has(ep._shape);
-              return (
-                <label key={ep._shape} className="p-3 border-b flex items-start gap-3 cursor-pointer hover:bg-gray-50">
-                  <input type="checkbox" checked={checked} onChange={() => toggle(ep)} className="mt-1" />
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono text-sm">{(ep.method || "").toUpperCase()}</span>
-                      <a href={ep.url} target="_blank" rel="noreferrer" className="font-mono text-sm break-words [overflow-wrap:anywhere] underline decoration-dotted">
-                        {ep.url}
-                      </a>
-                      <span className="ml-auto flex items-center gap-2">
-                        <span className="text-xs text-gray-500">prio:</span>
-                        <span className="text-xs font-mono">{(ep._priority || 0).toFixed(2)}</span>
-                        <FamilyBadge fam={ep._family} />
-                      </span>
+        {endpointsExpanded && (
+          <div className="border rounded max-h-80 overflow-auto">
+            {filtered.length === 0 ? (
+              <div className="p-3 text-gray-500">No endpoints</div>
+            ) : (
+              filtered.map((ep) => {
+                const checked = selectedKeys.has(ep._shape);
+                return (
+                  <label key={ep._shape} className="p-3 border-b flex items-start gap-3 cursor-pointer hover:bg-gray-50">
+                    <input type="checkbox" checked={checked} onChange={() => toggle(ep)} className="mt-1" />
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-mono text-sm">{(ep.method || "").toUpperCase()}</span>
+                        <a href={ep.url} target="_blank" rel="noreferrer" className="font-mono text-sm break-words [overflow-wrap:anywhere] underline decoration-dotted max-w-full">
+                          {ep.url}
+                        </a>
+                      </div>
+                      <div className="flex items-center justify-between mt-1">
+                        <div className="flex items-center gap-2">
+                        </div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-semibold text-blue-600">PRIO:</span>
+                            <span className="text-sm font-mono font-bold bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                              {(ep._priority || 0).toFixed(2)}
+                            </span>
+                          </div>
+                          <FamilyBadge fam={ep._family} />
+                        </div>
+                      </div>
+                      {isNonEmptyArray(ep.params) ? <div className="text-xs text-gray-600">query: {ep.params.join(", ")}</div> : null}
+                      {isNonEmptyArray(ep._form_params) ? <div className="text-xs text-gray-600">form: {ep._form_params.join(", ")}</div> : null}
+                      {isNonEmptyArray(ep._json_params) ? <div className="text-xs text-gray-600">json: {ep._json_params.join(", ")}</div> : null}
+                      {isNonEmptyArray(ep.body_keys) && !(isNonEmptyArray(ep._form_params) || isNonEmptyArray(ep._json_params)) ? (
+                        <div className="text-xs text-gray-600">body: {ep.body_keys.join(", ")}</div>
+                      ) : null}
                     </div>
-                    {isNonEmptyArray(ep.params) ? <div className="text-xs text-gray-600">query: {ep.params.join(", ")}</div> : null}
-                    {isNonEmptyArray(ep._form_params) ? <div className="text-xs text-gray-600">form: {ep._form_params.join(", ")}</div> : null}
-                    {isNonEmptyArray(ep._json_params) ? <div className="text-xs text-gray-600">json: {ep._json_params.join(", ")}</div> : null}
-                    {isNonEmptyArray(ep.body_keys) && !(isNonEmptyArray(ep._form_params) || isNonEmptyArray(ep._json_params)) ? (
-                      <div className="text-xs text-gray-600">body: {ep.body_keys.join(", ")}</div>
-                    ) : null}
-                  </div>
-                </label>
-              );
-            })
-          )}
-        </div>
+                  </label>
+                );
+              })
+            )}
+          </div>
+        )}
       </section>
 
       {/* Captured requests */}
       <section className="space-y-2">
-        <h2 className="text-lg font-semibold">Captured Requests</h2>
-        <div className="border rounded max-h-80 overflow-auto">
-          {captured.length === 0 ? (
-            <div className="p-3 text-gray-500">No captured requests</div>
-          ) : (
-            captured.map((r, i) => (
-              <div key={i} className="p-3 border-b">
-                <div className="font-mono text-sm break-words [overflow-wrap:anywhere]">
-                  {(r.method || "").toUpperCase()} {r.url}
+        <CollapsibleHeader
+          title="Captured Requests"
+          expanded={capturedRequestsExpanded}
+          onToggle={() => setCapturedRequestsExpanded(!capturedRequestsExpanded)}
+          count={captured.length}
+        />
+        {capturedRequestsExpanded && (
+          <div className="border rounded max-h-80 overflow-auto">
+            {captured.length === 0 ? (
+              <div className="p-3 text-gray-500">No captured requests</div>
+            ) : (
+              captured.map((r, i) => (
+                <div key={i} className="p-3 border-b">
+                  <div className="font-mono text-sm break-words [overflow-wrap:anywhere]">
+                    {(r.method || "").toUpperCase()} {r.url}
+                  </div>
+                  {r.body_parsed ? (
+                    <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">{JSON.stringify(r.body_parsed, null, 2)}</pre>
+                  ) : r.post_data ? (
+                    <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
+                      {typeof r.post_data === "string" ? r.post_data : JSON.stringify(r.post_data, null, 2)}
+                    </pre>
+                  ) : null}
                 </div>
-                {r.body_parsed ? (
-                  <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">{JSON.stringify(r.body_parsed, null, 2)}</pre>
-                ) : r.post_data ? (
-                  <pre className="text-xs mt-1 bg-gray-50 p-2 rounded overflow-auto">
-                    {typeof r.post_data === "string" ? r.post_data : JSON.stringify(r.post_data, null, 2)}
-                  </pre>
-                ) : null}
-              </div>
-            ))
-          )}
-        </div>
+              ))
+            )}
+          </div>
+        )}
       </section>
 
       {/* Results summary strip + ML insights */}
       {results.length > 0 && (
         <section className="space-y-2">
-          <div className="grid grid-cols-5 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
             <StatCard label="Results (visible)" value={summary.total} />
             <StatCard label="By family" value={
               <div className="mt-1 text-sm flex gap-2 flex-wrap">
@@ -1502,13 +1541,13 @@ export default function CrawlAndFuzzPage() {
           {/* Confidence distribution mini-bar */}
           <div className="border rounded p-3">
             <div className="text-xs text-gray-500 mb-1">Confidence distribution</div>
-            <div className="flex items-end gap-2 h-16">
+            <div className="flex items-end gap-1 sm:gap-2 h-16 overflow-x-auto">
               {summary.confBuckets.map((c, i) => {
                 const lo = (i * 0.2).toFixed(1);
                 const hi = ((i + 1) * 0.2).toFixed(1);
                 return (
-                  <div key={i} className="flex flex-col items-center">
-                    <div className="w-8 bg-gray-300 rounded-t" style={{ height: `${Math.min(100, 8 + c * 6)}%` }} title={`${lo}–${hi}: ${c}`} />
+                  <div key={i} className="flex flex-col items-center min-w-[24px] sm:min-w-[32px]">
+                    <div className="w-6 sm:w-8 bg-gray-300 rounded-t" style={{ height: `${Math.min(100, 8 + c * 6)}%` }} title={`${lo}–${hi}: ${c}`} />
                     <div className="text-[10px] font-mono mt-1">{lo}-{hi}</div>
                   </div>
                 );
@@ -1530,22 +1569,64 @@ export default function CrawlAndFuzzPage() {
 
           {/* Table view */}
           {viewMode === "table" && (
-            <div className="overflow-auto border rounded relative">
-              <table className="min-w-full text-sm">
+            <div className="space-y-3">
+              {/* Table Legend */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                <div className="font-semibold text-blue-800 mb-2">📊 Table Legend:</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                  <div>
+                    <span className="font-semibold">Severity:</span>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <span className="w-3 h-3 bg-red-500 rounded"></span>
+                      <span>High</span>
+                      <span className="w-3 h-3 bg-amber-500 rounded"></span>
+                      <span>Medium</span>
+                      <span className="w-3 h-3 bg-green-500 rounded"></span>
+                      <span>Low</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="font-semibold">Source:</span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="px-2 py-1 bg-indigo-100 text-indigo-800 rounded text-[10px]">ML</span>
+                      <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-[10px]">Curated</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="font-semibold">Vuln Types:</span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-[10px]">SQLi</span>
+                      <span className="px-2 py-1 bg-pink-100 text-pink-800 rounded text-[10px]">XSS</span>
+                      <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-[10px]">Redirect</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="font-semibold">ML Types:</span>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-[10px]">Enhanced ML</span>
+                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-[10px]">ML</span>
+                      <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-[10px]">Heuristic</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="overflow-x-auto border rounded relative">
+                <table className="min-w-full text-sm">
                 <thead className="bg-gray-50 sticky top-0 z-30">
                   <tr className="text-left">
-                    <th className="p-2 w-24 sticky left-0 z-20 bg-gray-50"><SortHeader fieldKey="severity" label="Severity" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-28 sticky left-24 z-20 bg-gray-50"><SortHeader fieldKey="conf" label="Conf" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-24 whitespace-nowrap"><SortHeader fieldKey="origin" label="Origin" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-28"><SortHeader fieldKey="family" label="Family" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-20 sticky left-0 z-20 bg-gray-50"><SortHeader fieldKey="severity" label="Severity" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-24 sticky left-20 z-20 bg-gray-50"><SortHeader fieldKey="conf" label="Confidence" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-20 whitespace-nowrap"><SortHeader fieldKey="origin" label="Source" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-24"><SortHeader fieldKey="family" label="Vuln Type" current={sortBy} set={setSortBy} /></th>
                     <th className="p-2 w-16"><SortHeader fieldKey="method" label="Method" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 min-w-[480px]"><SortHeader fieldKey="url" label="URL" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-40"><SortHeader fieldKey="param" label="Param" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-44">Δ</th>
-                    <th className="p-2 w-64">Signals</th>
-                    <th className="p-2 w-56">Ranker</th>
-                    <th className="p-2 min-w-[280px]">Payload</th>
-                    <th className="p-2 w-20"></th>
+                    <th className="p-2 min-w-[300px] max-w-[400px]"><SortHeader fieldKey="url" label="Target URL" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-24"><SortHeader fieldKey="param" label="Parameter" current={sortBy} set={setSortBy} /></th>
+                    <th className="p-2 w-32" title="Delta score - change in response">Δ Score</th>
+                    <th className="p-2 w-48" title="Detection signals (SQL errors, XSS reflection, etc.)">Signals</th>
+                    <th className="p-2 w-40" title="ML ranker confidence and family probabilities">ML Ranker</th>
+                    <th className="p-2 min-w-[150px] max-w-[200px]">Payload</th>
+                    <th className="p-2 w-20">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1617,8 +1698,6 @@ export default function CrawlAndFuzzPage() {
                       // Enhanced ML system fields first - check multiple enhanced ML paths
                       typeof row?.ranker_meta?.ranker_raw?.confidence === "number"
                         ? row.ranker_meta.ranker_raw.confidence.toFixed(3)
-                        : typeof row?.ranker_meta?.ranker_raw?.confidence === "number"
-                        ? row.ranker_meta.ranker_raw.confidence.toFixed(3)
                         : typeof row?.ranker_meta?.ranker_score === "number"
                         ? row.ranker_meta.ranker_score.toFixed(3)
                         : typeof row?.ranker_score === "number"
@@ -1627,64 +1706,114 @@ export default function CrawlAndFuzzPage() {
 
                     const featureDim =
                       hasNum(row?.ranker_meta?.feature_dim_total) ? row.ranker_meta.feature_dim_total : null;
-                    const dimPrefix = featureDim ? `dim ${featureDim} · ` : "";
 
                     return (
                       <tr key={k} className={cn("border-t align-top hover:bg-gray-50", rowBg)}>
                         {/* sticky cols */}
-                        <td className="p-2 w-24 sticky left-0 z-10 bg-white"><SeverityBadge sev={row.severity} /></td>
-                        <td className="p-2 w-28 sticky left-24 z-10 bg-white"><ConfMeter v={Number(row.confidence || 0)} /></td>
+                        <td className="p-2 w-20 sticky left-0 z-10" style={{ backgroundColor: 'inherit' }}><SeverityBadge sev={row.severity} /></td>
+                        <td className="p-2 w-24 sticky left-20 z-10" style={{ backgroundColor: 'inherit' }}><ConfMeter v={Number(row.confidence || 0)} /></td>
 
-                        <td className="p-2 w-24 whitespace-nowrap" data-origin={row.origin}>
-                          <div className="inline-block min-w-[56px]">
+                        <td className="p-2 w-20 whitespace-nowrap" data-origin={row.origin}>
+                          <div className="inline-block min-w-[48px]">
                             <OriginBadge origin={row.origin} />
                           </div>
                         </td>
-                        <td className="p-2 w-28">
-                          <div className="flex items-center gap-2">
+                        <td className="p-2 w-24">
+                          <div className="flex items-center gap-1 flex-wrap">
                             <Badge tone={row.family === "xss" ? "pink" : row.family === "redirect" ? "purple" : "blue"}>{row.family || "sqli"}</Badge>
-                            {chosen && <Badge tone="indigo" title="Family chosen by ranker">chosen: {chosen}</Badge>}
+                            {chosen && <Badge tone="indigo" title="Family chosen by ranker" className="text-[10px]">chosen: {chosen}</Badge>}
                           </div>
                         </td>
                         <td className="p-2 w-16 font-mono">{row.method}</td>
-                        <td className="p-2 font-mono whitespace-normal break-words [overflow-wrap:anywhere]">
+                        <td className="p-2 font-mono whitespace-normal break-words [overflow-wrap:anywhere] max-w-[400px]">
                           <a href={row.url} target="_blank" rel="noreferrer" className="underline decoration-dotted">
                             {row.url}
                           </a>
                         </td>
-                        <td className="p-2 w-40 font-mono truncate" title={row.param}>{row.param}</td>
-                        <td className="p-2 w-44"><DeltaCell d={row.delta} /></td>
+                        <td className="p-2 w-24 font-mono truncate" title={row.param}>{row.param}</td>
+                        <td className="p-2 w-32"><DeltaCell d={row.delta} /></td>
 
-                        <td className="p-2 w-64">
-                          <div className="flex flex-wrap items-center gap-2">
-                            {row.signals.sql_error && <Badge tone="blue">sql error</Badge>}
-                            {row.signals.boolean_sqli && <Badge tone="blue">boolean</Badge>}
-                            {row.signals.time_sqli && <Badge tone="blue">time</Badge>}
-                            {row.signals.xss_reflected && <Badge tone="pink">xss reflected</Badge>}
-                            {row.signals.external_redirect && <Badge tone="purple">external</Badge>}
-                            {row?.signals?.location_host && <Badge tone="purple">{row.signals.location_host}</Badge>}
+                        <td className="p-2 w-48">
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-1">
+                              {row.signals.sql_error && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">SQL Error</Badge>}
+                              {row.signals.boolean_sqli && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">Boolean</Badge>}
+                              {row.signals.time_sqli && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">Time</Badge>}
+                              {row.signals.xss_reflected && <Badge tone="pink" className="text-[10px] px-1.5 py-0.5">XSS Reflected</Badge>}
+                              {row.signals.external_redirect && <Badge tone="purple" className="text-[10px] px-1.5 py-0.5">External</Badge>}
+                              {row?.signals?.location_host && <Badge tone="pink" className="text-[10px] px-1.5 py-0.5">{row.signals.location_host}</Badge>}
+                            </div>
+                            {Object.keys(row.signals || {}).filter(k => row.signals[k] === true).length === 0 && (
+                              <span className="text-[10px] text-gray-400">No signals</span>
+                            )}
                           </div>
                         </td>
 
-                        <td className="p-2 w-56" data-ranker={rankerIsML ? "ML" : row?.ranker_meta?._synthetic ? "heuristic" : ""}>
-                          {row?.ranker_meta?.family_probs ? <FamilyProbsBar probs={row.ranker_meta.family_probs} /> : <span className="text-gray-400">—</span>}
-                          <div className="text-[10px] text-gray-500 mt-1">
-                            {dimPrefix}score: <span className="font-mono">{rankerScore}</span>
-                            <span className="ml-1 text-gray-400">
-                              {row?.ranker_meta?.used_path === "enhanced_ml" ? "(Enhanced ML)" :
-                               row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" ? "(Enhanced ML)" :
-                               row?.ranker_used_path === "enhanced_ml" ? "(Enhanced ML)" :
-                               row?.ml?.source === "enhanced_ml" ? "(Enhanced ML)" :
-                               rankerIsML ? "(ML)" : 
-                               row?.ranker_meta?._synthetic ? "(heuristic)" : ""}
-                            </span>
+                        <td className="p-2 w-40" data-ranker={rankerIsML ? "ML" : row?.ranker_meta?._synthetic ? "heuristic" : ""}>
+                          <div className="space-y-1">
+                            {row?.ranker_meta?.family_probs ? (
+                              <div>
+                                <div className="text-[10px] text-gray-600 font-semibold mb-1">Family Probabilities:</div>
+                                <FamilyProbsBar probs={row.ranker_meta.family_probs} />
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-[10px]">No probabilities</span>
+                            )}
+                            <div className="text-[10px] space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-600">Score:</span>
+                                <span className="font-mono font-semibold">{rankerScore}</span>
+                              </div>
+                              {featureDim && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600">Features:</span>
+                                  <span className="font-mono">{featureDim}</span>
+                                </div>
+                              )}
+                              <div className="text-center">
+                                <span className={`text-[9px] px-1.5 py-0.5 rounded ${
+                                  row?.ranker_meta?.used_path === "enhanced_ml" || 
+                                  row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" || 
+                                  row?.ranker_used_path === "enhanced_ml" || 
+                                  row?.ml?.source === "enhanced_ml" 
+                                    ? "bg-green-100 text-green-800" 
+                                    : rankerIsML 
+                                    ? "bg-blue-100 text-blue-800" 
+                                    : "bg-gray-100 text-gray-600"
+                                }`}>
+                                  {row?.ranker_meta?.used_path === "enhanced_ml" || 
+                                   row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" || 
+                                   row?.ranker_used_path === "enhanced_ml" || 
+                                   row?.ml?.source === "enhanced_ml" 
+                                     ? "Enhanced ML" 
+                                     : rankerIsML 
+                                     ? "ML" 
+                                     : "Heuristic"}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                         </td>
-                        <td className="p-2 min-w-[280px]">
-                          <code className="text-xs block truncate" title={row.payload || ""}>{row.payload || ""}</code>
+                        <td className="p-2 min-w-[150px] max-w-[200px]">
+                          <div className="space-y-1">
+                            <code className="text-xs block break-all bg-gray-50 p-1 rounded border" title={row.payload || ""}>
+                              {row.payload || "—"}
+                            </code>
+                            {row.payload && row.payload.length > 50 && (
+                              <div className="text-[10px] text-gray-500">
+                                Length: {row.payload.length} chars
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="p-2 w-20">
-                          <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(k)} aria-expanded={isOpen} type="button">
+                          <button 
+                            className="text-xs bg-blue-600 text-white px-2 py-1.5 rounded hover:bg-blue-700 transition-colors" 
+                            onClick={() => toggleExpand(k)} 
+                            aria-expanded={isOpen} 
+                            type="button"
+                            title={isOpen ? "Hide details" : "Show details"}
+                          >
                             {isOpen ? "Hide" : "Details"}
                           </button>
                         </td>
@@ -1703,158 +1832,161 @@ export default function CrawlAndFuzzPage() {
                   </span>
                 </div>
               )}
+              
+              {/* Expanded rows (optional) */}
+              <div className="space-y-2">
+                {filteredResults.map((row) => {
+                  const k = rowKey(row);
+                  if (!expanded.has(k)) return null;
+                  const v = row.signals?.verify || {};
+                  const fm = row.ranker_meta || {};
+                  return (
+                    <div key={`detail-${k}`} className="border rounded p-3 bg-white">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1">
+                          <div className="text-sm">
+                            <SeverityBadge sev={row.severity} />{" "}
+                            <Badge tone={row.family === "xss" ? "pink" : row.family === "redirect" ? "purple" : "blue"}>
+                              {row.family || "sqli"}
+                            </Badge>{" "}
+                            <OriginBadge origin={row.origin} />{" "}
+                            <Badge tone="slate" title="confidence">
+                              <span className="font-mono">{row.confidence.toFixed(2)}</span>
+                            </Badge>
+                          </div>
+                          <div className="text-sm font-mono">
+                            {row.method} {row.url}
+                          </div>
+                          <div className="text-xs text-gray-600">
+                            param: <code>{row.param}</code>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="text-xs border px-2 py-1 rounded"
+                            onClick={async () => {
+                              try {
+                                await navigator.clipboard.writeText(row.payload || "");
+                                toast.success("Payload copied");
+                              } catch {
+                                toast.error("Copy failed");
+                              }
+                            }}
+                            type="button"
+                          >
+                            Copy payload
+                          </button>
+                          <button
+                            className="text-xs border px-2 py-1 rounded"
+                            onClick={() => {
+                              const a = document.createElement("a");
+                              const blob = new Blob([JSON.stringify(row, null, 2)], { type: "application/json" });
+                              const url = URL.createObjectURL(blob);
+                              a.href = url;
+                              a.download = "fuzz_row.json";
+                              document.body.appendChild(a);
+                              a.click();
+                              a.remove();
+                              URL.revokeObjectURL(url);
+                            }}
+                            type="button"
+                          >
+                            Save row
+                          </button>
+                          <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(k)} type="button">
+                            Close
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Delta</div>
+                          <div className="text-sm"><DeltaCell d={row.delta} /></div>
+                        </div>
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Verify</div>
+                          <div className="text-xs space-y-1 font-mono">
+                            {"status" in v ? <div>status: {v.status}</div> : null}
+                            {"length" in v ? <div>length: {v.length}</div> : null}
+                            {"location" in v ? (<div>location: <span className="break-all">{v.location}</span></div>) : null}
+                          </div>
+                        </div>
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Signals</div>
+                          <div className="text-xs space-x-2 flex flex-wrap gap-1">
+                            {row.signals.sql_error ? <Badge tone="blue">sql error</Badge> : null}
+                            {row.signals.boolean_sqli ? <Badge tone="blue">boolean</Badge> : null}
+                            {row.signals.time_sqli ? <Badge tone="blue">time</Badge> : null}
+                            {row.signals.xss_reflected ? <Badge tone="pink">xss reflected</Badge> : null}
+                            {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
+                            {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
+                            {row.signals.token_present ? <Badge tone="green">token present</Badge> : null}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Ranker meta */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Family probabilities</div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <FamilyProbsBar probs={fm.family_probs} />
+                            <div className="text-xs font-mono">
+                              {Object.entries(fm.family_probs || {})
+                                .sort((a, b) => b[1] - a[1])
+                                .slice(0, 3)
+                                .map(([k, v]) => (
+                                  <div key={k}>{k}: {(v * 100).toFixed(1)}%</div>
+                                ))}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
+                          <div className="text-xs">chosen: <code>{fm.family_chosen || "—"}</code></div>
+                          <div className="text-xs">
+                            {(hasNum(fm.feature_dim_total) ? `dim ${fm.feature_dim_total} · ` : "")}
+                            score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code>
+                          </div>
+                          {/* backend used_path (if available) */}
+                          <div className="text-[10px] text-gray-500 mt-1 break-all">{row.ranker_used_path ? `used_path: ${row.ranker_usage_path}` : ""}</div>
+                        </div>
+                        <div className="border rounded p-2">
+                          <div className="text-xs text-gray-500 mb-1">Model IDs</div>
+                          <div className="text-xs font-mono overflow-auto">
+                            {fm.model_ids ? <pre className="whitespace-pre-wrap text-[10px]">{JSON.stringify(fm.model_ids, null, 2)}</pre> : "—"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3">
+                        <div className="text-xs text-gray-500 mb-1">Payload</div>
+                        <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">{row.payload || ""}</pre>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* close .overflow-auto */}
+              </div>
+              {/* close .space-y-3 */}
             </div>
           )}
 
-          {/* Expanded rows (optional) */}
-          <div className="space-y-2">
-            {filteredResults.map((row) => {
-              const k = rowKey(row);
-              if (!expanded.has(k)) return null;
-              const v = row.signals?.verify || {};
-              const fm = row.ranker_meta || {};
-              return (
-                <div key={`detail-${k}`} className="border rounded p-3 bg-white">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="text-sm">
-                        <SeverityBadge sev={row.severity} />{" "}
-                        <Badge tone={row.family === "xss" ? "pink" : row.family === "redirect" ? "purple" : "blue"}>
-                          {row.family || "sqli"}
-                        </Badge>{" "}
-                        <OriginBadge origin={row.origin} />{" "}
-                        <Badge tone="slate" title="confidence">
-                          <span className="font-mono">{row.confidence.toFixed(2)}</span>
-                        </Badge>
-                      </div>
-                      <div className="text-sm font-mono">
-                        {row.method} {row.url}
-                      </div>
-                      <div className="text-xs text-gray-600">
-                        param: <code>{row.param}</code>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="text-xs border px-2 py-1 rounded"
-                        onClick={async () => {
-                          try {
-                            await navigator.clipboard.writeText(row.payload || "");
-                            toast.success("Payload copied");
-                          } catch {
-                            toast.error("Copy failed");
-                          }
-                        }}
-                        type="button"
-                      >
-                        Copy payload
-                      </button>
-                      <button
-                        className="text-xs border px-2 py-1 rounded"
-                        onClick={() => {
-                          const a = document.createElement("a");
-                          const blob = new Blob([JSON.stringify(row, null, 2)], { type: "application/json" });
-                          const url = URL.createObjectURL(blob);
-                          a.href = url;
-                          a.download = "fuzz_row.json";
-                          document.body.appendChild(a);
-                          a.click();
-                          a.remove();
-                          URL.revokeObjectURL(url);
-                        }}
-                        type="button"
-                      >
-                        Save row
-                      </button>
-                      <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(k)} type="button">
-                        Close
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Delta</div>
-                      <div className="text-sm"><DeltaCell d={row.delta} /></div>
-                    </div>
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Verify</div>
-                      <div className="text-xs space-y-1 font-mono">
-                        {"status" in v ? <div>status: {v.status}</div> : null}
-                        {"length" in v ? <div>length: {v.length}</div> : null}
-                        {"location" in v ? (<div>location: <span className="break-all">{v.location}</span></div>) : null}
-                      </div>
-                    </div>
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Signals</div>
-                      <div className="text-xs space-x-2">
-                        {row.signals.sql_error ? <Badge tone="blue">sql error</Badge> : null}
-                        {row.signals.boolean_sqli ? <Badge tone="blue">boolean</Badge> : null}
-                        {row.signals.time_sqli ? <Badge tone="blue">time</Badge> : null}
-                        {row.signals.xss_reflected ? <Badge tone="pink">xss reflected</Badge> : null}
-                        {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
-                        {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
-                        {row.signals.token_present ? <Badge tone="green">token present</Badge> : null}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Ranker meta */}
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-3">
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Family probabilities</div>
-                      <div className="flex items-center gap-2">
-                        <FamilyProbsBar probs={fm.family_probs} />
-                        <div className="text-xs font-mono">
-                          {Object.entries(fm.family_probs || {})
-                            .sort((a, b) => b[1] - a[1])
-                            .slice(0, 3)
-                            .map(([k, v]) => (
-                              <div key={k}>{k}: {(v * 100).toFixed(1)}%</div>
-                            ))}
-                        </div>
-                      </div>
-                    </div>
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
-                      <div className="text-xs">chosen: <code>{fm.family_chosen || "—"}</code></div>
-                      <div className="text-xs">
-                        {(hasNum(fm.feature_dim_total) ? `dim ${fm.feature_dim_total} · ` : "")}
-                        score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code>
-                      </div>
-                      {/* backend used_path (if available) */}
-                      <div className="text-[10px] text-gray-400 mt-1">{row.ranker_used_path ? `used_path: ${row.ranker_used_path}` : ""}</div>
-                    </div>
-                    <div className="border rounded p-2">
-                      <div className="text-xs text-gray-500 mb-1">Model IDs</div>
-                      <div className="text-xs font-mono">
-                        {fm.model_ids ? <pre className="whitespace-pre-wrap">{JSON.stringify(fm.model_ids, null, 2)}</pre> : "—"}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-3">
-                    <div className="text-xs text-gray-500 mb-1">Payload</div>
-                    <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">{row.payload || ""}</pre>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
           {/* Pagination controls */}
-          <div className="flex items-center justify-between text-sm text-gray-600 py-2">
+          <div className="flex items-center justify-between text-sm text-gray-600 py-2 flex-wrap gap-2">
             <div>Showing <span className="font-mono">{start+1}</span>–<span className="font-mono">{end}</span> of <span className="font-mono">{filteredResults.length}</span></div>
             <div className="flex items-center gap-2">
-              <button className="border px-2 py-1 rounded disabled:opacity-50" disabled={pageClamped <= 1} onClick={() => setPage(p => Math.max(1, p-1))}>Prev</button>
+              <button className="border px-2 py-1 rounded disabled:opacity-50 text-sm" disabled={pageClamped <= 1} onClick={() => setPage(p => Math.max(1, p-1))}>Prev</button>
               <span className="font-mono">{pageClamped}</span>/<span className="font-mono">{totalPages}</span>
-              <button className="border px-2 py-1 rounded disabled:opacity-50" disabled={pageClamped >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p+1))}>Next</button>
+              <button className="border px-2 py-1 rounded disabled:opacity-50 text-sm" disabled={pageClamped >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p+1))}>Next</button>
             </div>
           </div>
 
           <details className="border rounded p-3 bg-gray-50">
             <summary className="cursor-pointer text-sm text-gray-700">Raw JSON</summary>
-            <pre className="overflow-auto text-xs">{JSON.stringify(fuzzSummary, null, 2)}</pre>
+            <pre className="overflow-auto text-xs max-w-full">{JSON.stringify(fuzzSummary, null, 2)}</pre>
           </details>
         </section>
       )}
