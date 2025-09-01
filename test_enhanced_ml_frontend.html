@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced ML Frontend Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-case { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .score { font-weight: bold; color: #28a745; }
+        .enhanced { color: #007bff; }
+        .legacy { color: #6c757d; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 3px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Enhanced ML Frontend Integration Test</h1>
+    <p>This page tests the enhanced ML logic we implemented in the frontend.</p>
+
+    <div id="results"></div>
+
+    <script>
+        // Simulate the helper functions from CrawlAndFuzzPage.jsx
+        const hasNum = (v) => typeof v === "number" && isFinite(v);
+        const isNonEmptyObj = (o) => !!o && typeof o === "object" && Object.keys(o).length > 0;
+
+        // Simulate the normalizeRankerMeta function we updated
+        function normalizeRankerMeta(mRaw = {}, oneRowRaw = {}, synthHints = null) {
+            const fm = mRaw || {};
+            const row = oneRowRaw || {};
+
+            // search across many likely containers, INCLUDING the original row
+            const containers = [
+                fm,
+                fm.ranker_meta,
+                fm.ranker,
+                fm.ml_meta,
+                fm.meta,
+                row.ranker_meta,
+                row.ranker,
+                row.ml_meta,
+                row.meta,
+                row
+            ];
+
+            let family_probs = null;
+            let family_chosen = null;
+            let ranker_score = null;
+            let model_ids = null;
+            let feature_dim_total = null;
+
+            for (const c of containers) {
+                // family probs under many names
+                if (!isNonEmptyObj(family_probs) && c) {
+                    const cand =
+                        c.family_probs ||
+                        c.probs ||
+                        c.family_probabilities ||
+                        c.probabilities ||
+                        c.per_family ||
+                        c.perFamily ||
+                        null;
+                    if (isNonEmptyObj(cand)) family_probs = cand;
+                }
+
+                if (!family_chosen && c) family_chosen = c.family_chosen || c.family || c.chosen || c.chosen_family;
+
+                if (!hasNum(ranker_score) && c) {
+                    // Enhanced ML system fields first
+                    ranker_score = hasNum(c.ranker_raw?.confidence) ? c.ranker_raw.confidence :
+                                  hasNum(c.ranker_meta?.ranker_raw?.confidence) ? c.ranker_meta.ranker_raw.confidence :
+                                  // Legacy fields
+                                  hasNum(c.ranker_score) ? c.ranker_score : 
+                                  hasNum(c.score) ? c.score : null;
+                }
+
+                // accept arrays, objects, or strings for model identifiers
+                if (!model_ids && c) {
+                    const mid = c.model_ids || c.models || c.model_id || c.model || c.model_name || null;
+                    if (
+                        (Array.isArray(mid) && mid.length > 0) ||
+                        (mid && typeof mid === "object" && Object.keys(mid).length > 0) ||
+                        (typeof mid === "string" && mid.trim())
+                    ) {
+                        model_ids = mid;
+                    }
+                }
+
+                if (!hasNum(feature_dim_total) && c) {
+                    const dims =
+                        c.feature_dim_total ??
+                        c.ranker_feature_dim_total ??
+                        c.dim_total ??
+                        c.total_dim ??
+                        c.feat_dim ??
+                        (c.ranker && c.ranker.feature_dim_total) ??
+                        (c.ranker && c.ranker.dim_total) ??
+                        (c.ml && c.ml.feature_dim_total);
+                    if (hasNum(dims) && dims > 0) feature_dim_total = dims;
+                }
+            }
+
+            // normalize probs to {sqli,xss,redirect} and 0..1
+            const picked = {};
+            for (const [k, v] of Object.entries(family_probs || {})) {
+                const key = String(k).toLowerCase();
+                if (["sqli", "xss", "redirect"].includes(key)) picked[key] = Number(v) || 0;
+            }
+            const sum = Object.values(picked).reduce((a, b) => a + b, 0);
+            if (sum > 0) Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
+
+            const meta = {
+                family_probs: picked,
+                family_chosen: family_chosen || null,
+                ranker_score: hasNum(ranker_score) ? ranker_score : null,
+                model_ids: model_ids || null,
+                feature_dim_total: hasNum(feature_dim_total) ? feature_dim_total : null,
+            };
+
+            return meta;
+        }
+
+        // Test data from your actual job
+        const testData = [
+            {
+                name: "Enhanced ML Case (ranker_raw.confidence)",
+                data: {
+                    ranker_meta: {
+                        family_probs: { sqli: 0.14084507042253522, xss: 0.14084507042253522, redirect: 0.7042253521126761 },
+                        family_chosen: "redirect",
+                        used_path: "enhanced_ml",
+                        ranker_raw: {
+                            used_path: "enhanced_ml",
+                            family: "redirect",
+                            enhanced: true,
+                            confidence: 0.47,
+                            uncertainty: 0.0
+                        }
+                    }
+                }
+            },
+            {
+                name: "Legacy ML Case (ranker_score)",
+                data: {
+                    ranker_meta: {
+                        family_probs: { sqli: 0.8, xss: 0.15, redirect: 0.05 },
+                        family_chosen: "sqli",
+                        ranker_score: 0.85,
+                        used_path: "legacy_ml"
+                    }
+                }
+            },
+            {
+                name: "Mixed Data Case (nested enhanced ML)",
+                data: {
+                    ranker_meta: {
+                        family_probs: { sqli: 0.3, xss: 0.4, redirect: 0.3 },
+                        family_chosen: "xss",
+                        used_path: "enhanced_ml",
+                        ranker_raw: {
+                            used_path: "enhanced_ml",
+                            confidence: 0.62,
+                            uncertainty: 0.1
+                        }
+                    }
+                }
+            }
+        ];
+
+        // Run tests
+        function runTests() {
+            const resultsDiv = document.getElementById('results');
+            let html = '';
+
+            testData.forEach((testCase, index) => {
+                const result = normalizeRankerMeta(testCase.data);
+                const isEnhancedML = testCase.data.ranker_meta?.used_path === "enhanced_ml" || 
+                                   testCase.data.ranker_meta?.ranker_raw?.used_path === "enhanced_ml";
+                
+                const scoreClass = isEnhancedML ? 'enhanced' : 'legacy';
+                const scoreLabel = isEnhancedML ? 'Enhanced ML' : 'Legacy ML';
+                
+                html += `
+                    <div class="test-case ${isEnhancedML ? 'success' : 'success'}">
+                        <h3>Test Case ${index + 1}: ${testCase.name}</h3>
+                        <p><strong>Enhanced ML Detected:</strong> ${isEnhancedML}</p>
+                        <p><strong>Ranker Score:</strong> <span class="score ${scoreClass}">${result.ranker_score?.toFixed(3) || 'null'} (${scoreLabel})</span></p>
+                        <p><strong>Family Probabilities:</strong></p>
+                        <ul>
+                            ${Object.entries(result.family_probs || {}).map(([k, v]) => 
+                                `<li>${k}: ${(v * 100).toFixed(1)}%</li>`
+                            ).join('')}
+                        </ul>
+                        <p><strong>Raw Data:</strong></p>
+                        <pre>${JSON.stringify(testCase.data, null, 2)}</pre>
+                        <p><strong>Processed Result:</strong></p>
+                        <pre>${JSON.stringify(result, null, 2)}</pre>
+                    </div>
+                `;
+            });
+
+            resultsDiv.innerHTML = html;
+        }
+
+        // Run tests when page loads
+        window.onload = runTests;
+    </script>
+</body>
+</html>

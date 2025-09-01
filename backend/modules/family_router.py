@@ -39,6 +39,7 @@ Also exposes canonical curated payload pools used in training & fallback:
 
 Notes:
 - Recognizes the alias "open_redirect" and normalizes it to "redirect".
+- ENHANCED: Now integrates with enhanced ML system when available.
 """
 
 from typing import Dict, Any, List, Tuple, Optional
@@ -60,6 +61,15 @@ try:
     import joblib  # type: ignore
 except Exception:
     joblib = None  # type: ignore
+
+# Enhanced ML integration
+try:
+    from .ml.enhanced_inference import EnhancedInferenceEngine
+    _ENHANCED_ML_AVAILABLE = True
+    log.info("✅ Enhanced ML system available for family routing")
+except Exception as e:
+    _ENHANCED_ML_AVAILABLE = False
+    log.info(f"❌ Enhanced ML system not available: {e}")
 
 # ============================ Canonical payload pools =========================
 
@@ -411,6 +421,8 @@ CALIBRATOR = MODEL_DIR / "family_platt.joblib"     # optional (per-class or isot
 class FamilyClassifier:
     """
     Optional multiclass family classifier with probability output.
+    - ENHANCED: Now integrates with enhanced ML system when available
+    - If enhanced ML is missing, falls back to legacy models
     - If model/calibrator are missing, falls back to normalized rule scores.
     - Features are cheap, payload-agnostic, and stable across versions.
     """
@@ -418,6 +430,18 @@ class FamilyClassifier:
     def __init__(self) -> None:
         self.model = None
         self.cal = None
+        self.enhanced_engine = None
+        
+        # Try enhanced ML first
+        if _ENHANCED_ML_AVAILABLE:
+            try:
+                self.enhanced_engine = EnhancedInferenceEngine()
+                log.info("✅ Enhanced ML engine loaded for family classification")
+            except Exception as e:
+                log.warning(f"⚠️ Failed to load enhanced ML engine: {e}")
+                self.enhanced_engine = None
+        
+        # Fallback to legacy models
         if joblib is not None:
             try:
                 if FAMILY_MODEL.exists():
@@ -435,11 +459,57 @@ class FamilyClassifier:
     def predict_proba(self, t: Dict[str, Any]) -> Dict[str, float]:
         """
         Return calibrated P(family) over {'sqli','xss','redirect','base'}.
-        Fallback to rule normalization when model is unavailable.
+        Enhanced ML path: Uses EnhancedInferenceEngine for better accuracy
+        Fallback to legacy ML model when enhanced ML is unavailable
+        Fallback to rule normalization when all models are unavailable
         """
         fams = ["sqli", "xss", "redirect", "base"]
 
-        # Primary path: ML model
+        # Enhanced ML path (preferred)
+        if self.enhanced_engine is not None:
+            try:
+                # Extract endpoint and parameter info
+                endpoint = {
+                    "url": t.get("url", ""),
+                    "method": t.get("method", "GET"),
+                    "content_type": t.get("content_type", "")
+                }
+                
+                param = {
+                    "name": t.get("target_param", ""),
+                    "value": t.get("control_value", ""),
+                    "loc": t.get("in", "query")
+                }
+                
+                # Get predictions for each family
+                family_probs = {}
+                for family in ["sqli", "xss", "redirect"]:
+                    try:
+                        result = self.enhanced_engine.predict_with_confidence(endpoint, param, family)
+                        # Use calibrated probability if available, otherwise raw
+                        prob = result.get("calibrated_probability", result.get("raw_probability", 0.0))
+                        family_probs[family] = float(prob)
+                    except Exception as e:
+                        log.debug(f"Enhanced ML prediction failed for {family}: {e}")
+                        family_probs[family] = 0.0
+                
+                # Add base family with minimal probability
+                family_probs["base"] = 0.01
+                
+                # Normalize probabilities
+                s = sum(family_probs.values()) or 1.0
+                prob = {k: v / s for k, v in family_probs.items()}
+                
+                if _DEBUG:
+                    log.debug(f"Enhanced ML family probs: {prob}")
+                
+                return prob
+                
+            except Exception as e:
+                log.debug(f"Enhanced ML family classification failed: {e}, falling back to legacy")
+                # fall through to legacy ML
+
+        # Legacy ML path
         if self.model is not None:
             try:
                 x = self._featurize_target(t)

@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced ML Dashboard - Elise Vulnerability Scanner</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+            margin: 0; 
+            padding: 20px; 
+            background: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+        }
+        .header h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+        .controls {
+            padding: 20px;
+            background: #f8f9fa;
+            border-bottom: 1px solid #dee2e6;
+        }
+        .job-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .job-input input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        .status.loading {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .results {
+            padding: 20px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid #dee2e6;
+        }
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #007bff;
+        }
+        .stat-label {
+            color: #6c757d;
+            margin-top: 5px;
+        }
+        .table-container {
+            overflow-x: auto;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+        .enhanced-ml {
+            background: #d4edda;
+            color: #155724;
+        }
+        .legacy-ml {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .score {
+            font-weight: bold;
+        }
+        .score.enhanced {
+            color: #28a745;
+        }
+        .score.legacy {
+            color: #6c757d;
+        }
+        .family-probs {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .family-prob {
+            background: #e9ecef;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #495057;
+        }
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #007bff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧪 Enhanced ML Dashboard</h1>
+            <p>Elise Vulnerability Scanner - Enhanced Machine Learning Results</p>
+        </div>
+        
+        <div class="controls">
+            <div class="job-input">
+                <input type="text" id="jobId" placeholder="Enter Job ID (e.g., 15e55f3f-3729-4514-8e3d-2944879c9e44)" value="15e55f3f-3729-4514-8e3d-2944879c9e44">
+                <button class="btn" onclick="loadJob()">Load Job</button>
+                <button class="btn" onclick="loadRecentJobs()">Load Recent Jobs</button>
+            </div>
+            <div id="status"></div>
+        </div>
+        
+        <div class="results">
+            <div id="stats" class="stats"></div>
+            <div id="resultsTable" class="table-container"></div>
+        </div>
+    </div>
+
+    <script>
+        // Enhanced ML logic from CrawlAndFuzzPage.jsx
+        const hasNum = (v) => typeof v === "number" && isFinite(v);
+        const isNonEmptyObj = (o) => !!o && typeof o === "object" && Object.keys(o).length > 0;
+
+        function normalizeRankerMeta(mRaw = {}, oneRowRaw = {}, synthHints = null) {
+            const fm = mRaw || {};
+            const row = oneRowRaw || {};
+
+            const containers = [
+                fm, fm.ranker_meta, fm.ranker, fm.ml_meta, fm.meta,
+                row.ranker_meta, row.ranker, row.ml_meta, row.meta, row
+            ];
+
+            let family_probs = null;
+            let family_chosen = null;
+            let ranker_score = null;
+            let model_ids = null;
+            let feature_dim_total = null;
+
+            for (const c of containers) {
+                if (!isNonEmptyObj(family_probs) && c) {
+                    const cand = c.family_probs || c.probs || c.family_probabilities || 
+                                c.probabilities || c.per_family || c.perFamily || null;
+                    if (isNonEmptyObj(cand)) family_probs = cand;
+                }
+
+                if (!family_chosen && c) {
+                    family_chosen = c.family_chosen || c.family || c.chosen || c.chosen_family;
+                }
+
+                if (!hasNum(ranker_score) && c) {
+                    // Enhanced ML system fields first
+                    ranker_score = hasNum(c.ranker_raw?.confidence) ? c.ranker_raw.confidence :
+                                  hasNum(c.ranker_meta?.ranker_raw?.confidence) ? c.ranker_meta.ranker_raw.confidence :
+                                  hasNum(c.ranker_score) ? c.ranker_score : 
+                                  hasNum(c.score) ? c.score : null;
+                }
+
+                if (!model_ids && c) {
+                    const mid = c.model_ids || c.models || c.model_id || c.model || c.model_name || null;
+                    if ((Array.isArray(mid) && mid.length > 0) ||
+                        (mid && typeof mid === "object" && Object.keys(mid).length > 0) ||
+                        (typeof mid === "string" && mid.trim())) {
+                        model_ids = mid;
+                    }
+                }
+
+                if (!hasNum(feature_dim_total) && c) {
+                    const dims = c.feature_dim_total ?? c.ranker_feature_dim_total ?? 
+                                c.dim_total ?? c.total_dim ?? c.feat_dim ??
+                                (c.ranker && c.ranker.feature_dim_total) ??
+                                (c.ranker && c.ranker.dim_total) ??
+                                (c.ml && c.ml.feature_dim_total);
+                    if (hasNum(dims) && dims > 0) feature_dim_total = dims;
+                }
+            }
+
+            // Normalize probs to {sqli,xss,redirect} and 0..1
+            const picked = {};
+            for (const [k, v] of Object.entries(family_probs || {})) {
+                const key = String(k).toLowerCase();
+                if (["sqli", "xss", "redirect"].includes(key)) picked[key] = Number(v) || 0;
+            }
+            const sum = Object.values(picked).reduce((a, b) => a + b, 0);
+            if (sum > 0) Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
+
+            return {
+                family_probs: picked,
+                family_chosen: family_chosen || null,
+                ranker_score: hasNum(ranker_score) ? ranker_score : null,
+                model_ids: model_ids || null,
+                feature_dim_total: hasNum(feature_dim_total) ? feature_dim_total : null,
+            };
+        }
+
+        async function loadJob() {
+            const jobId = document.getElementById('jobId').value.trim();
+            if (!jobId) {
+                showStatus('Please enter a Job ID', 'error');
+                return;
+            }
+
+            showStatus('Loading job data...', 'loading');
+            
+            try {
+                // Try to load from backend API first
+                const response = await fetch(`http://localhost:8000/api/fuzz/by_job/${jobId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    processJobData(data, jobId);
+                } else {
+                    // Fallback to local file if API fails
+                    showStatus('API failed, trying local file...', 'loading');
+                    await loadJobFromFile(jobId);
+                }
+            } catch (error) {
+                console.error('API error:', error);
+                showStatus('API failed, trying local file...', 'loading');
+                await loadJobFromFile(jobId);
+            }
+        }
+
+        async function loadJobFromFile(jobId) {
+            try {
+                // This would need to be served from your backend or a local file
+                showStatus('Local file loading not implemented yet. Please ensure your backend is running.', 'error');
+            } catch (error) {
+                showStatus(`Error loading job: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadRecentJobs() {
+            showStatus('Loading recent jobs...', 'loading');
+            
+            try {
+                const response = await fetch('http://localhost:8000/api/jobs');
+                if (response.ok) {
+                    const jobs = await response.json();
+                    showRecentJobs(jobs);
+                } else {
+                    showStatus('Failed to load recent jobs', 'error');
+                }
+            } catch (error) {
+                showStatus(`Error loading recent jobs: ${error.message}`, 'error');
+            }
+        }
+
+        function processJobData(data, jobId) {
+            if (!data || !data.results || data.results.length === 0) {
+                showStatus('No results found for this job', 'error');
+                return;
+            }
+
+            const results = data.results;
+            let enhancedMLCount = 0;
+            let legacyMLCount = 0;
+            let totalScores = 0;
+            let scoreCount = 0;
+
+            // Process each result
+            const processedResults = results.map(result => {
+                const meta = normalizeRankerMeta(result);
+                const isEnhancedML = result.ranker_meta?.used_path === "enhanced_ml" || 
+                                   result.ranker_meta?.ranker_raw?.used_path === "enhanced_ml";
+                
+                if (isEnhancedML) enhancedMLCount++;
+                else if (meta.ranker_score) legacyMLCount++;
+                
+                if (meta.ranker_score) {
+                    totalScores += meta.ranker_score;
+                    scoreCount++;
+                }
+
+                return {
+                    ...result,
+                    processed_meta: meta,
+                    isEnhancedML: isEnhancedML
+                };
+            });
+
+            // Update stats
+            updateStats(enhancedMLCount, legacyMLCount, totalScores, scoreCount, results.length);
+            
+            // Update results table
+            updateResultsTable(processedResults);
+            
+            showStatus(`Successfully loaded job ${jobId} with ${results.length} results`, 'success');
+        }
+
+        function updateStats(enhancedML, legacyML, totalScores, scoreCount, totalResults) {
+            const statsDiv = document.getElementById('stats');
+            const avgScore = scoreCount > 0 ? (totalScores / scoreCount).toFixed(3) : 'N/A';
+            
+            statsDiv.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${totalResults}</div>
+                    <div class="stat-label">Total Results</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${enhancedML}</div>
+                    <div class="stat-label">Enhanced ML</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${legacyML}</div>
+                    <div class="stat-label">Legacy ML</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${avgScore}</div>
+                    <div class="stat-label">Avg Score</div>
+                </div>
+            `;
+        }
+
+        function updateResultsTable(results) {
+            const tableDiv = document.getElementById('resultsTable');
+            
+            if (results.length === 0) {
+                tableDiv.innerHTML = '<p>No results to display</p>';
+                return;
+            }
+
+            let tableHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>URL</th>
+                            <th>Parameter</th>
+                            <th>Family</th>
+                            <th>ML Score</th>
+                            <th>ML Type</th>
+                            <th>Family Probabilities</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            results.forEach(result => {
+                const meta = result.processed_meta;
+                const scoreClass = result.isEnhancedML ? 'enhanced' : 'legacy';
+                const scoreLabel = result.isEnhancedML ? 'Enhanced ML' : 'Legacy ML';
+                const rowClass = result.isEnhancedML ? 'enhanced-ml' : 'legacy-ml';
+                
+                const familyProbs = Object.entries(meta.family_probs || {})
+                    .map(([k, v]) => `<span class="family-prob">${k}: ${(v * 100).toFixed(1)}%</span>`)
+                    .join('');
+
+                tableHTML += `
+                    <tr class="${rowClass}">
+                        <td>${result.url || 'N/A'}</td>
+                        <td>${result.param || 'N/A'}</td>
+                        <td>${meta.family_chosen || 'N/A'}</td>
+                        <td class="score ${scoreClass}">${meta.ranker_score?.toFixed(3) || 'N/A'} (${scoreLabel})</td>
+                        <td>${result.isEnhancedML ? 'Enhanced ML' : 'Legacy ML'}</td>
+                        <td class="family-probs">${familyProbs}</td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += '</tbody></table>';
+            tableDiv.innerHTML = tableHTML;
+        }
+
+        function showRecentJobs(jobs) {
+            const tableDiv = document.getElementById('resultsTable');
+            const statsDiv = document.getElementById('stats');
+            
+            if (!jobs || jobs.length === 0) {
+                showStatus('No recent jobs found', 'error');
+                return;
+            }
+
+            // Update stats
+            statsDiv.innerHTML = `
+                <div class="stat-card">
+                    <div class="stat-number">${jobs.length}</div>
+                    <div class="stat-label">Total Jobs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${jobs.filter(j => j.status === 'completed').length}</div>
+                    <div class="stat-label">Completed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number">${jobs.filter(j => j.status === 'running').length}</div>
+                    <div class="stat-label">Running</div>
+                </div>
+            `;
+
+            // Update table
+            let tableHTML = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Job ID</th>
+                            <th>Target</th>
+                            <th>Status</th>
+                            <th>Created</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            jobs.forEach(job => {
+                const created = new Date(job.created_at || job.created || Date.now()).toLocaleString();
+                tableHTML += `
+                    <tr>
+                        <td><code>${job.id}</code></td>
+                        <td>${job.target || 'N/A'}</td>
+                        <td><span class="status ${job.status}">${job.status || 'unknown'}</span></td>
+                        <td>${created}</td>
+                        <td>
+                            <button class="btn" onclick="document.getElementById('jobId').value='${job.id}'; loadJob();">
+                                Load Results
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            });
+
+            tableHTML += '</tbody></table>';
+            tableDiv.innerHTML = tableHTML;
+            
+            showStatus(`Loaded ${jobs.length} recent jobs`, 'success');
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            const icon = type === 'loading' ? '<span class="loading-spinner"></span> ' : '';
+            statusDiv.innerHTML = `<div class="status ${type}">${icon}${message}</div>`;
+        }
+
+        // Auto-load the default job when page loads
+        window.onload = function() {
+            const defaultJobId = document.getElementById('jobId').value;
+            if (defaultJobId) {
+                loadJob();
+            }
+        };
+    </script>
+</body>
+</html>

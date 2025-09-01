@@ -474,6 +474,55 @@ def rank_payloads(*args, **kwargs) -> List[Dict[str, Any]]:
     if family not in MODEL_FILENAMES:
         return candidates[:top_k] if top_k else list(candidates)
 
+    # Enhanced ML path (preferred)
+    enhanced_engine = _get_enhanced_engine()
+    if enhanced_engine is not None:
+        try:
+            # Extract endpoint and parameter info
+            endpoint = {
+                "url": endpoint_meta.get("url", ""),
+                "method": endpoint_meta.get("method", "GET"),
+                "content_type": endpoint_meta.get("content_type", "")
+            }
+            
+            param = {
+                "name": endpoint_meta.get("param", ""),
+                "value": endpoint_meta.get("control_value", ""),
+                "loc": endpoint_meta.get("injection_mode", "query")
+            }
+            
+            # Extract payload list
+            payloads = [c.get("payload", "") for c in candidates if c.get("payload")]
+            if not payloads:
+                log.warning("[Enhanced ML] No valid payloads found, falling back to legacy")
+                enhanced_engine = None
+            else:
+                # Use enhanced payload ranking
+                ranked_payloads = enhanced_engine.rank_payloads(
+                    endpoint, param, family, payloads, top_k=top_k or len(payloads)
+                )
+                
+                if ranked_payloads:
+                    # Convert to expected format
+                    ranked: List[Dict[str, Any]] = []
+                    for i, item in enumerate(ranked_payloads):
+                        c = dict(candidates[i]) if i < len(candidates) else {"payload": item["payload"]}
+                        c["ranker_score"] = float(item.get("score", 0.0))
+                        c["ranker_used_model"] = "enhanced_ml"
+                        c["ranker_feature_dim_total"] = 48  # Enhanced ML uses 48 features
+                        ranked.append(c)
+                    
+                    log.info(f"[Enhanced ML] Successfully ranked {len(ranked)} payloads for {family}")
+                    return ranked
+                else:
+                    log.warning("[Enhanced ML] No results returned, falling back to legacy")
+                    enhanced_engine = None
+                    
+        except Exception as e:
+            log.warning(f"[Enhanced ML] Enhanced payload ranking failed: {e}, falling back to legacy")
+            enhanced_engine = None
+
+    # Legacy ML path (fallback)
     # Prepare endpoint vector (validates shape; may infer ep_dim if meta lacked it)
     ep_vec = _endpoint_vec(endpoint_meta)
 
