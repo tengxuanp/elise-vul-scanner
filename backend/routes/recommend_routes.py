@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 # ---- optional ML/feature plumbing (safe fallbacks) ----
@@ -21,7 +21,7 @@ try:
 except Exception:  # pragma: no cover
     class Recommender:  # minimal stub
         def load(self): ...
-        def recommend_with_meta(self, *a, **kw): return ([], {"used_path": "none"})
+        def recommend_with_meta(self, *a, **kw): return ([], {"used_path": "none", "strategy": "none", "source": "none"})
 
 router = APIRouter()
 
@@ -48,7 +48,7 @@ def _init_reco() -> Recommender:
 
 def _choose_family(url: str, param: str, content_type: Optional[str]) -> str:
     """
-    Very small heuristic, kept aligned with fuzz_routes.
+    Very small heuristic, kept aligned with fuzz routes.
     """
     p = (param or "").lower()
     u = (url or "").lower()
@@ -59,6 +59,11 @@ def _choose_family(url: str, param: str, content_type: Optional[str]) -> str:
     ):
         return "xss"
     return "sqli"
+
+
+def _normalize_family(fam: Optional[str]) -> str:
+    f = (fam or "").lower().strip()
+    return "redirect" if f == "open_redirect" else (f or "sqli")
 
 
 # -------------------- models --------------------
@@ -94,7 +99,9 @@ def recommend_payloads(
     except Exception:
         feats = {}
 
-    fam = (req.family or _choose_family(req.url, req.param, (feats or {}).get("content_type"))).lower()
+    fam = _normalize_family(req.family) if req.family else _choose_family(
+        req.url, req.param, (feats or {}).get("content_type")
+    )
 
     recs, meta = reco.recommend_with_meta(
         feats=feats,
@@ -104,6 +111,12 @@ def recommend_payloads(
         pool=req.pool,
     )
 
+    # Shallow flags so the UI doesn’t have to spelunk:
+    used_path = str(meta.get("used_path") or "")
+    source = str(meta.get("source") or used_path or "")
+    strategy = str(meta.get("strategy") or ("ml" if used_path.startswith("ml:") else "heuristic"))
+    dim = meta.get("dim") or meta.get("expected_total_dim")
+
     return {
         "url": req.url,
         "param": req.param,
@@ -111,13 +124,18 @@ def recommend_payloads(
         "family": fam,
         "recommendations": [{"payload": p, "confidence": float(c)} for p, c in recs],
         "ranker_meta": meta,
+        # convenience mirrors for frontend badges:
+        "ranker_used_path": used_path,
+        "ranker_source": source,
+        "ranker_strategy": strategy,
+        "ranker_dim": dim,
     }
 
 
 @router.get("/recommend_probed")
 def recommend_for_probed(
-    top_n: int = 3,
-    threshold: float = 0.2,
+    top_n: int = Query(3, ge=1, le=20),
+    threshold: float = Query(0.2, ge=0.0, le=1.0),
     reco: Recommender = Depends(_init_reco),
 ):
     """
@@ -146,13 +164,18 @@ def recommend_for_probed(
         except Exception:
             feats = {}
 
-        fam = (entry.get("family") or _choose_family(url, param, (feats or {}).get("content_type"))).lower()
+        fam = _normalize_family(entry.get("family") or _choose_family(url, param, (feats or {}).get("content_type")))
         recs, meta = reco.recommend_with_meta(
             feats=feats,
             top_n=max(1, int(top_n)),
             threshold=float(threshold),
             family=fam,
         )
+
+        used_path = str(meta.get("used_path") or "")
+        source = str(meta.get("source") or used_path or "")
+        strategy = str(meta.get("strategy") or ("ml" if used_path.startswith("ml:") else "heuristic"))
+        dim = meta.get("dim") or meta.get("expected_total_dim")
 
         recommendations.append(
             {
@@ -162,7 +185,51 @@ def recommend_for_probed(
                 "family": fam,
                 "recommendations": [{"payload": p, "confidence": float(c)} for p, c in recs],
                 "ranker_meta": meta,
+                "ranker_used_path": used_path,
+                "ranker_source": source,
+                "ranker_strategy": strategy,
+                "ranker_dim": dim,
             }
         )
 
     return {"count": len(recommendations), "recommendations": recommendations}
+
+
+# -------------------- diagnostics --------------------
+
+@router.get("/diagnostics/ltr")
+def ltr_diag(
+    url: str = Query("https://example.test/search?q="),
+    param: str = Query("q"),
+    method: str = Query("GET"),
+    family: str = Query("xss"),
+    reco: Recommender = Depends(_init_reco),
+):
+    """
+    Cheap end-to-end smoke test for the pre-fuzz ML ranker.
+    Hit this in a browser and check used_path/source/strategy.
+    """
+    try:
+        feats = fe.extract_features(url, param, payload="<img src=x onerror=1>", method=method)
+    except Exception:
+        feats = {}
+
+    fam = _normalize_family(family) if family else _choose_family(url, param, (feats or {}).get("content_type"))
+    recs, meta = reco.recommend_with_meta(
+        feats=feats,
+        top_n=3,
+        threshold=0.2,
+        family=fam,
+    )
+    used_path = str(meta.get("used_path") or "")
+    return {
+        "ok": True,
+        "family": fam,
+        "used_path": used_path,           # expect "ml:<fam>" when ML is live
+        "source": meta.get("source"),
+        "strategy": meta.get("strategy"),
+        "model_ids": meta.get("model_ids"),
+        "expected_total_dim": meta.get("expected_total_dim"),
+        "dim": meta.get("dim"),
+        "top": [{"payload": p, "confidence": float(c)} for p, c in recs],
+    }

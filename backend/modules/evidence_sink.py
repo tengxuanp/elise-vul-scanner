@@ -4,7 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from typing import Any, Dict, Optional, Iterable, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Iterable
 
 from sqlalchemy.exc import OperationalError
 
@@ -15,6 +16,22 @@ try:
 except ImportError:  # pragma: no cover
     from db import SessionLocal  # type: ignore
     from models import Endpoint, TestCase, Evidence  # type: ignore
+
+# ============================== filesystem fallback ===========================
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+FALLBACK_DIR = REPO_ROOT / "data" / "results"
+FALLBACK_DIR.mkdir(parents=True, exist_ok=True)
+FALLBACK_NDJSON = FALLBACK_DIR / "evidence_fallback.ndjson"
+
+def _append_ndjson(path: Path, obj: Dict[str, Any]) -> None:
+    try:
+        line = json.dumps(obj, ensure_ascii=False)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except Exception:
+        # last-resort: swallow—never break caller on logging failure
+        pass
 
 
 # ============================== constants ====================================
@@ -37,6 +54,9 @@ def _sha1(s: str) -> str:
 
 
 def _redact_headers(headers: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Redact sensitive header values case-insensitively. Keeps keys intact.
+    """
     out: Dict[str, Any] = {}
     for k, v in (headers or {}).items():
         key = str(k)
@@ -101,6 +121,10 @@ def _json_safe(obj: Any, depth: int = 0) -> Any:
 
 
 def _sanitize_meta(meta: Optional[Dict[str, Any]], *, redact_header_keys: Iterable[str] = ()) -> Dict[str, Any]:
+    """
+    Make metadata JSON-safe and size-bounded; redact sensitive headers.
+    Also computes SHA1 and length for large text/blob fields where common keys are used.
+    """
     meta = dict(meta or {})
     # Best-effort header redaction under common names
     for hk in ("headers", "request_headers", "response_headers"):
@@ -176,7 +200,7 @@ def _commit_with_retry(db, retries: int = 5, base_sleep: float = 0.05) -> None:
             return
         except OperationalError as e:
             msg = str(e).lower()
-            # sqlite: "database is locked" | postgres: serialization failure could be handled too
+            # sqlite: "database is locked" | postgres: serialization failures could be handled too
             if "database is locked" in msg or "deadlock detected" in msg or "could not serialize access" in msg:
                 db.rollback()
                 time.sleep(base_sleep * (2 ** i))
@@ -208,58 +232,82 @@ def persist_evidence(
     sanitize/trim bulky JSON fields, and merge param_locs into the Endpoint.
 
     Returns: {"endpoint_id": int, "test_case_id": int, "evidence_id": int}
+
+    If the database is unavailable or errors out, we write a best-effort NDJSON
+    record to data/results/evidence_fallback.ndjson and return sentinel IDs -1.
     """
     # Sanitize metas up-front (avoid exploding JSON columns)
     req_meta_s = _sanitize_meta(request_meta, redact_header_keys=("headers",))
     resp_meta_s = _sanitize_meta(response_meta, redact_header_keys=("headers",))
     sigs_s = _json_safe(signals or {})
 
-    with SessionLocal() as db:
-        # Upsert endpoint by (method, url)
-        ep = (
-            db.query(Endpoint)
-            .filter(Endpoint.method == method, Endpoint.url == url)
-            .first()
-        )
-        if not ep:
-            ep = Endpoint(method=method, url=url, param_locs=param_locs or {})
-            db.add(ep)
-            db.flush()  # assigns ep.id
-        else:
-            # Merge param_locs if new info arrives
-            try:
-                if param_locs:
-                    merged = _merge_param_locs(ep.param_locs or {}, param_locs)
-                    ep.param_locs = merged
-            except Exception:
-                # Best-effort; don't block evidence on param merge failure
-                pass
+    try:
+        with SessionLocal() as db:
+            # Upsert endpoint by (method, url)
+            ep = (
+                db.query(Endpoint)
+                .filter(Endpoint.method == method, Endpoint.url == url)
+                .first()
+            )
+            if not ep:
+                ep = Endpoint(method=method, url=url, param_locs=param_locs or {})
+                db.add(ep)
+                db.flush()  # assigns ep.id
+            else:
+                # Merge param_locs if new info arrives
+                try:
+                    if param_locs:
+                        merged = _merge_param_locs(ep.param_locs or {}, param_locs)
+                        ep.param_locs = merged
+                except Exception:
+                    # Best-effort; don't block evidence on param merge failure
+                    pass
 
-        # Create the testcase
-        tc = TestCase(
-            job_id=job_id,
-            endpoint_id=ep.id,
-            param=param,
-            family=family,
-            payload_id=payload_id,
-        )
-        db.add(tc)
-        db.flush()  # assigns tc.id
+            # Create the testcase
+            tc = TestCase(
+                job_id=job_id,
+                endpoint_id=ep.id,
+                param=param,
+                family=family,
+                payload_id=payload_id,
+            )
+            db.add(tc)
+            db.flush()  # assigns tc.id
 
-        # Create the evidence
-        ev = Evidence(
-            job_id=job_id,
-            test_case_id=tc.id,
-            request_meta=req_meta_s,
-            response_meta=resp_meta_s,
-            signals=sigs_s,
-            confidence=float(confidence),
-            label=label,
-        )
-        db.add(ev)
-        _commit_with_retry(db)
+            # Create the evidence
+            ev = Evidence(
+                job_id=job_id,
+                test_case_id=tc.id,
+                request_meta=req_meta_s,
+                response_meta=resp_meta_s,
+                signals=sigs_s,
+                confidence=float(confidence),
+                label=label,
+            )
+            db.add(ev)
+            _commit_with_retry(db)
 
-        return {"endpoint_id": ep.id, "test_case_id": tc.id, "evidence_id": ev.id}
+            return {"endpoint_id": ep.id, "test_case_id": tc.id, "evidence_id": ev.id}
+
+    except Exception as e:
+        # Fallback to NDJSON so we never lose findings
+        fallback_obj = _json_safe({
+            "ts": int(time.time()),
+            "job_id": job_id,
+            "method": method,
+            "url": url,
+            "param": param,
+            "family": family,
+            "payload_id": payload_id,
+            "request_meta": req_meta_s,
+            "response_meta": resp_meta_s,
+            "signals": sigs_s,
+            "confidence": float(confidence),
+            "label": label,
+            "error": f"db-persist-failed: {type(e).__name__}: {str(e)}",
+        })
+        _append_ndjson(FALLBACK_NDJSON, fallback_obj)  # non-fatal
+        return {"endpoint_id": -1, "test_case_id": -1, "evidence_id": -1}
 
 
 # ============================== maintenance ==================================
@@ -272,20 +320,23 @@ def update_evidence_label(
 ) -> bool:
     """
     Update label and/or confidence for an existing Evidence row.
-    Returns True if a row was updated.
+    Returns True if a row was updated. Returns False on any error.
     """
     if label is None and confidence is None:
         return False
-    with SessionLocal() as db:
-        ev = db.query(Evidence).filter(Evidence.id == evidence_id).first()
-        if not ev:
-            return False
-        if label is not None:
-            ev.label = label
-        if confidence is not None:
-            ev.confidence = float(confidence)
-        _commit_with_retry(db)
-        return True
+    try:
+        with SessionLocal() as db:
+            ev = db.query(Evidence).filter(Evidence.id == evidence_id).first()
+            if not ev:
+                return False
+            if label is not None:
+                ev.label = label
+            if confidence is not None:
+                ev.confidence = float(confidence)
+            _commit_with_retry(db)
+            return True
+    except Exception:
+        return False
 
 
 def relabel_by_testcase(
@@ -296,19 +347,22 @@ def relabel_by_testcase(
 ) -> int:
     """
     Bulk update all Evidence rows for a given test case.
-    Returns the count of updated rows.
+    Returns the count of updated rows. Returns 0 on any error.
     """
     if label is None and confidence is None:
         return 0
-    with SessionLocal() as db:
-        q = db.query(Evidence).filter(Evidence.test_case_id == test_case_id)
-        count = 0
-        for ev in q:
-            if label is not None:
-                ev.label = label
-            if confidence is not None:
-                ev.confidence = float(confidence)
-            count += 1
-        if count:
-            _commit_with_retry(db)
-        return count
+    try:
+        with SessionLocal() as db:
+            q = db.query(Evidence).filter(Evidence.test_case_id == test_case_id)
+            count = 0
+            for ev in q:
+                if label is not None:
+                    ev.label = label
+                if confidence is not None:
+                    ev.confidence = float(confidence)
+                count += 1
+            if count:
+                _commit_with_retry(db)
+            return count
+    except Exception:
+        return 0

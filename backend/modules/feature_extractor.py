@@ -7,6 +7,7 @@ from html import escape as html_escape
 import hashlib
 import logging
 import math
+import os
 import re
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -55,7 +56,12 @@ except Exception:
         }
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+
+# honor global ML debug toggle to keep parity with recommender
+def _is_debug() -> bool:
+    return str(os.getenv("ELISE_ML_DEBUG", "")).lower() in ("1", "true", "yes")
+
+log.setLevel(logging.DEBUG if _is_debug() else logging.INFO)
 
 # ------------------------------ helpers --------------------------------------
 
@@ -103,6 +109,17 @@ def _content_type_hint(ct: Optional[str]) -> int:
     if ct == "application/x-www-form-urlencoded" or "form" in ct:
         return 3
     return 0
+
+
+def _infer_content_type_param(ct: Optional[str], headers: Optional[Dict[str, str]]) -> Optional[str]:
+    if ct:
+        return ct
+    if headers:
+        # try common casings
+        for k in ("content-type", "Content-Type", "CONTENT-TYPE"):
+            if k in headers and headers[k]:
+                return headers[k]
+    return None
 
 
 def _path_depth(url: str) -> int:
@@ -181,6 +198,20 @@ def _sanitize_headers(headers: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return out
 
 
+def _infer_injection_mode(method: str, content_type: Optional[str]) -> str:
+    m = (method or "GET").upper()
+    ct = (content_type or "").split(";")[0].strip().lower()
+    if m == "GET":
+        return "query"
+    if m in ("PUT", "PATCH", "POST"):
+        if ct == "application/json":
+            return "json"
+        if ct in ("application/x-www-form-urlencoded", "multipart/form-data") or "form" in ct:
+            return "form" if "urlencoded" in ct else "multipart"
+        return "json" if "json" in ct else "form"
+    return "headers"
+
+
 # ------------------------------ extractor ------------------------------------
 
 class FeatureExtractor:
@@ -203,6 +234,11 @@ class FeatureExtractor:
      14  xss_param_hint         (1 if param in xss-ish names; else 0)
      15  payload_entropy_bucket (0..9)
      16  payload_special_bucket (0..9)
+
+    Notes:
+    - We keep returning a flat list[int] to match the trained rankers (feature_dim=17).
+    - Contextual hints like content_type/injection_mode are stored in self.last_meta
+      for logging/diagnostics, but NOT injected into the numeric vector (to preserve ABI).
     """
 
     def __init__(self, wait_until: str = "domcontentloaded", nav_timeout_ms: int = 10000, headless: bool = True):
@@ -230,10 +266,14 @@ class FeatureExtractor:
         param_norm = (param or "").lower()
         parts = [p for p in (parsed.path or "").split("/") if p]
 
+        # derive effective content-type (explicit arg wins over headers)
+        eff_ct = _infer_content_type_param(content_type, headers)
+        ct_hint = _content_type_hint(eff_ct)
+        inj_mode = _infer_injection_mode(method, eff_ct)
+
         login_hint = 1 if any(seg.lower() in _LOGIN_PATH_HINTS for seg in parts) else 0
         id_like_param = 1 if (_ID_LIKE_RE.search(param_norm) or param_norm in ("id", "uid", "user_id", "product_id")) else 0
         xss_param_hint = 1 if param_norm in _XSS_PARAM_HINTS else 0
-        ct_hint = _content_type_hint(content_type)
 
         vec: List[int] = [
             0,                          # tag
@@ -256,11 +296,15 @@ class FeatureExtractor:
         ]
         self.last_meta = {
             "endpoint_only": True,
+            "content_type": eff_ct,
             "content_type_hint": ct_hint,
+            "injection_mode": inj_mode,
             "login_hint": login_hint,
             "id_like_param": id_like_param,
             "xss_param_hint": xss_param_hint,
         }
+        if _is_debug():
+            log.debug("extract_endpoint_features -> vec=%s meta=%s", vec, self.last_meta)
         return vec
 
     def extract_features(
@@ -272,13 +316,15 @@ class FeatureExtractor:
         content_type: Optional[str] = None,
         headers: Optional[Dict[str, str]] = None,
         use_browser: bool = True,
+        injection_mode: Optional[str] = None,
     ) -> List[int]:
         """
         Heavy extractor (may open a browser) that tries to observe reflection/JS execution.
         Set use_browser=False to force the cheap path.
         """
+        eff_ct = _infer_content_type_param(content_type, headers)
         if not use_browser or not _PLAYWRIGHT_AVAILABLE:
-            return self.extract_endpoint_features(url, param, method=method, content_type=content_type, headers=headers)
+            return self.extract_endpoint_features(url, param, method=method, content_type=eff_ct, headers=headers)
 
         # === Parse Target Info ===
         parsed = urlparse(url or "")
@@ -287,14 +333,14 @@ class FeatureExtractor:
 
         html = ""
         executed_flag = {"value": False}  # Mutable for JS dialog hook
+        ctx_headers = _sanitize_headers(headers)
 
         # === Playwright Session ===
         try:
             assert sync_playwright is not None  # type: ignore
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=self.headless)
-                ctx_headers = _sanitize_headers(headers)
-                context = browser.new_context(ignore_https_errors=True, extra_http_headers=ctx_headers)
+                context = browser.new_context(ignore_https_errors=True, extra_http_headers=ctx_headers or None)
                 page = context.new_page()
 
                 # Hook: JS Execution Detection
@@ -309,7 +355,6 @@ class FeatureExtractor:
 
                 # Optional: catch console log that echoes payload (weak signal; do not set execution_flag)
                 def on_console(msg):
-                    # leave only for metadata
                     if payload and payload in (msg.text() or ""):
                         self.last_meta["console_reflection"] = True
                 page.on("console", on_console)
@@ -317,22 +362,22 @@ class FeatureExtractor:
                 try:
                     if method.upper() == "POST":
                         base_url = url.split("?")[0]
-                        ct = (content_type or "").split(";")[0].strip().lower()
+                        ct_slim = (eff_ct or "").split(";")[0].strip().lower()
 
                         resp_text = None
                         try:
-                            if hasattr(p, "request"):
-                                api_ctx = p.request.new_context(extra_http_headers=ctx_headers or None)
-                                if ct == "application/json":
-                                    resp = api_ctx.post(base_url, data=None, json={param: payload}, timeout=self.nav_timeout_ms)
-                                else:
-                                    resp = api_ctx.post(base_url, data={param: payload}, timeout=self.nav_timeout_ms)
-                                if resp and resp.ok:
-                                    resp_text = resp.text()
-                                try:
-                                    api_ctx.dispose()
-                                except Exception:
-                                    pass
+                            # Best-effort server-side fetch to avoid form filling for simple cases
+                            api_ctx = p.request.new_context(extra_http_headers=ctx_headers or None)
+                            if ct_slim == "application/json":
+                                resp = api_ctx.post(base_url, data=None, json={param: payload}, timeout=self.nav_timeout_ms)
+                            else:
+                                resp = api_ctx.post(base_url, data={param: payload}, timeout=self.nav_timeout_ms)
+                            if resp and resp.ok:
+                                resp_text = resp.text()
+                            try:
+                                api_ctx.dispose()
+                            except Exception:
+                                pass
                         except Exception:
                             resp_text = None
 
@@ -368,11 +413,11 @@ class FeatureExtractor:
 
         except Exception as e:
             log.error(f"[Playwright Setup/Error] {e}")
-            return self._default_vector(url, param, payload, domain_feature, path_feature, content_type)
+            return self._default_vector(url, param, payload, domain_feature, path_feature, eff_ct, headers)
 
         if not html:
             log.warning(f"[Empty HTML] Could not extract content from {url}")
-            return self._default_vector(url, param, payload, domain_feature, path_feature, content_type)
+            return self._default_vector(url, param, payload, domain_feature, path_feature, eff_ct, headers)
 
         # === Reflection & Context ===
         reflection_type, reflection_context = _classify_reflection(html, payload)
@@ -392,7 +437,8 @@ class FeatureExtractor:
         login_hint = 1 if any(seg.lower() in _LOGIN_PATH_HINTS for seg in parts) else 0
         id_like_param = 1 if (_ID_LIKE_RE.search(param_norm) or param_norm in ("id", "uid", "user_id", "product_id")) else 0
         xss_param_hint = 1 if param_norm in _XSS_PARAM_HINTS else 0
-        ct_hint = _content_type_hint(content_type)
+        ct_hint = _content_type_hint(eff_ct)
+        inj_mode = (injection_mode or _infer_injection_mode(method, eff_ct)).lower()
 
         # === Numeric encodings ===
         type_flag = {"raw": 1, "encoded": 2, "partial": 3, "none": 0}[reflection_type]
@@ -426,7 +472,7 @@ class FeatureExtractor:
             special_bucket,             # 16
         ]
 
-        # optional debug metadata
+        # optional debug metadata (non-numeric hints for logs/UI)
         self.last_meta = {
             "endpoint_only": False,
             "reflection_type": reflection_type,
@@ -434,13 +480,18 @@ class FeatureExtractor:
             "tag": tag_name,
             "attr": attr_name,
             "executed_flag": bool(executed_flag["value"]),
+            "content_type": eff_ct,
             "content_type_hint": ct_hint,
+            "injection_mode": inj_mode,
             "login_hint": login_hint,
             "id_like_param": id_like_param,
             "xss_param_hint": xss_param_hint,
             "payload_entropy": H,
             "payload_special_ratio": S,
+            "headers_used": bool(ctx_headers),
         }
+        if _is_debug():
+            log.debug("extract_features -> vec=%s meta=%s", vec, self.last_meta)
 
         return vec
 
@@ -452,10 +503,12 @@ class FeatureExtractor:
         domain_feature: int,
         path_feature: int,
         content_type: Optional[str],
+        headers: Optional[Dict[str, str]] = None,
     ) -> List[int]:
         # conservative defaults preserving shape
+        eff_ct = _infer_content_type_param(content_type, headers)
         param_norm = (param or "").lower()
-        return [
+        vec = [
             0,                          # tag
             0,                          # attr
             domain_feature,             # domain
@@ -469,8 +522,21 @@ class FeatureExtractor:
             1 if _ID_LIKE_RE.search(param_norm) or param_norm in ("id", "uid", "user_id", "product_id") else 0,
             min(9, _path_depth(url)),   # depth
             1 if any(seg.lower() in _LOGIN_PATH_HINTS for seg in (urlparse(url).path or "").split("/") if seg) else 0,
-            _content_type_hint(content_type),  # content-type hint
+            _content_type_hint(eff_ct),  # content-type hint
             1 if param_norm in _XSS_PARAM_HINTS else 0,  # xss param hint
             0,                          # entropy bucket
             0,                          # special-char bucket
         ]
+        self.last_meta = {
+            "endpoint_only": True,
+            "fallback": True,
+            "content_type": eff_ct,
+            "injection_mode": _infer_injection_mode("GET", eff_ct),  # best guess
+        }
+        if _is_debug():
+            log.debug("_default_vector -> vec=%s meta=%s", vec, self.last_meta)
+        return vec
+
+    # Convenience for callers that want the latest hints (non-breaking)
+    def get_last_meta(self) -> Dict[str, Any]:
+        return dict(self.last_meta or {})

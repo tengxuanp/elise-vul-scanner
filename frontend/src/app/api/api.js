@@ -137,9 +137,45 @@ export const getFuzzResultByJob = async (job_id) =>
 export const startProbe = async (job_id) =>
   (await api.post(`/probe/${job_id}`)).data;
 
-// Backend expected path is job-scoped; adjust if your backend uses a flat route.
-export const getRecommendations = async (job_id) =>
-  (await api.get(`/recommend_probed/${job_id}`)).data;
+/**
+ * Backend currently exposes GET /api/recommend_probed (no job id).
+ * Try job-scoped first for forward-compat; fall back to flat route.
+ */
+export const getRecommendations = async (job_id) => {
+  try {
+    return (await api.get(`/recommend_probed/${job_id}`)).data; // if your backend supports it
+  } catch {
+    return (await api.get('/recommend_probed')).data; // current backend implementation
+  }
+};
+
+/* ============== Direct ML recommendation (single endpoint) ============== */
+/**
+ * Call the per-endpoint recommender. This returns ranker_meta with
+ * {used_path, source, strategy, model_ids, expected_total_dim, ...}.
+ */
+export const recommendPayloads = async ({
+  url,
+  param,
+  method = 'GET',
+  family = undefined,     // 'sqli' | 'xss' | 'redirect' (optional)
+  topN = 3,
+  threshold = 0.2,
+  pool = undefined,       // optional list of candidate payloads
+  seed_payload = "' OR 1=1 --",
+}) => {
+  const body = {
+    url,
+    param,
+    method,
+    family,
+    top_n: topN,
+    threshold,
+    pool,
+    seed_payload,
+  };
+  return (await api.post('/recommend_payloads', body)).data;
+};
 
 /* ===================== Exploitation ===================== */
 // If your backend isn’t job-scoped for exploit, change to POST /exploit with body.
@@ -168,6 +204,28 @@ export const setBearerAuth = (token) => {
   setAuthHeader('Authorization', val);
 };
 
+/* ===================== Diagnostics ===================== */
+export const getLTRDiagnostics = async (params = {}) =>
+  (await api.get('/diagnostics/ltr', { params })).data;
+
+/* ===================== Ranker Meta Helpers ===================== */
+export const isMLRanker = (respOrMeta) => {
+  const meta = respOrMeta?.ranker_meta ?? respOrMeta ?? {};
+  const used = String(meta.used_path || '');
+  const strat = String(meta.strategy || '');
+  return used.startsWith('ml:') || strat === 'ml';
+};
+
+export const rankerBadge = (respOrMeta) => {
+  const meta = respOrMeta?.ranker_meta ?? respOrMeta ?? {};
+  const used = String(meta.used_path || '');
+  const strat = String(meta.strategy || '');
+  if (used.startsWith('ml:') || strat === 'ml') return 'ML';
+  if (strat === 'plugin') return 'Plugin';
+  if (strat?.startsWith('generic')) return 'Generic';
+  return 'Heuristic';
+};
+
 export default {
   api,
   startJob,
@@ -180,9 +238,13 @@ export default {
   getFuzzResultByJob,
   startProbe,
   getRecommendations,
+  recommendPayloads,
   exploitTarget,
   getReport,
   getReportMarkdown,
   setAuthHeader,
   setBearerAuth,
+  getLTRDiagnostics,
+  isMLRanker,
+  rankerBadge,
 };

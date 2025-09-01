@@ -186,65 +186,6 @@ def _derive_param_locs(req: Dict[str, Any]) -> Dict[str, List[str]]:
         post_data=req.get("post_data"),
     )
 
-def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
-    """Upsert Endpoint and create planned TestCase rows per param for this job."""
-    if not (SessionLocal and Endpoint and TestCase):
-        return  # DB not available
-
-    method = _canon_method(req.get("method"))
-    url = str(req.get("url") or "")
-
-    param_locs: Dict[str, List[str]] = _derive_param_locs(req)
-
-    with SessionLocal() as db:
-        ep = (
-            db.query(Endpoint)
-              .filter(Endpoint.method == method, Endpoint.url == url)
-              .first()
-        )
-        if not ep:
-            ep = Endpoint(method=method, url=url, param_locs=param_locs)
-            db.add(ep)
-            db.flush()
-        else:
-            # merge newly derived params into existing record
-            merged = dict(ep.param_locs or {})
-            for k, v in (param_locs or {}).items():
-                if k not in merged or not isinstance(merged[k], list):
-                    merged[k] = []
-                merged[k] = sorted(set((merged[k] or []) | set(v or [])))
-            ep.param_locs = merged
-
-        def _ensure_tc(param: str, family: str = "plan", payload_id: str = "n/a"):
-            exists = (
-                db.query(TestCase)
-                  .filter(
-                      TestCase.job_id == job_id,
-                      TestCase.endpoint_id == ep.id,
-                      TestCase.param == param,
-                      TestCase.family == family,
-                      TestCase.payload_id == payload_id,
-                  )
-                  .first()
-            )
-            if not exists:
-                db.add(TestCase(
-                    job_id=job_id,
-                    endpoint_id=ep.id,
-                    param=param,
-                    family=family,
-                    payload_id=payload_id
-                ))
-
-        for param in (ep.param_locs or {}).get("query", []):
-            _ensure_tc(param)
-        for param in (ep.param_locs or {}).get("form", []):
-            _ensure_tc(param)
-        for param in (ep.param_locs or {}).get("json", []):
-            _ensure_tc(param)
-
-        db.commit()
-
 def _write_json(path: Path, payload: Any) -> Path:
     """
     JSON writer that won't choke on Pydantic types (e.g., HttpUrl, UUID).
@@ -282,6 +223,67 @@ def _validate_target_url(target: str) -> None:
             raise ValueError
     except Exception:
         raise HTTPException(status_code=400, detail="target_url must be an absolute http(s) URL")
+
+
+def _persist_endpoint_and_plan(job_id: str, req: Dict[str, Any]) -> None:
+    """Upsert Endpoint and create planned TestCase rows per param for this job."""
+    if not (SessionLocal and Endpoint and TestCase):
+        return  # DB not available
+
+    method = _canon_method(req.get("method"))
+    url = str(req.get("url") or "")
+
+    param_locs: Dict[str, List[str]] = _derive_param_locs(req)
+
+    with SessionLocal() as db:
+        ep = (
+            db.query(Endpoint)
+              .filter(Endpoint.method == method, Endpoint.url == url)
+              .first()
+        )
+        if not ep:
+            ep = Endpoint(method=method, url=url, param_locs=param_locs)
+            db.add(ep)
+            db.flush()
+        else:
+            # merge newly derived params into existing record
+            merged = dict(ep.param_locs or {})
+            for k, v in (param_locs or {}).items():
+                # Always treat as set union of names; store back as sorted list
+                left  = set(merged.get(k, []) or [])
+                right = set(v or [])
+                merged[k] = sorted(left | right)
+            ep.param_locs = merged
+
+        def _ensure_tc(param: str, family: str = "plan", payload_id: str = "n/a"):
+            exists = (
+                db.query(TestCase)
+                  .filter(
+                      TestCase.job_id == job_id,
+                      TestCase.endpoint_id == ep.id,
+                      TestCase.param == param,
+                      TestCase.family == family,
+                      TestCase.payload_id == payload_id,
+                  )
+                  .first()
+            )
+            if not exists:
+                db.add(TestCase(
+                    job_id=job_id,
+                    endpoint_id=ep.id,
+                    param=param,
+                    family=family,
+                    payload_id=payload_id
+                ))
+
+        for param in (ep.param_locs or {}).get("query", []):
+            _ensure_tc(param)
+        for param in (ep.param_locs or {}).get("form", []):
+            _ensure_tc(param)
+        for param in (ep.param_locs or {}).get("json", []):
+            _ensure_tc(param)
+
+        db.commit()
 
 
 # -------------------- routes --------------------
@@ -398,14 +400,18 @@ def start_crawl(body: CrawlRequest):
                 try:
                     _persist_endpoint_and_plan(job_id, ep)
                 except Exception as e:
-                    print(f"[WARN] persist endpoint failed: {e}")
+                    m = _canon_method(ep.get("method"))
+                    u = str(ep.get("url") or "")
+                    print(f"[WARN] persist endpoint failed: {m} {u} – {type(e).__name__}: {e}")
 
             # Persist plans from captured requests (richer: headers/body_type/body_parsed)
             for req in captured_requests or []:
                 try:
                     _persist_endpoint_and_plan(job_id, req)
                 except Exception as e:
-                    print(f"[WARN] persist request failed: {e}")
+                    m = _canon_method(req.get("method"))
+                    u = str(req.get("url") or "")
+                    print(f"[WARN] persist request failed: {m} {u} – {type(e).__name__}: {e}")
 
             _write_status(job_id, "completed")
 
@@ -422,7 +428,7 @@ def start_crawl(body: CrawlRequest):
 
         except Exception as e:
             _write_status(job_id, "error", {"error": str(e)})
-            print(f"[ERROR] Crawl failed for {job_id}: {e}")
+            print(f"[ERROR] Crawl failed for {job_id}: {type(e).__name__}: {e}")
 
     threading.Thread(target=run_crawl, daemon=True).start()
     return {

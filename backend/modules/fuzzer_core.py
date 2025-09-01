@@ -34,56 +34,29 @@ except Exception:
         return {"p": 0.0, "source": "fallback"}
 
 # ----------------------------- Stage A/B integration -------------------------
-# Best-effort imports. If not present, we fall back gracefully.
+# Prefer canonical payload pools from family_router if present; otherwise use payloads.py
 try:
-    from .feature_extractor import FeatureExtractor  # payload-agnostic endpoint features
-except Exception:
-    FeatureExtractor = None  # type: ignore
-
-try:
-    # Stage-A (family) + canonical pools
     from .family_router import (
         FamilyClassifier,
-        payload_pool_for,
-        decide_family,
-        DEFAULT_MIN_PROB,
-        DEFAULT_EXPLORE_TOPK,
+        payload_pool_for as _payload_pool_for_router,
+        decide_family as _router_decide_family,
+        DEFAULT_MIN_PROB as _ROUTER_MIN_PROB,
+        DEFAULT_EXPLORE_TOPK as _ROUTER_EXPLORE_TOPK,
     )
 except Exception:
     FamilyClassifier = None  # type: ignore
+    _payload_pool_for_router = None  # type: ignore
+    _router_decide_family = None  # type: ignore
+    _ROUTER_MIN_PROB = None
+    _ROUTER_EXPLORE_TOPK = None
 
-    def payload_pool_for(family: str) -> List[str]:  # minimal canonical pool fallback
-        fam = (family or "").lower()
-        if fam == "sqli":
-            return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
-        if fam == "xss":
-            return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
-        if fam == "redirect":
-            return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
-        return []
+# Always try our curated pools as a fallback
+try:
+    from .payloads import payload_pool_for as _payload_pool_for_payloads
+except Exception:
+    _payload_pool_for_payloads = None  # type: ignore
 
-    # Fallback Stage-A decider when family_router is not available
-    def decide_family(t: Dict[str, Any], min_prob: float = 0.55, explore_topk: int = 2, include_base: bool = False) -> Dict[str, Any]:  # type: ignore
-        fams = ["sqli", "xss", "redirect", "base"]
-        probs = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
-        s = sum(probs.values()) or 1.0
-        probs = {k: v / s for k, v in probs.items()}
-        ranked = sorted([(f, p) for f, p in probs.items()], key=lambda kv: kv[1], reverse=True)
-        top_family, top_prob = ranked[0]
-        threshold_passed = top_prob >= min_prob
-        fams_try = [top_family] if threshold_passed else [f for f, _ in ranked if (include_base or f != "base")][:max(1, explore_topk)]
-        return {
-            "family_top": top_family,
-            "family_probs": probs,
-            "threshold_passed": threshold_passed,
-            "families_to_try": fams_try,
-            "decision_reason": "rule_argmax" if threshold_passed else "below_threshold_explore",
-            "min_prob": float(min_prob),
-        }
-
-    DEFAULT_MIN_PROB = 0.55  # type: ignore
-    DEFAULT_EXPLORE_TOPK = 2  # type: ignore
-
+# Recommender (Stage-B ranker and family-clf fallback)
 try:
     from .recommender import Recommender
 except Exception:
@@ -91,12 +64,38 @@ except Exception:
 
 # Singletons & caches
 _FEATURE_CACHE: Dict[Tuple[str, str, str], Dict[str, Any]] = {}
-_FE = FeatureExtractor(headless=True) if FeatureExtractor else None
+try:
+    # payload-agnostic endpoint features
+    from .feature_extractor import FeatureExtractor  # type: ignore
+    _FE = FeatureExtractor(headless=True)  # type: ignore
+except Exception:
+    _FE = None
+
 _FAM = FamilyClassifier() if FamilyClassifier else None
 _RECO = Recommender() if Recommender else None
 
+# Load the ML recommender if available
+if _RECO is not None:
+    try:
+        print(f"DEBUG: Loading ML Recommender: {_RECO}")
+        _RECO.load()
+        print(f"DEBUG: ML Recommender loaded successfully: {_RECO}")
+        print(f"DEBUG: Recommender ready: {getattr(_RECO, 'ready', 'N/A')}")
+        print(f"DEBUG: Recommender meta: {getattr(_RECO, 'meta', {})}")
+    except Exception as e:
+        print(f"DEBUG: Failed to load ML Recommender: {e}")
+        _RECO = None
+else:
+    print("DEBUG: No Recommender available to load")
+
+# Defaults if router constants are missing
+DEFAULT_MIN_PROB = float(_ROUTER_MIN_PROB) if _ROUTER_MIN_PROB is not None else 0.55
+DEFAULT_EXPLORE_TOPK = int(_ROUTER_EXPLORE_TOPK) if _ROUTER_EXPLORE_TOPK is not None else 2
+
+
 def _endpoint_key(t: Dict[str, Any]) -> Tuple[str, str, str]:
     return ((t.get("method") or "GET").upper(), t.get("url") or "", t.get("target_param") or "")
+
 
 def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
     """Very cheap feature proxy when real extractor isn't available."""
@@ -105,63 +104,233 @@ def _cheap_target_vector(t: Dict[str, Any]) -> Dict[str, Any]:
     ct = (t.get("content_type") or "").split(";")[0].lower()
     url = t.get("url") or ""
     param = (t.get("target_param") or "").lower()
+
     def depth(u: str) -> int:
         try:
             return sum(1 for seg in (urlparse(u).path or "").split("/") if seg)
         except Exception:
             return 0
+
     return {
+        # numeric-ish endpoint features
         "method": method,
         "in": loc,
+        "injection_mode": loc,              # hint for recommender heuristics
         "content_type": ct,
+        "headers": dict(t.get("headers") or {}),
         "url": url,
         "param": param,
         "path_depth": depth(url),
         "param_len": len(param),
+        # keep aliases the recommender looks for
+        "path": url,
+        "param_name": param,
+        "mode": loc,
     }
 
+
 def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
-    """Cache payload-agnostic endpoint features."""
+    """
+    Cache payload-agnostic endpoint features (robust to extractor API changes).
+
+    IMPORTANT: We always include lightweight META fields required by the
+    recommender/LTR ranker: url, param, method, content_type, headers,
+    and injection_mode/mode — even when FeatureExtractor is present.
+    """
     k = _endpoint_key(t)
     if k in _FEATURE_CACHE:
         return _FEATURE_CACHE[k]
-    feats: Dict[str, Any]
+
+    # Meta overlay used by the ranker (and by heuristics)
+    meta_overlay = {
+        "url": t.get("url") or "",
+        "path": t.get("url") or "",
+        "param": (t.get("target_param") or t.get("param") or ""),
+        "param_name": (t.get("target_param") or t.get("param") or ""),
+        "method": (t.get("method") or "GET"),
+        "content_type": t.get("content_type"),
+        "headers": dict(t.get("headers") or {}),
+        "injection_mode": (t.get("in") or "query"),
+        "mode": (t.get("in") or "query"),
+    }
+
+    feats: Dict[str, Any] = {}
     if _FE is not None:
         try:
-            feats = _FE.extract_features(
-                t.get("url"),
-                t.get("target_param"),
-                payload="",  # payload-agnostic
-                method=t.get("method") or "GET",
-                content_type=t.get("content_type"),
-            )
+            # Prefer the new endpoint-only API if present
+            if hasattr(_FE, "extract_endpoint_features"):
+                raw = _FE.extract_endpoint_features(
+                    url=t.get("url"),
+                    param=t.get("target_param") or t.get("param"),
+                    method=(t.get("method") or "GET"),
+                    content_type=t.get("content_type"),
+                    headers=t.get("headers"),
+                )
+            else:
+                # Older API sometimes returns (vec, meta)
+                raw = _FE.extract_features(
+                    t.get("url"),
+                    t.get("target_param") or t.get("param"),
+                    payload="",  # payload-agnostic
+                    method=(t.get("method") or "GET"),
+                    content_type=t.get("content_type"),
+                )
+
+            if isinstance(raw, dict):
+                feats = dict(raw)
+            elif isinstance(raw, tuple) and len(raw) >= 2 and isinstance(raw[1], dict):
+                # (vec, meta) -> use meta as endpoint features
+                feats = dict(raw[1])
+            else:
+                feats = _cheap_target_vector(t)
         except Exception:
             feats = _cheap_target_vector(t)
     else:
         feats = _cheap_target_vector(t)
+
+    # Merge in the meta overlay (without clobbering existing concrete values)
+    for mk, mv in meta_overlay.items():
+        if mk not in feats or feats[mk] in (None, ""):
+            feats[mk] = mv
+
     _FEATURE_CACHE[k] = feats
     return feats
 
+
+
+# ---- canonical payload pool access ------------------------------------------
+
+def payload_pool_for(family: str) -> List[str]:
+    """
+    Best-effort canonical pool resolution:
+    1) family_router.payload_pool_for (if available)
+    2) payloads.payload_pool_for (our curated pools)
+    3) minimal hardcoded fallback
+    """
+    fam = (family or "").lower()
+    if _payload_pool_for_router:
+        try:
+            return list(_payload_pool_for_router(fam))  # type: ignore[misc]
+        except Exception:
+            pass
+    if _payload_pool_for_payloads:
+        try:
+            return list(_payload_pool_for_payloads(fam))
+        except Exception:
+            pass
+    # minimal fallback
+    if fam == "sqli":
+        return ["' OR 1=1--", "') OR ('1'='1' -- ", "1 OR 1=1 -- ", "' UNION SELECT NULL-- "]
+    if fam == "xss":
+        return ['"/><script>alert(1)</script>', "<img src=x onerror=alert(1)>", "<svg/onload=alert(1)>"]
+    if fam in ("redirect", "open_redirect"):
+        return ["https://example.org/", "//evil.tld", "https:%2F%2Fevil.tld"]
+    if fam == "base":
+        return ["*", "%27", "%22", "()", "{}"]
+    return []
+
+
+# ---- helpers for negative feedback → recommender penalty --------------------
+
+def _has_any_signal(detector_hits: Dict[str, bool]) -> bool:
+    return any([
+        detector_hits.get("sql_error"),
+        detector_hits.get("boolean_sqli"),
+        detector_hits.get("time_sqli"),
+        detector_hits.get("xss_js"),
+        (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
+        detector_hits.get("open_redirect"),
+    ])
+
+
+def _is_negative_attempt(detector_hits: Dict[str, bool], status_delta: int, len_delta: int, ms_delta: int) -> bool:
+    return (not _has_any_signal(detector_hits)) and (status_delta == 0 and len_delta == 0 and ms_delta == 0)
+
+
+def _bump_fail(feedback: Dict[str, int], fam: str, detector_hits: Dict[str, bool], status_delta: int, len_delta: int, ms_delta: int) -> None:
+    if not fam:
+        return
+    if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
+        feedback[fam] = int(feedback.get(fam, 0)) + 1
+
+
 # ---- Stage-A wrapper ---------------------------------------------------------
 
-def _stage_a_decision(t: Dict[str, Any]) -> Dict[str, Any]:
+def _stage_a_decision(t: Dict[str, Any], *, recent_fail_counts: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
     """
     Ask the Stage-A decider for family distribution + authoritative decision.
+
+    Preference order:
+    1) family_router.decide_family (if available)
+    2) Recommender family classifier (via recommend_with_meta with family=None)
+    3) Uniform prior fallback
     """
-    inp = {
-        "url": t.get("url"),
-        "method": t.get("method"),
-        "in": t.get("in"),
-        "target_param": t.get("target_param"),
-        "content_type": t.get("content_type"),
-        "headers": t.get("headers"),
-        "control_value": t.get("control_value"),
+    # Router path
+    if _router_decide_family is not None:
+        inp = {
+            "url": t.get("url"),
+            "method": t.get("method"),
+            "in": t.get("in"),
+            "target_param": t.get("target_param"),
+            "content_type": t.get("content_type"),
+            "headers": t.get("headers"),
+            "control_value": t.get("control_value"),
+        }
+        try:
+            return _router_decide_family(inp, min_prob=DEFAULT_MIN_PROB, explore_topk=DEFAULT_EXPLORE_TOPK)  # type: ignore[misc]
+        except Exception:
+            # fall through to recommender-based path
+            pass
+
+    # Recommender family-clf path
+    if _RECO is not None and hasattr(_RECO, "recommend_with_meta"):
+        try:
+            feats = _endpoint_features(t)
+            # We don't actually need ranking here; we just want the meta.family_probs.
+            fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
+            _recs, meta = _RECO.recommend_with_meta(
+                feats, pool=["*"], top_n=1, threshold=0.0, family=None, feedback=fb  # type: ignore[arg-type]
+            )
+            fam = meta.get("family") or None
+            fam_probs = dict(meta.get("family_probs") or {})
+            fam_decision = str(meta.get("family_decision") or "prior")
+            # Decide exploration set
+            ranked = sorted(fam_probs.items(), key=lambda kv: kv[1], reverse=True) or [("sqli", 0.34), ("xss", 0.33)]
+            family_top, top_prob = ranked[0][0], float(ranked[0][1])
+            threshold_passed = top_prob >= DEFAULT_MIN_PROB
+            if threshold_passed:
+                families_to_try = [family_top]
+            else:
+                families_to_try = [x for x, _ in ranked[:max(1, DEFAULT_EXPLORE_TOPK)]]
+            return {
+                "family_top": fam or family_top,
+                "family_probs": fam_probs,
+                "threshold_passed": threshold_passed,
+                "families_to_try": families_to_try,
+                "decision_reason": fam_decision,
+                "min_prob": float(DEFAULT_MIN_PROB),
+            }
+        except Exception:
+            pass
+
+    # Ultra-safe uniform fallback
+    fams = ["sqli", "xss", "redirect", "base"]
+    probs = {f: (0.33 if f in ("sqli", "xss", "redirect") else 0.01) for f in fams}
+    s = sum(probs.values()) or 1.0
+    probs = {k: v / s for k, v in probs.items()}
+    ranked = sorted([(f, p) for f, p in probs.items()], key=lambda kv: kv[1], reverse=True)
+    top_family, top_prob = ranked[0]
+    threshold_passed = top_prob >= DEFAULT_MIN_PROB
+    fams_try = [top_family] if threshold_passed else [f for f, _ in ranked if f != "base"][:max(1, DEFAULT_EXPLORE_TOPK)]
+    return {
+        "family_top": top_family,
+        "family_probs": probs,
+        "threshold_passed": threshold_passed,
+        "families_to_try": fams_try,
+        "decision_reason": "rule_argmax" if threshold_passed else "below_threshold_explore",
+        "min_prob": float(DEFAULT_MIN_PROB),
     }
-    try:
-        return decide_family(inp, min_prob=DEFAULT_MIN_PROB, explore_topk=DEFAULT_EXPLORE_TOPK)
-    except Exception:
-        # ultra-safe fallback
-        return decide_family(inp)
+
 
 # ---- Stage-B wrapper ---------------------------------------------------------
 
@@ -170,6 +339,8 @@ def _rank_payloads_for_family(
     family: str,
     top_n: int = 3,
     threshold: float = 0.2,
+    *,
+    recent_fail_counts: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Tuple[str, float]], Dict[str, Any]]:
     """
     Stage B: per-family payload ranking via LTR; fallback to curated pool.
@@ -182,23 +353,33 @@ def _rank_payloads_for_family(
 
     if _RECO is not None:
         try:
+            print(f"DEBUG: Using ML recommender for family {fam}")
             if hasattr(_RECO, "recommend_with_meta"):
-                recs, meta = _RECO.recommend_with_meta(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
+                recs, meta = _RECO.recommend_with_meta(
+                    feats, pool=pool, top_n=top_n, threshold=threshold, family=fam, feedback=fb  # type: ignore[arg-type]
+                )
+                print(f"DEBUG: ML recommender returned {len(recs)} results, meta: {meta}")
                 return ([(p, float(prob)) for (p, prob) in recs], meta or {})
             else:
-                recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)
+                recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
                 return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam})
-        except Exception:
+        except Exception as e:
+            print(f"DEBUG: ML recommender failed: {e}")
             pass
+    else:
+        print(f"DEBUG: No ML recommender available (_RECO is None)")
 
     # Fallback: naive order, uniform score
     out = [(p, 0.2) for p in pool[:top_n]]
     return (out, {"used_path": "heuristic", "family": fam})
 
+
 # ---------------------------- small utils ------------------------------------
 
 def _hash(s: str) -> str:
     return hashlib.sha1(s.encode("utf-8", "ignore")).hexdigest()
+
 
 def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
     try:
@@ -209,11 +390,13 @@ def _lower_headers(h: Dict[str, str]) -> Dict[str, str]:
             out[k.lower()] = h.get(k)
         return out
 
+
 def _origin_host(url: str) -> str:
     try:
         return urlparse(url).netloc.lower()
     except Exception:
         return ""
+
 
 def _origin_referer(url: str) -> str:
     try:
@@ -221,6 +404,7 @@ def _origin_referer(url: str) -> str:
         return f"{u.scheme}://{u.netloc}/" if u.scheme and u.netloc else ""
     except Exception:
         return ""
+
 
 def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
     """
@@ -252,17 +436,20 @@ def _augment_headers(h: Dict[str, str], url: str) -> Dict[str, str]:
 
     return out
 
+
 # ---------- Redirect influence gating helpers (reduce false positives) --------
 
 _REDIRECT_PARAM_NAMES = {
     "to", "url", "next", "redirect", "return", "continue", "return_to", "redirect_uri", "callback"
 }
 
+
 def _host_from_url(u: Optional[str]) -> str:
     try:
         return urlparse(u or "").netloc.lower()
     except Exception:
         return ""
+
 
 def _url_from_payload(p: str) -> Optional[str]:
     """
@@ -277,6 +464,7 @@ def _url_from_payload(p: str) -> Optional[str]:
     except Exception:
         pass
     return None
+
 
 def _redirect_payload_influenced(
     baseline_loc: Optional[str],
@@ -309,6 +497,7 @@ def _redirect_payload_influenced(
             return True
 
     return mutated_redirect_param
+
 
 # -------------------------- request mutation ---------------------------------
 
@@ -354,6 +543,7 @@ def _apply_payload_to_target(
     headers = _augment_headers(headers, url)
     return url, headers, body
 
+
 # ------------------------------ transport ------------------------------------
 
 def _send_once(
@@ -378,6 +568,7 @@ def _send_once(
     except Exception as e:
         return None, {"type": type(e).__name__, "message": str(e)}, 0.0
 
+
 def _send(
     client: httpx.Client,
     method: str,
@@ -401,11 +592,13 @@ def _send(
         samples.append(elapsed)
     return last_resp, last_err, samples
 
+
 # ------------------------------- payloads ------------------------------------
 
 def _looks_time_based(payload: str) -> bool:
     p = (payload or "").lower()
     return any(k in p for k in ("waitfor", "sleep(", "pg_sleep", "benchmark(", "dbms_lock.sleep"))
+
 
 def _payload_family(p: str) -> str:
     """Lightweight classifier so the UI can show both payload class and signal family."""
@@ -417,6 +610,7 @@ def _payload_family(p: str) -> str:
     if s.startswith(("http://", "https://", "//")) or "%2f%2f" in s:
         return "redirect"
     return "base"
+
 
 def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
     """
@@ -447,6 +641,7 @@ def _boolean_pairs_for(t: Dict[str, Any]) -> List[Tuple[str, str]]:
             out.append((a, b))
             seen.add(key)
     return out
+
 
 def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
     """
@@ -512,6 +707,7 @@ def _generate_context_aware_payloads(t: Dict[str, Any]) -> List[str]:
             seen.add(p)
     return out
 
+
 # -------------------------- inference (local) --------------------------------
 
 def _make_detector_hits(
@@ -536,6 +732,7 @@ def _make_detector_hits(
         "repeat_consistent": bool(repeat_consistent),
     }
 
+
 def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> str:
     """
     Deterministic, conservative inference.
@@ -552,8 +749,10 @@ def _infer_class(hits: Dict[str, bool], status_delta: int, len_delta: int) -> st
         return "suspicious"
     return "none"
 
+
 def _append_evidence_line(fout, obj: Dict[str, Any]) -> None:
     fout.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
 
 # ------------------------------ attempts utils --------------------------------
 
@@ -568,11 +767,13 @@ def _attempt_request(
 ) -> Tuple[Optional[httpx.Response], Optional[Dict[str, str]], List[float]]:
     return _send(client, method, url, headers, body, timeout, repeats=repeats)
 
+
 def _response_core(resp: httpx.Response) -> Tuple[str, str, int]:
     """Return (full_text, snippet, status)."""
     body_full = resp.text or ""
     snippet = body_full[:TRUNCATE_BODY]
     return body_full, snippet, resp.status_code
+
 
 # --------------------------------- main --------------------------------------
 
@@ -587,6 +788,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
     results_dir = (out_dir or job_dir / "results")
     results_dir.mkdir(parents=True, exist_ok=True)
     evidence_path = results_dir / "evidence.jsonl"
+
+    # Track recent per-family negatives to inform the ranker penalty
+    recent_fail_counts: Dict[str, int] = {"sqli": 0, "xss": 0, "redirect": 0}
 
     # We want 3xx Location for open-redirect detection -> don't auto-follow
     with httpx.Client(follow_redirects=False) as client, evidence_path.open("w", encoding="utf-8") as fout:
@@ -696,7 +900,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "headers": hX,
                             "body": bX,
                             "payload_string": pX,
-                            "payload_family_used": _payload_family(pX),
+                            "payload_family_used": "sqli",  # boolean oracle implies sqli intent
                             "status": stX,
                             "length": len(bodyX_full),
                             "elapsed_ms": elapsedX,
@@ -705,7 +909,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_origin": "curated",
                             "ranker_meta": {
                                 "family_probs": None,
-                                "family_chosen": "sqli",  # boolean oracle implies sqli intent
+                                "family_chosen": "sqli",
                                 "ranker_score": None,
                                 "model_ids": None,
                             },
@@ -797,7 +1001,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # -------------------- STAGE A+B (ML-ranked payloads) --------------------
             feats = _endpoint_features(t)
-            decision = _stage_a_decision(t)
+            decision = _stage_a_decision(t, recent_fail_counts=recent_fail_counts)
             family_probs = decision.get("family_probs", {})
             family_top = decision.get("family_top")
             threshold_passed = bool(decision.get("threshold_passed"))
@@ -813,7 +1017,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
 
             # Execute per plan
             for fam, top_n in plan:
-                recs, meta = _rank_payloads_for_family(feats, fam, top_n=top_n, threshold=0.2)
+                recs, meta = _rank_payloads_for_family(
+                    feats, fam, top_n=top_n, threshold=0.2, recent_fail_counts=recent_fail_counts
+                )
                 # Nothing to do
                 if not recs:
                     continue
@@ -826,8 +1032,11 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     repeats = 3 if _looks_time_based(payload) else 1
                     r1, err1, samples = _attempt_request(client, method, u1, h1, b1, timeout, repeats=repeats)
 
-                    # Build common ranker_meta (Stage-A + Stage-B)
+                    # Build common ranker_meta (Stage-A + Stage-B) and FLATTEN key bits from meta
                     family_prob = float(family_probs.get(fam, 0.0))
+                    meta = meta or {}
+
+                    # Flattened fields for UI + keep raw in ranker_raw
                     ranker_meta = {
                         "family_probs": family_probs,
                         "family_top": family_top,
@@ -837,8 +1046,24 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "decision_reason": decision.get("decision_reason"),
                         "min_prob": decision.get("min_prob"),
                         "ranker_score": float(p_ml),
-                        "ranker": (meta or {}),
+                        "used_path": meta.get("used_path"),
+                        "model_ids": meta.get("model_ids"),
+                        "scores": meta.get("scores"),
+                        "feature_dim": meta.get("feature_dim"),
+                        "expected_total_dim": meta.get("expected_total_dim"),
+                        "ranker_raw": meta,  # full copy for debugging
                     }
+
+                    # Convenience fields at row level
+                    row_ranker_used = ranker_meta.get("used_path")
+                    row_model_path = (ranker_meta.get("model_ids") or {}).get("ranker_path")
+                    scores_list = ranker_meta.get("scores") or []
+                    row_top_prob = float(scores_list[0]["prob"]) if scores_list else float(p_ml)
+                    
+                    # Debug logging for ML metadata
+                    print(f"DEBUG: ranker_meta.used_path = {ranker_meta.get('used_path')}")
+                    print(f"DEBUG: row_ranker_used = {row_ranker_used}")
+                    print(f"DEBUG: meta object = {meta}")
 
                     if err1 is not None:
                         _append_evidence_line(
@@ -854,6 +1079,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                                 "payload_family_used": fam or _payload_family(payload),
                                 "payload_origin": "ml",
                                 "ranker_meta": ranker_meta,
+                                "ranker_used_path": row_ranker_used,
+                                "ranker_model_path": row_model_path,
+                                "ranker_top_prob": row_top_prob,
                                 "url": u1,
                                 "headers": h1,
                                 "body": b1,
@@ -907,36 +1135,33 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         status_delta, len_delta, ms_delta,
                     )
 
-                    # Attempt-level ML (old path)
+                    # Attempt-level ML (use family ranking results)
                     try:
-                        ml_features = {
-                            "detector_hits": detector_hits,
-                            "status_delta": status_delta,
-                            "len_delta": len_delta,
-                            "latency_ms_delta": ms_delta,
-                            "payload_family_used": fam or _payload_family(payload),
-                            "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
-                            "method": method,
-                            "in": t["in"],
-                        }
-                        ml_out = _ranker_predict(ml_features)
+                        # Use the family ranking results instead of separate ML prediction
+                        if ranker_meta and ranker_meta.get("used_path"):
+                            ml_src = str(ranker_meta.get("used_path"))
+                            ml_conf = float(ranker_meta.get("ranker_score", 0.0))
+                        else:
+                            # Fallback to old ML path if no family ranking
+                            ml_features = {
+                                "detector_hits": detector_hits,
+                                "status_delta": status_delta,
+                                "len_delta": len_delta,
+                                "latency_ms_delta": ms_delta,
+                                "payload_family_used": fam or _payload_family(payload),
+                                "response": {"headers": {"content-type": resp_headers.get("content-type", "")}},
+                                "method": method,
+                                "in": t["in"],
+                            }
+                            ml_out = _ranker_predict(ml_features)
+                            ml_conf = float(ml_out.get("p", 0.0))
+                            ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
                     except Exception:
-                        ml_out = {"p": 0.0, "source": "fallback_error"}
-
-                    ml_conf = float(ml_out.get("p", 0.0))
-                    ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
+                        ml_conf = 0.0
+                        ml_src = "fallback_error"
 
                     # Clamp model confidence if we have neither detector signals nor deltas
-                    has_signal = any([
-                        detector_hits.get("sql_error"),
-                        detector_hits.get("boolean_sqli"),
-                        detector_hits.get("time_sqli"),
-                        detector_hits.get("xss_js"),
-                        (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
-                        detector_hits.get("open_redirect"),
-                    ])
-                    has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
-                    if not has_signal and not has_delta:
+                    if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
                         ml_conf = 0.0
 
                     # Strong oracles dominate (floors)
@@ -953,6 +1178,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     # Final confidence
                     conf = max(conf_heur, ml_conf, conf_stage_ab)
                     inferred = _infer_class(detector_hits, status_delta, len_delta)
+
+                    # Update recent-fail counts to inform the next ranking round
+                    _bump_fail(recent_fail_counts, fam, detector_hits, status_delta, len_delta, ms_delta)
 
                     # Attempt (with provenance)
                     _append_evidence_line(
@@ -971,6 +1199,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_family_used": fam or _payload_family(payload),
                             "payload_origin": "ml",
                             "ranker_meta": ranker_meta,
+                            "ranker_used_path": row_ranker_used,
+                            "ranker_model_path": row_model_path,
+                            "ranker_top_prob": row_top_prob,
                             "detector_hits": detector_hits,
                             "inferred_vuln_class": inferred,
                             "ml": {"p": ml_conf, "source": ml_src, "enabled": _ML_AVAILABLE, "stage_ab_p": conf_stage_ab},
@@ -1016,6 +1247,9 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                             "payload_family_used": fam or _payload_family(payload),
                             "payload_origin": "ml",
                             "ranker_meta": ranker_meta,
+                            "ranker_used_path": row_ranker_used,
+                            "ranker_model_path": row_model_path,
+                            "ranker_top_prob": row_top_prob,
                             "detector_hits": detector_hits,
                             "inferred_vuln_class": inferred,
                             "control_value": t["control_value"],
@@ -1150,16 +1384,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                 ml_src = str(ml_out.get("source", "fallback" if _ML_AVAILABLE else "none"))
 
                 # Clamp model confidence if no signals and no deltas
-                has_signal = any([
-                    detector_hits.get("sql_error"),
-                    detector_hits.get("boolean_sqli"),
-                    detector_hits.get("time_sqli"),
-                    detector_hits.get("xss_js"),
-                    (detector_hits.get("xss_raw") and not detector_hits.get("xss_html_escaped")),
-                    detector_hits.get("open_redirect"),
-                ])
-                has_delta = (status_delta != 0) or (len_delta != 0) or (ms_delta != 0)
-                if not has_signal and not has_delta:
+                if _is_negative_attempt(detector_hits, status_delta, len_delta, ms_delta):
                     ml_conf = 0.0
 
                 # Strong oracles dominate (floors)
@@ -1169,6 +1394,10 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     ml_conf = max(ml_conf, 0.85)
                 if time_sqli:
                     ml_conf = max(ml_conf, 0.95)
+
+                # Update recent-fail counts (assign by inferred family for curated loop)
+                fam_guess = _payload_family(payload)
+                _bump_fail(recent_fail_counts, fam_guess, detector_hits, status_delta, len_delta, ms_delta)
 
                 conf = max(conf_heur, ml_conf)
                 inferred = _infer_class(detector_hits, status_delta, len_delta)
@@ -1186,7 +1415,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "headers": h1,
                         "body": b1,
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam_guess,
                         "payload_origin": "curated",
                         "ranker_meta": None,
                         "detector_hits": detector_hits,
@@ -1230,7 +1459,7 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                         "url": t["url"],
                         "content_type": t.get("content_type"),
                         "payload_string": payload,
-                        "payload_family_used": _payload_family(payload),
+                        "payload_family_used": fam_guess,
                         "payload_origin": "curated",
                         "ranker_meta": None,
                         "detector_hits": detector_hits,

@@ -2,7 +2,13 @@
 "use client";
 import { useState, useMemo, useEffect } from "react";
 import CrawlForm from "../components/CrawlForm";
-import { fuzzByJob, fuzzSelected, getReport, getReportMarkdown } from "../api/api";
+import {
+  fuzzByJob,
+  fuzzSelected,
+  getReport,
+  getReportMarkdown,
+  getCategorizedEndpoints,
+} from "../api/api";
 import { toast } from "react-toastify";
 
 /** === helpers === */
@@ -10,7 +16,23 @@ const isNonEmptyArray = (v) => Array.isArray(v) && v.length > 0;
 const isNonEmptyObj = (o) => !!o && typeof o === "object" && Object.keys(o).length > 0;
 const hasNum = (v) => typeof v === "number" && isFinite(v);
 const cn = (...xs) => xs.filter(Boolean).join(" ");
-const rowKey = (row, idx) => `${row.method}|${row.url}|${row.param}|${idx}`;
+
+/** Stable key per result row (independent of pagination/order) */
+const rowKey = (row) => {
+  const p = typeof row.payload === "string" ? row.payload.slice(0, 64) : "";
+  return `${row.method}|${row.url}|${row.param}|${p}`;
+};
+
+/** Consider more ML path spellings; explicitly exclude heuristic/none */
+const isMLUsedPath = (usedPath = "") => {
+  const parts = Array.isArray(usedPath) ? usedPath : [usedPath];
+  const s = parts.map((x) => String(x || "").toLowerCase()).join("|");
+  if (!s) return false;
+  if (/\b(heuristic|none)\b/.test(s)) return false;
+  // Check for ml:family patterns (e.g., ml:sqli, ml:xss)
+  if (/ml:[a-z]+/.test(s)) return true;
+  return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(s);
+};
 
 /** Extract plain names from arrays that can contain strings or {name: "..."} dicts */
 const namesFrom = (xs) => {
@@ -98,8 +120,7 @@ const guessFamily = (ep) => {
   if (
     ["to", "return_to", "redirect", "url", "next", "callback", "continue"].some((p) => pset.has(p)) ||
     path.includes("redirect")
-  )
-    return "redirect";
+  ) return "redirect";
 
   if (["q", "query", "search"].some((p) => pset.has(p))) {
     return path.includes("/api/") || path.includes("/rest/") ? "sqli" : "xss";
@@ -131,22 +152,10 @@ const uiPriority = (ep) => {
   if (
     params.some((p) =>
       [
-        "id",
-        "uid",
-        "pid",
-        "productid",
-        "user",
-        "q",
-        "search",
-        "query",
-        "to",
-        "return_to",
-        "redirect",
-        "url",
+        "id","uid","pid","productid","user","q","search","query","to","return_to","redirect","url",
       ].includes(p)
     )
-  )
-    s += 0.6;
+  ) s += 0.6;
   if (/(^|\/)(login|auth|admin|search|redirect|report|download)(\/|$)/.test(url)) s += 0.2;
   if ((ep.method || "GET").toUpperCase() === "GET") s += 0.1;
   return Math.min(1, s);
@@ -154,10 +163,22 @@ const uiPriority = (ep) => {
 
 /** Robust origin derivation across different backends/result shapes */
 function deriveOrigin(one = {}) {
-  // Simple booleans/flags commonly used
+  // Prefer explicit used_path from backend if present
+  const usedPath =
+    one?.ranker_meta?.used_path ||
+    one?.ranker_meta?.ranker?.used_path ||
+    one?.ml?.used_path ||
+    one?.used_path ||
+    null;
+  if (usedPath) {
+    if (isMLUsedPath(usedPath)) return "ml";
+    if (String(usedPath).toLowerCase() === "heuristic" || String(usedPath).toLowerCase() === "none") return "curated";
+  }
+
+  // Simple flags
   if (one.is_ml === true || one.ml === true || one?.payload?.ml === true) return "ml";
 
-  // Nested ML object used by some backends
+  // Nested ML object hints
   if (one && typeof one === "object" && one.ml && typeof one.ml === "object") {
     const s = String(one.ml.source || one.ml.origin || one.ml.provenance || "").trim().toLowerCase();
     if (/(^|[^a-z])ml([^a-z]|$)/.test(s) || /(ranker|model|ai)/.test(s)) return "ml";
@@ -167,29 +188,13 @@ function deriveOrigin(one = {}) {
 
   // Explicit string-ish fields if present
   const candidates = [
-    one.payload_origin,
-    one.payloadOrigin,
-    one.payload_source,
-    one.payloadSource,
-    one.ranker_origin,
-    one.origin,
-    one.source,
-    one.provenance,
-    one.generator,
-    one.kind,
-    one.payload_kind,
-    one?.meta?.origin,
-    one?.meta?.source,
-    one?.payload_meta?.origin,
-    one?.payload_meta?.source,
-    one?.payload?.origin,
-    one?.payload?.source,
-  ]
-    .map((v) => (v == null ? "" : String(v).trim().toLowerCase()))
-    .filter(Boolean);
+    one.payload_origin,one.payloadOrigin,one.payload_source,one.payloadSource,
+    one.ranker_origin,one.origin,one.source,one.provenance,one.generator,one.kind,one.payload_kind,
+    one?.meta?.origin,one?.meta?.source,one?.payload_meta?.origin,one?.payload_meta?.source,
+    one?.payload?.origin,one?.payload?.source,
+  ].map((v) => (v == null ? "" : String(v).trim().toLowerCase())).filter(Boolean);
 
   for (const v of candidates) {
-    // Any string that contains "ml" → ML; anything like curated/manual/core → curated
     if (/(^|[^a-z])ml([^a-z]|$)/.test(v) || /(ranker|model|ai)/.test(v)) return "ml";
     if (/(curated|manual|baseline|core|hand|seed)/.test(v)) return "curated";
   }
@@ -201,9 +206,21 @@ function deriveOrigin(one = {}) {
     one.ml_meta ||
     (one.ml && (one.ml.ranker_meta || one.ml.ranker)) ||
     {};
-  const probs = rm.family_probs || rm.probs || rm.family_probabilities || rm.probabilities;
+  const probs =
+    rm.family_probs ||
+    rm.probs ||
+    rm.family_probabilities ||
+    rm.probabilities;
+
+  // NEW: treat array **or object** model_ids as ML
+  const hasModelIds =
+    !!rm.model_ids &&
+    ((Array.isArray(rm.model_ids) && rm.model_ids.length > 0) ||
+     (rm.model_ids && typeof rm.model_ids === "object" && Object.keys(rm.model_ids).length > 0));
+
   if (
-    (isNonEmptyObj(rm) && (hasNum(rm.ranker_score) || isNonEmptyObj(probs) || isNonEmptyArray(rm.model_ids))) ||
+    (isNonEmptyObj(rm) &&
+      (hasNum(rm.ranker_score) || isNonEmptyObj(probs) || hasModelIds)) ||
     hasNum(one.ranker_score) ||
     isNonEmptyObj(one.ranker_probs) ||
     isNonEmptyObj(one.ml_probs)
@@ -228,14 +245,11 @@ function extractFamilyProbs(container = {}) {
     container.per_family,
     container.perFamily,
   ].filter(isNonEmptyObj);
-
   for (const obj of tryObjs) return obj;
 
   // Root-level variants
   const rootKeys = ["family_probs", "probs", "family_probabilities", "probabilities", "ranker_probs", "ml_probs"];
-  for (const k of rootKeys) {
-    if (isNonEmptyObj(container[k])) return container[k];
-  }
+  for (const k of rootKeys) if (isNonEmptyObj(container[k])) return container[k];
 
   // Flat shapes like {prob_sqli: 0.8, prob_xss: 0.1, prob_redirect: 0.1}
   const flat = {};
@@ -259,7 +273,6 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
     redirect: signals.external_redirect ? 1 : 0,
   };
   const anyStrong = strong.sqli || strong.xss || strong.redirect;
-
   if (!anyStrong && !famGuess) return null;
 
   // Start with weak prior, bump the detected ones
@@ -269,8 +282,8 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
     if (strong.xss) xss += 0.6;
     if (strong.redirect) redirect += 0.6;
   } else if (famGuess) {
-    // No strong signals — lean on the inferred family and confidence
     if (famGuess === "sqli") sqli += Math.max(0.2, Math.min(0.7, confidence));
+    if (famGuess === "xss") sqli += 0;
     if (famGuess === "xss") xss += Math.max(0.2, Math.min(0.7, confidence));
     if (famGuess === "redirect") redirect += Math.max(0.2, Math.min(0.7, confidence));
   }
@@ -288,60 +301,130 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
   };
 }
 
-/** Normalize ranker meta into a consistent shape */
-function normalizeRankerMeta(mRaw = {}, oneRow = {}) {
-  const fm = mRaw || {};
+/** Extract feature dimensionality if present (avoid showing bogus "dim 0") */
+function extractFeatureDim(container = {}) {
+  const cands = [
+    container.feature_dim_total,
+    container.ranker_feature_dim_total,
+    container.dim_total,
+    container.total_dim,
+    container.feat_dim,
+    container?.ranker?.feature_dim_total,
+    container?.ranker?.dim_total,
+    container?.ml?.feature_dim_total,
+  ].filter((x) => hasNum(x) && x > 0);
+  return cands.length ? cands[0] : null;
+}
 
-  // dig into typical containers
+/** Normalize ranker meta into a consistent shape */
+function normalizeRankerMeta(mRaw = {}, oneRowRaw = {}, synthHints = null) {
+  const fm = mRaw || {};
+  const row = oneRowRaw || {};
+
+  // search across many likely containers, INCLUDING the original row
   const containers = [
     fm,
     fm.ranker_meta,
     fm.ranker,
     fm.ml_meta,
     fm.meta,
-    (oneRow.ml || {}),
-    oneRow,
-  ];
+    row.ranker_meta,
+    row.ranker,
+    row.ml_meta,
+    row.meta,
+    row.ml,
+    row,
+  ].filter((c) => c && typeof c === "object");
 
   let family_probs = {};
   let family_chosen = null;
   let ranker_score = null;
   let model_ids = null;
+  let feature_dim_total = null;
 
   for (const c of containers) {
-    if (!c || typeof c !== "object") continue;
-    if (!isNonEmptyObj(family_probs)) family_probs = extractFamilyProbs(c);
+    // family probs under many names
+    if (!isNonEmptyObj(family_probs)) {
+      const cand =
+        c.family_probs ||
+        c.probs ||
+        c.family_probabilities ||
+        c.probabilities ||
+        c.per_family ||
+        c.perFamily ||
+        null;
+      if (isNonEmptyObj(cand)) family_probs = cand;
+    }
+
     if (!family_chosen) family_chosen = c.family_chosen || c.family || c.chosen_family || c.chosen;
-    if (!hasNum(ranker_score)) ranker_score = hasNum(c.ranker_score) ? c.ranker_score : (hasNum(c.score) ? c.score : null);
-    if (!isNonEmptyArray(model_ids)) model_ids = c.model_ids || c.models || null;
+
+    if (!hasNum(ranker_score)) {
+      ranker_score = hasNum(c.ranker_score) ? c.ranker_score : (hasNum(c.score) ? c.score : null);
+    }
+
+    // accept arrays, objects, or strings for model identifiers
+    if (!model_ids) {
+      const mid = c.model_ids || c.models || c.model_id || c.model || c.model_name || null;
+      if (
+        (Array.isArray(mid) && mid.length > 0) ||
+        (mid && typeof mid === "object" && Object.keys(mid).length > 0) ||
+        (typeof mid === "string" && mid.trim())
+      ) {
+        model_ids = mid;
+      }
+    }
+
+    if (!hasNum(feature_dim_total)) {
+      const dims =
+        c.feature_dim_total ??
+        c.ranker_feature_dim_total ??
+        c.dim_total ??
+        c.total_dim ??
+        c.feat_dim ??
+        (c.ranker && c.ranker.feature_dim_total) ??
+        (c.ranker && c.ranker.dim_total) ??
+        (c.ml && c.ml.feature_dim_total);
+      if (hasNum(dims) && dims > 0) feature_dim_total = dims;
+    }
   }
 
-  // normalize to 0..1 and keep only the 3 families we show
-  const entries = Object.entries(family_probs || {}).map(([k, v]) => [k.toLowerCase(), Number(v) || 0]);
+  // normalize probs to {sqli,xss,redirect} and 0..1
   const picked = {};
-  for (const [k, v] of entries) {
-    if (["sqli", "xss", "redirect"].includes(k)) picked[k] = v;
+  for (const [k, v] of Object.entries(family_probs || {})) {
+    const key = String(k).toLowerCase();
+    if (["sqli", "xss", "redirect"].includes(key)) picked[key] = Number(v) || 0;
   }
   const sum = Object.values(picked).reduce((a, b) => a + b, 0);
-  if (sum > 0) {
-    Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
-  }
+  if (sum > 0) Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
 
   const meta = {
     family_probs: picked,
     family_chosen: family_chosen || null,
     ranker_score: hasNum(ranker_score) ? ranker_score : null,
     model_ids: model_ids || null,
+    feature_dim_total: hasNum(feature_dim_total) ? feature_dim_total : null,
   };
 
-  // If still empty, synthesize a useful fallback so the Ranker column isn't blank.
-  if (!isNonEmptyObj(meta.family_probs)) {
-    const synthetic = synthesizeRankerMetaFromSignals(oneRow.signals || {}, oneRow.family || null, oneRow.confidence || 0);
+  // If still empty, synthesize a fallback so the column isn't blank
+  const needSynthetic =
+    !isNonEmptyObj(meta.family_probs) &&
+    !hasNum(meta.ranker_score) &&
+    !(meta.model_ids) &&
+    !hasNum(meta.feature_dim_total);
+
+  if (needSynthetic) {
+    // pull hints (our already-computed signals) if provided
+    const h = synthHints || {};
+    const synthetic = synthesizeRankerMetaFromSignals(
+      h.signals || {},
+      h.family || null,
+      h.confidence || 0
+    );
     if (synthetic) return synthetic;
   }
-
   return meta;
 }
+
 
 /** ===== UI atoms ===== */
 const Badge = ({ children, tone = "default", title }) => {
@@ -491,12 +574,18 @@ export default function CrawlAndFuzzPage() {
   const [compact, setCompact] = useState(false);
   const [strongOnly, setStrongOnly] = useState(false);
 
+  // Engine selector (auto uses ML+curated on backend)
+  const [engineMode, setEngineMode] = useState("auto"); // "auto" | "core" | "ffuf"
+
   // Extra filters / view / pagination
   const [methodFilter, setMethodFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
   const [viewMode, setViewMode] = useState("table");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+
+  // internal guard so we only try categorized-endpoints once per crawl
+  const [triedCategorized, setTriedCategorized] = useState(false);
 
   // reset pagination when filters/sorts change
   useEffect(() => { setPage(1); }, [
@@ -552,15 +641,75 @@ export default function CrawlAndFuzzPage() {
     [endpoints, captured, selectedKeys, filtered]
   );
 
-  /** Crawl results in */
-  const onResults = ({ job_id, target_url, target, endpoints, captured_requests }) => {
+  /** Helper: pluck the first present array by key path */
+  const pickArray = (obj, keys) => {
+    for (const k of keys) {
+      const v = k.split(".").reduce((acc, part) => (acc && acc[part] !== undefined ? acc[part] : undefined), obj);
+      if (Array.isArray(v)) return v;
+    }
+    return [];
+  };
+
+  /** Crawl results in (robust to multiple shapes from backend) */
+  const onResults = (payload = {}) => {
+    // Accept several possible shapes from various backends
+    const job_id = payload.job_id || payload.job || null;
+    const target_url = payload.target_url || payload.target || payload.url || "";
+
+    // endpoints can live in many places depending on the backend
+    const endpointsCandidates = pickArray(payload, [
+      "endpoints",
+      "result.endpoints",
+      "items",
+      "data.endpoints",
+      "distinct_endpoints",
+      "unique_endpoints",
+      "payload.endpoints",
+    ]);
+
+    // captured requests also vary in naming
+    const capturedCandidates = pickArray(payload, [
+      "captured_requests",
+      "captures",
+      "requests",
+      "result.captured_requests",
+      "data.captured_requests",
+      "payload.captured_requests",
+      "replayed_requests",
+    ]);
+
     setJobId(job_id);
-    setTargetUrl(target_url || target || "");
-    setEndpointsRaw(Array.isArray(endpoints) ? endpoints : []);
-    setCaptured(Array.isArray(captured_requests) ? captured_requests : []);
+    setTargetUrl(target_url);
+    setEndpointsRaw(Array.isArray(endpointsCandidates) ? endpointsCandidates : []);
+    setCaptured(Array.isArray(capturedCandidates) ? capturedCandidates : []);
     setSelectedKeys(new Set());
     setFuzzSummary(null);
+    setTriedCategorized(false); // allow the categorized fallback once for this new payload
   };
+
+  // Fallback: if we have a target URL but no endpoints in the crawl payload, try categorized endpoints
+  useEffect(() => {
+    const needFallback = targetUrl && (!isNonEmptyArray(endpointsRaw)) && !triedCategorized;
+    if (!needFallback) return;
+    (async () => {
+      try {
+        setTriedCategorized(true);
+        const cats = await getCategorizedEndpoints(targetUrl);
+        const arr =
+          Array.isArray(cats) ? cats
+          : Array.isArray(cats?.endpoints) ? cats.endpoints
+          : Array.isArray(cats?.items) ? cats.items
+          : [];
+        if (arr.length) {
+          setEndpointsRaw(arr);
+          toast.info(`Loaded ${arr.length} endpoints from categorized-endpoints fallback`);
+        }
+      } catch (e) {
+        // quiet fallback; users might not have this route
+        console.warn("categorized-endpoints fallback failed", e);
+      }
+    })();
+  }, [targetUrl, endpointsRaw, triedCategorized]);
 
   /** Selection helpers */
   const toggle = (ep) => {
@@ -586,17 +735,20 @@ export default function CrawlAndFuzzPage() {
   };
   const clearSelection = () => setSelectedKeys(new Set());
 
-  /** Actions (force core engine) */
+  /** Actions — allow engine selection (auto|ml|core) */
+  const mkFuzzOpts = () => {
+    const opts = { bearer_token: fuzzBearer || undefined };
+    if (engineMode !== "auto") opts.engine = engineMode;
+    return opts;
+  };
+
   const onFuzzAll = async () => {
     if (!jobId) return toast.error("No job. Crawl first.");
     setLoadingFuzz(true);
     try {
-      const data = await fuzzByJob(jobId, {
-        engine: "core",
-        bearer_token: fuzzBearer || undefined,
-      });
+      const data = await fuzzByJob(jobId, mkFuzzOpts());
       setFuzzSummary(data);
-      toast.success("Fuzzed all endpoints (core engine)");
+      toast.success(`Fuzzed all endpoints (${engineMode === "core" ? "ML" : engineMode})`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz ALL failed");
@@ -633,12 +785,9 @@ export default function CrawlAndFuzzPage() {
       const allEmpty = selection.every((s) => !isNonEmptyArray(s.params));
       if (allEmpty) toast.warn("Selected endpoints have no parameters to fuzz.");
 
-      const data = await fuzzSelected(jobId, selection, {
-        engine: "core",
-        bearer_token: fuzzBearer || undefined,
-      });
+      const data = await fuzzSelected(jobId, selection, mkFuzzOpts());
       setFuzzSummary(data);
-      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (core engine)`);
+      toast.success(`Fuzzed ${selection.length} selected endpoint(s) (${engineMode === "core" ? "ML" : engineMode})`);
     } catch (e) {
       console.error(e);
       toast.error("Fuzz Selected failed");
@@ -660,9 +809,7 @@ export default function CrawlAndFuzzPage() {
           blob = new Blob([md], { type: "text/markdown" });
           filename = `elise_report_${jobId}.md`;
         }
-      } catch (_) {
-        // ignore and fall through to generic /report/{job_id}
-      }
+      } catch (_) {}
 
       if (!blob) {
         const data = await getReport(jobId);
@@ -703,7 +850,6 @@ export default function CrawlAndFuzzPage() {
     if (!fuzzSummary) return [];
     if (Array.isArray(fuzzSummary)) return fuzzSummary;
     if (Array.isArray(fuzzSummary.results)) return fuzzSummary.results;
-    // try a couple of common alternate keys
     if (Array.isArray(fuzzSummary.core_results)) return fuzzSummary.core_results;
     if (Array.isArray(fuzzSummary.items)) return fuzzSummary.items;
     return [];
@@ -765,16 +911,18 @@ export default function CrawlAndFuzzPage() {
         one.family ||
         (typeof sigLegacy.type === "string" ? sigLegacy.type : null);
 
-      // ML provenance (robust)
-      const origin = deriveOrigin(one);
+      // ML provenance (prefer backend used_path when present)
+      const usedPath =
+        one?.ranker_meta?.used_path ||
+        one?.ranker_meta?.ranker?.used_path ||
+        one?.ml?.used_path ||
+        one?.used_path ||
+        null;
 
-      // normalize ranker meta (support a lot of shapes, and synthesize a fallback)
+      // normalize ranker meta (now we pass the FULL original row + hints)
       const ranker_meta = normalizeRankerMeta(
-        one.ranker_meta ||
-          one.ranker ||
-          one.ml_meta ||
-          (one.ml && (one.ml.ranker_meta || one.ml.ranker)) ||
-          {},
+        one.ranker_meta || one.ranker || one.ml_meta || (one.ml && (one.ml.ranker_meta || one.ml.ranker)) || {},
+        one,
         {
           signals: {
             sql_error: sqlErr,
@@ -787,6 +935,27 @@ export default function CrawlAndFuzzPage() {
           confidence,
         }
       );
+
+      // infer origin again using what we learned
+      const baseOrigin = deriveOrigin({ ...one, ranker_meta: one.ranker_meta || one.ranker || {}, ml: one.ml || {} });
+
+      // treat model ids (array/object/string), probs/score/dims, or used_path as ML
+      const metaHasModelIds =
+        !!ranker_meta?.model_ids &&
+        (
+          (Array.isArray(ranker_meta.model_ids) && ranker_meta.model_ids.length > 0) ||
+          (typeof ranker_meta.model_ids === "object" && Object.keys(ranker_meta.model_ids).length > 0) ||
+          (typeof ranker_meta.model_ids === "string" && ranker_meta.model_ids.trim())
+        );
+
+      const metaSuggestsML =
+        isMLUsedPath(usedPath) ||
+        metaHasModelIds ||
+        isNonEmptyObj(ranker_meta.family_probs) ||
+        hasNum(ranker_meta.ranker_score) ||
+        hasNum(ranker_meta.feature_dim_total);
+
+      const origin = metaSuggestsML ? "ml" : baseOrigin;
 
       // severity (transparent math)
       const severityScore =
@@ -808,8 +977,9 @@ export default function CrawlAndFuzzPage() {
         confidence,
         payload,
         family: fam,
-        origin,            // "ml" | "curated"
-        ranker_meta,       // { family_probs, family_chosen, ranker_score, model_ids }
+        origin,                 // "ml" | "curated"
+        ranker_meta,            // normalized (or synthesized) meta
+        ranker_used_path: usedPath || null, // surfaced for UI/debug
         severity,
         delta: {
           status_changed: typeof statusDelta === "number" ? statusDelta !== 0 : undefined,
@@ -967,13 +1137,14 @@ export default function CrawlAndFuzzPage() {
   const downloadCsv = () => {
     const rows = [
       [
-        "method","url","param","family","origin","ranker_score","ranker_family","severity","confidence",
+        "method","url","param","family","origin","ranker_score","ranker_family","feature_dim","severity","confidence",
         "status_changed","len_delta","ms_delta","sql_error","boolean_sqli","time_sqli","xss_reflected",
         "external_redirect","location","payload",
       ],
       ...filteredResults.map((r) => [
         r.method, r.url, r.param, r.family || "", r.origin || "",
         r?.ranker_meta?.ranker_score ?? "", r?.ranker_meta?.family_chosen ?? "",
+        r?.ranker_meta?.feature_dim_total ?? "",
         r.severity || "", r.confidence,
         r?.delta?.status_changed ? "1" : "0",
         r?.delta?.len_delta ?? "",
@@ -1046,6 +1217,18 @@ export default function CrawlAndFuzzPage() {
         <div className="text-sm text-gray-600 flex items-center gap-2 flex-wrap">
           <span className="font-mono">job_id:</span>
           <span className="font-mono">{jobId}</span>
+          <span className="ml-4 text-gray-500">Engine:</span>
+          {/* Note: "core" engine uses the ML ranker, "ffuf" is legacy without ML */}
+          <select
+            className="border p-1 rounded text-sm"
+            value={engineMode}
+            onChange={(e) => setEngineMode(e.target.value)}
+            title="Engine selection: auto=ML+curated, core=ML only, ffuf=no ML"
+          >
+            <option value="auto">auto (ML + curated)</option>
+            <option value="core">core (with ML)</option>
+            <option value="ffuf">ffuf only (no ML)</option>
+          </select>
           <span className="ml-4 text-gray-500">Core engine uses cookies from crawl and optional bearer:</span>
           <input
             className="border p-1 rounded min-w-[260px]"
@@ -1068,7 +1251,7 @@ export default function CrawlAndFuzzPage() {
       {/* Controls */}
       <div className="flex flex-wrap gap-2 items-center sticky top-0 z-20 bg-white/90 backdrop-blur border-b py-2 px-1">
         <button className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-60" onClick={onFuzzAll} disabled={!jobId || loadingFuzz} type="button">
-          {loadingFuzz ? "Fuzzing…" : "Fuzz ALL (core)"}
+          {loadingFuzz ? "Fuzzing…" : `Fuzz ALL (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
         <button
           className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
@@ -1076,7 +1259,7 @@ export default function CrawlAndFuzzPage() {
           disabled={!jobId || loadingFuzz || selectedKeys.size === 0}
           type="button"
         >
-          Fuzz Selected (core)
+          {`Fuzz Selected (${engineMode === "core" ? "ML" : engineMode})`}
         </button>
         <button className="bg-gray-800 text-white px-4 py-2 rounded disabled:opacity-60" onClick={downloadReport} disabled={!jobId} type="button">
           Download Report
@@ -1337,8 +1520,8 @@ export default function CrawlAndFuzzPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pageRows.map((row, i) => {
-                    const k = rowKey(row, start + i);
+                  {pageRows.map((row) => {
+                    const k = rowKey(row);
                     const isOpen = expanded.has(k);
                     const chosen = row?.ranker_meta?.family_chosen || null;
 
@@ -1347,13 +1530,65 @@ export default function CrawlAndFuzzPage() {
                       row.severity === "med" ? "bg-amber-50" :
                       row.origin === "ml" ? "bg-indigo-50/30" : "";
 
+                    // derive ML vs heuristic label for ranker cell
+                    const usedPath = String(row?.ranker_used_path || "").toLowerCase();
+                    const mlSource = String(row?.ml?.source || "").toLowerCase();
+                    const rankerMetaUsedPath = String(row?.ranker_meta?.used_path || "").toLowerCase();
+
+                    // accept arrays/objects/strings for model ids
+                    const hasModelIds =
+                      !!row?.ranker_meta?.model_ids &&
+                      (
+                        (Array.isArray(row.ranker_meta.model_ids) && row.ranker_meta.model_ids.length > 0) ||
+                        (typeof row.ranker_meta.model_ids === "object" && Object.keys(row.ranker_meta.model_ids).length > 0) ||
+                        (typeof row.ranker_meta.model_ids === "string" && row.ranker_meta.model_ids.trim())
+                      );
+
+                    // Debug logging for ML detection
+                    console.log("Debug ML detection:", {
+                      usedPath: row?.ranker_used_path,
+                      mlSource: row?.ml?.source,
+                      rankerMetaUsedPath: row?.ranker_meta?.used_path,
+                      hasModelIds,
+                      familyProbs: row?.ranker_meta?.family_probs,
+                      rankerScore: row?.ranker_meta?.ranker_score,
+                      featureDim: row?.ranker_meta?.feature_dim_total
+                    });
+                    
+                    const rankerIsML =
+                      isMLUsedPath(usedPath) ||
+                      isMLUsedPath(mlSource) ||
+                      isMLUsedPath(rankerMetaUsedPath) ||
+                      hasModelIds ||
+                      // If we have family probabilities and ranker score, this is ML
+                      (!!row?.ranker_meta?.family_probs && 
+                       typeof row?.ranker_meta?.ranker_score === "number" &&
+                       row?.ranker_meta?.ranker_score > 0) ||
+                      // Fallback: if we have any ML-like data, consider it ML
+                      (!!row?.ranker_meta && !row?.ranker_meta._synthetic && (
+                        isNonEmptyObj(row.ranker_meta.family_probs) ||
+                        hasNum(row.ranker_meta.ranker_score) ||
+                        hasNum(row.ranker_meta.feature_dim_total)
+                      ));
+                    
+                    console.log("rankerIsML result:", rankerIsML);
+
+                    const rankerScore =
+                      typeof row?.ranker_meta?.ranker_score === "number"
+                        ? row.ranker_meta.ranker_score.toFixed(3)
+                        : "—";
+
+                    const featureDim =
+                      hasNum(row?.ranker_meta?.feature_dim_total) ? row.ranker_meta.feature_dim_total : null;
+                    const dimPrefix = featureDim ? `dim ${featureDim} · ` : "";
+
                     return (
                       <tr key={k} className={cn("border-t align-top hover:bg-gray-50", rowBg)}>
                         {/* sticky cols */}
                         <td className="p-2 w-24 sticky left-0 z-10 bg-white"><SeverityBadge sev={row.severity} /></td>
                         <td className="p-2 w-28 sticky left-24 z-10 bg-white"><ConfMeter v={Number(row.confidence || 0)} /></td>
 
-                        <td className="p-2 w-24 whitespace-nowrap">
+                        <td className="p-2 w-24 whitespace-nowrap" data-origin={row.origin}>
                           <div className="inline-block min-w-[56px]">
                             <OriginBadge origin={row.origin} />
                           </div>
@@ -1384,11 +1619,13 @@ export default function CrawlAndFuzzPage() {
                           </div>
                         </td>
 
-                        <td className="p-2 w-56">
+                        <td className="p-2 w-56" data-ranker={rankerIsML ? "ML" : row?.ranker_meta?._synthetic ? "heuristic" : ""}>
                           {row?.ranker_meta?.family_probs ? <FamilyProbsBar probs={row.ranker_meta.family_probs} /> : <span className="text-gray-400">—</span>}
                           <div className="text-[10px] text-gray-500 mt-1">
-                            score: <span className="font-mono">{typeof row?.ranker_meta?.ranker_score === "number" ? row.ranker_meta.ranker_score.toFixed(3) : "—"}</span>
-                            {row?.ranker_meta?._synthetic ? <span className="ml-1 text-gray-400">(heuristic)</span> : null}
+                            {dimPrefix}score: <span className="font-mono">{rankerScore}</span>
+                            <span className="ml-1 text-gray-400">
+                              {rankerIsML ? "(ML)" : row?.ranker_meta?._synthetic ? "(heuristic)" : ""}
+                            </span>
                           </div>
                         </td>
                         <td className="p-2 min-w-[280px]">
@@ -1419,8 +1656,8 @@ export default function CrawlAndFuzzPage() {
 
           {/* Expanded rows (optional) */}
           <div className="space-y-2">
-            {filteredResults.map((row, idx) => {
-              const k = rowKey(row, idx);
+            {filteredResults.map((row) => {
+              const k = rowKey(row);
               if (!expanded.has(k)) return null;
               const v = row.signals?.verify || {};
               const fm = row.ranker_meta || {};
@@ -1529,7 +1766,12 @@ export default function CrawlAndFuzzPage() {
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
                       <div className="text-xs">chosen: <code>{fm.family_chosen || "—"}</code></div>
-                      <div className="text-xs">score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code></div>
+                      <div className="text-xs">
+                        {(hasNum(fm.feature_dim_total) ? `dim ${fm.feature_dim_total} · ` : "")}
+                        score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code>
+                      </div>
+                      {/* backend used_path (if available) */}
+                      <div className="text-[10px] text-gray-400 mt-1">{row.ranker_used_path ? `used_path: ${row.ranker_used_path}` : ""}</div>
                     </div>
                     <div className="border rounded p-2">
                       <div className="text-xs text-gray-500 mb-1">Model IDs</div>

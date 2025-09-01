@@ -112,6 +112,29 @@ def ml_info() -> Dict[str, Any]:
     }
 
 
+@router.get("/healthz")
+def ml_healthz() -> Dict[str, Any]:
+    """
+    Tiny health endpoint for probes. Returns minimal readiness info.
+    """
+    try:
+        rinfo = reco.info()
+        recommender_ready = bool(rinfo.ready)
+    except Exception:
+        recommender_ready = False
+
+    family_router_available = FamilyClassifier is not None
+    family_classifier_loaded = bool(getattr(fam_clf, "model", None)) if fam_clf else False
+
+    return {
+        "ok": recommender_ready or family_router_available,  # minimal liveness
+        "recommender_ready": recommender_ready,
+        "family_router_available": family_router_available,
+        "family_classifier_loaded": family_classifier_loaded,
+        "timestamp": int(time.time()),
+    }
+
+
 @router.post("/family_proba", response_model=FamilyProbaResponse)
 def family_proba(spec: TargetSpec) -> FamilyProbaResponse:
     """

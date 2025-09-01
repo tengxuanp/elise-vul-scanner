@@ -33,14 +33,27 @@ Decision helper for Stage-A→Stage-B:
   }
 
 Also exposes canonical curated payload pools used in training & fallback:
-  payload_pool_for("sqli"|"xss"|"redirect") -> List[str]
+  payload_pool_for("sqli"|"xss"|"redirect", context=None) -> List[str]
+    - `context` may include: {"content_type": "...", "injection_mode": "json|headers|path|..."}
+      to apply light filtering; filtering will NEVER return an empty list (falls back to original).
+
+Notes:
+- Recognizes the alias "open_redirect" and normalizes it to "redirect".
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 from urllib.parse import urlparse
 from pathlib import Path
 import re
 import math
+import os
+import logging
+
+# ------------------------------- logging/debug --------------------------------
+
+log = logging.getLogger(__name__)
+_DEBUG = str(os.getenv("ELISE_ML_DEBUG", "")).lower() in ("1", "true", "yes")
+log.setLevel(logging.DEBUG if _DEBUG else logging.INFO)
 
 # Optional dependency for loading models
 try:
@@ -82,9 +95,73 @@ CANONICAL_PAYLOADS: Dict[str, List[str]] = {
 # Alias so trainers can import a stable name
 TRAINING_POOL: Dict[str, List[str]] = CANONICAL_PAYLOADS
 
-def payload_pool_for(family: str) -> List[str]:
-    """Return curated canonical payloads for a family (empty list if unknown)."""
-    return list(CANONICAL_PAYLOADS.get((family or "").lower(), []))
+
+def _filter_pool_by_context(pool: List[str], family: str, context: Optional[Dict[str, Any]]) -> List[str]:
+    """
+    Light filtering to avoid obviously-wrong payloads for a context.
+    Non-destructive: if filtering would empty the pool, return the original pool.
+    Mirrors the recommender’s filtering rules to keep Stage-A/B consistent.
+    """
+    if not pool or not isinstance(context, dict):
+        return pool
+
+    ct = str((context.get("content_type") or "")).lower()
+    mode = str((context.get("injection_mode") or context.get("mode") or "")).lower()
+
+    out = list(pool)
+    try:
+        if family == "xss":
+            # For JSON body injection, avoid heavy tag payloads that break JSON prematurely
+            if mode == "json":
+                filtered = [p for p in out if "<script" not in p.lower() and "<svg" not in p.lower() and "<img" not in p.lower()]
+                if filtered:
+                    out = filtered
+            # For headers mode, prefer javascript: or event attributes
+            if mode == "headers":
+                filtered = [p for p in out if ("javascript:" in p.lower()) or ("onerror=" in p.lower()) or ("onload=" in p.lower())]
+                if filtered:
+                    out = filtered
+            # Pure JSON responses also de-emphasize tag-based payloads
+            if "application/json" in ct:
+                filtered = [p for p in out if ("javascript:" in p.lower()) or ("onerror=" in p.lower()) or ("onload=" in p.lower())] or out
+                out = filtered
+
+        elif family == "sqli":
+            # Path injections: prefer short booleans over UNION
+            if mode == "path":
+                filtered = [p for p in out if "union select" not in p.lower()] or out
+                out = filtered
+
+        # redirect rarely needs filtering
+    except Exception:
+        return pool
+
+    return out or pool
+
+
+def payload_pool_for(family: str, context: Optional[Dict[str, Any]] = None) -> List[str]:
+    """
+    Return curated canonical payloads for a family (empty list if unknown).
+    Optionally filter based on `context` (content_type / injection_mode).
+    Never returns an empty list due to filtering.
+    """
+    fam = (family or "").lower().strip()
+    if fam == "open_redirect":
+        fam = "redirect"  # normalize alias
+
+    base = list(CANONICAL_PAYLOADS.get(fam, []))
+    if not base:
+        return base
+    filtered = _filter_pool_by_context(base, fam, context)
+    if _DEBUG and context:
+        log.debug(
+            "payload_pool_for(%s) context=%s -> %d/%d candidates",
+            fam,
+            {k: context.get(k) for k in ("content_type", "injection_mode", "mode")},
+            len(filtered),
+            len(base),
+        )
+    return filtered
 
 
 # ================================ Heuristics =================================
@@ -366,12 +443,11 @@ class FamilyClassifier:
         if self.model is not None:
             try:
                 x = self._featurize_target(t)
-                raw = self._predict_model([x])  # -> [probs or scores] length 4 expected
-                if raw is not None and len(raw) == 4 and all(isinstance(v, (int, float)) for v in raw):
-                    p = raw
-                else:
-                    # If model outputs logits/scores, softmax them
-                    p = self._softmax(raw or [1.0, 1.0, 1.0, 0.1])
+                raw = self._predict_model([x])  # -> 4 probs or scores
+                # Ensure 4-dim; if not, use a sane prior (XSS/SQLi/Redirect with tiny 'base')
+                if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+                    raw = [1.0, 1.0, 1.0, 0.1]
+                p = self._softmax(list(raw))
                 # Optional per-class calibration
                 if self.cal is not None:
                     try:
@@ -407,11 +483,12 @@ class FamilyClassifier:
         # predict_proba preferred
         if hasattr(m, "predict_proba"):
             proba = m.predict_proba(X)  # type: ignore
+            # Shape may be (n_samples, n_classes)
             try:
-                return [float(v) for v in proba[0]]  # type: ignore[index]
+                row = proba[0]  # type: ignore[index]
+                return [float(v) for v in row]
             except Exception:
-                # Some models return shape (n_samples, n_classes); fall back
-                return [float(proba[0])]  # type: ignore[index]
+                pass
         # decision_function/logits
         if hasattr(m, "decision_function"):
             df = m.decision_function(X)  # type: ignore
@@ -419,7 +496,10 @@ class FamilyClassifier:
             try:
                 return [float(x) for x in row]  # type: ignore[call-overload]
             except Exception:
-                return [float(row)]  # type: ignore[arg-type]
+                try:
+                    return [float(row)]  # type: ignore[arg-type]
+                except Exception:
+                    return []
         # fallback to predict → one-hot guess
         if hasattr(m, "predict"):
             y = m.predict(X)  # type: ignore
@@ -472,10 +552,32 @@ class FamilyClassifier:
 
 # ========================== Stage-A Decision Helper ===========================
 
-# Sensible defaults for production; override per target/job if needed.
-DEFAULT_MIN_PROB = 0.55         # arg-max family must exceed this to be authoritative
-DEFAULT_EXPLORE_TOPK = 2        # when below threshold, explore top-k families (budgeted)
-DEFAULT_INCLUDE_BASE = False    # typically we don't explore 'base'
+# Defaults (overridable via env)
+def _env_float(name: str, default: float) -> float:
+    try:
+        v = os.getenv(name, "")
+        return float(v) if v not in (None, "") else default
+    except Exception:
+        return default
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        v = os.getenv(name, "")
+        return int(v) if v not in (None, "") else default
+    except Exception:
+        return default
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = str(os.getenv(name, "")).strip().lower()
+    if v in ("1", "true", "yes", "y", "on"):
+        return True
+    if v in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+DEFAULT_MIN_PROB = _env_float("ELISE_STAGEA_MIN_PROB", 0.55)   # arg-max family must exceed this to be authoritative
+DEFAULT_EXPLORE_TOPK = _env_int("ELISE_STAGEA_EXPLORE_TOPK", 2)  # when below threshold, explore top-k families (budgeted)
+DEFAULT_INCLUDE_BASE = _env_bool("ELISE_STAGEA_INCLUDE_BASE", False)  # typically we don't explore 'base'
 
 _classifier_singleton: FamilyClassifier | None = None
 
@@ -494,16 +596,6 @@ def decide_family(
     """
     Authoritative Stage-A decision with thresholding and *explicit* exploration plan.
     This eliminates the mismatch where Stage-B was ranking the wrong family.
-
-    Returns:
-      {
-        "family_top": "sqli" | "xss" | "redirect" | "base",
-        "family_probs": {"sqli":..., "xss":..., "redirect":..., "base":...},
-        "threshold_passed": True|False,
-        "families_to_try": ["sqli"] or ["sqli","xss"] when exploring,
-        "decision_reason": "ml_argmax" | "rule_argmax" | "below_threshold_explore",
-        "min_prob": float
-      }
     """
     # 1) Get probabilities (ML if available, else rules)
     clf = _clf()
@@ -528,6 +620,16 @@ def decide_family(
         families = [f for f, _ in ranked if include_base or f != "base"]
         families_to_try = families[: max(1, int(explore_topk))]
         decision_reason = "below_threshold_explore"
+
+    if _DEBUG:
+        log.debug(
+            "decide_family: top=%s p=%.3f passed=%s plan=%s probs=%s",
+            top_family,
+            top_prob,
+            threshold_passed,
+            families_to_try,
+            {k: round(v, 3) for k, v in probs.items()},
+        )
 
     return {
         "family_top": top_family,
