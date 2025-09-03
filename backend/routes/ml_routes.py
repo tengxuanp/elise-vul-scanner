@@ -24,21 +24,29 @@ from ..modules.recommender import Recommender
 # ---- Endpoint feature extraction (cheap) ----
 from ..modules.feature_extractor import FeatureExtractor
 
-# Try to import EnhancedInferenceEngine for enhanced ML scoring
-try:
-    from ..modules.ml.enhanced_inference import EnhancedInferenceEngine
-    _ENHANCED_ENGINE = EnhancedInferenceEngine()
-    _ENHANCED_OK = True
-except Exception as _e:
-    _ENHANCED_ENGINE = None  # type: ignore
-    _ENHANCED_OK = False
+# Try to import EnhancedInferenceEngine for enhanced ML scoring - DISABLED FOR CVSS-BASED FUZZER
+# try:
+#     from ..modules.ml.enhanced_inference import EnhancedInferenceEngine
+#     _ENHANCED_ENGINE = EnhancedInferenceEngine()
+#     _ENHANCED_OK = True
+# except Exception as _e:
+_ENHANCED_ENGINE = None  # type: ignore
+_ENHANCED_OK = False
 
 router = APIRouter(prefix="/ml", tags=["ml"])
 
 # Reuse singletons across requests
 fe = FeatureExtractor(headless=True)
 reco = Recommender()
-fam_clf = FamilyClassifier() if FamilyClassifier is not None else None
+
+# Lazy initialization of family classifier to ensure enhanced ML engine is loaded
+_fam_clf_singleton = None
+
+def get_fam_clf():
+    global _fam_clf_singleton
+    if _fam_clf_singleton is None:
+        _fam_clf_singleton = FamilyClassifier() if FamilyClassifier is not None else None
+    return _fam_clf_singleton
 
 
 # ------------------------------ Schemas --------------------------------------
@@ -113,8 +121,9 @@ def ml_info() -> Dict[str, Any]:
     # Recommender info
     rinfo = reco.info().__dict__  # dataclass -> dict
 
-    # Family classifier info
-    clf_loaded = bool(getattr(fam_clf, "model", None)) if fam_clf else False
+    # Family classifier info - check for both legacy and enhanced ML
+    fam_clf = get_fam_clf()
+    clf_loaded = bool(getattr(fam_clf, "model", None) or getattr(fam_clf, "enhanced_engine", None)) if fam_clf else False
     cal_loaded = bool(getattr(fam_clf, "cal", None)) if fam_clf else False
 
     # Pools
@@ -147,7 +156,8 @@ def ml_healthz() -> Dict[str, Any]:
         recommender_ready = False
 
     family_router_available = FamilyClassifier is not None
-    family_classifier_loaded = bool(getattr(fam_clf, "model", None)) if fam_clf else False
+    fam_clf = get_fam_clf()
+    family_classifier_loaded = bool(getattr(fam_clf, "model", None) or getattr(fam_clf, "enhanced_engine", None)) if fam_clf else False
 
     return {
         "ok": recommender_ready or family_router_available,  # minimal liveness
@@ -175,7 +185,8 @@ def family_proba(spec: TargetSpec) -> FamilyProbaResponse:
     }
 
     proba: Dict[str, float]
-    model_loaded = bool(getattr(fam_clf, "model", None)) if fam_clf else False
+    fam_clf = get_fam_clf()
+    model_loaded = bool(getattr(fam_clf, "model", None) or getattr(fam_clf, "enhanced_engine", None)) if fam_clf else False
     calibrator_loaded = bool(getattr(fam_clf, "cal", None)) if fam_clf else False
 
     # Try enhanced ML first
@@ -215,6 +226,7 @@ def family_proba(spec: TargetSpec) -> FamilyProbaResponse:
         except Exception as e:
             print(f"⚠️ Enhanced ML failed, falling back to legacy: {e}")
             # Fallback to legacy
+            fam_clf = get_fam_clf()
             if fam_clf and getattr(fam_clf, "predict_proba", None):
                 try:
                     proba = fam_clf.predict_proba(t)  # type: ignore
@@ -225,6 +237,7 @@ def family_proba(spec: TargetSpec) -> FamilyProbaResponse:
                 proba = {}
     else:
         # Legacy path
+        fam_clf = get_fam_clf()
         if fam_clf and getattr(fam_clf, "predict_proba", None):
             try:
                 proba = fam_clf.predict_proba(t)  # type: ignore
@@ -272,6 +285,7 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
     fam_proba: Optional[Dict[str, float]] = None
     family = (req.family or "").strip().lower()
     if not family:
+        fam_clf = get_fam_clf()
         if fam_clf and getattr(fam_clf, "predict_proba", None):
             fam_proba = fam_clf.predict_proba({
                 "url": req.url, "method": req.method, "in": "query",
@@ -419,20 +433,22 @@ def enhanced_score(req: EnhancedScoreRequest) -> Dict[str, Any]:
     fam_proba: Dict[str, float] = {}
 
     # Try ML family classifier first
-    if not family and fam_clf and getattr(fam_clf, "predict_proba", None):
-        try:
-            fam_proba = fam_clf.predict_proba({
-                "url": req.url,
-                "method": req.method,
-                "in": "query",
-                "target_param": param_name,
-                "content_type": req.content_type,
-                "headers": req.headers,
-            })  # type: ignore
-            if fam_proba:
-                family = max(fam_proba.items(), key=lambda kv: kv[1])[0]
-        except Exception:
-            fam_proba = {}
+    if not family:
+        fam_clf = get_fam_clf()
+        if fam_clf and getattr(fam_clf, "predict_proba", None):
+            try:
+                fam_proba = fam_clf.predict_proba({
+                    "url": req.url,
+                    "method": req.method,
+                    "in": "query",
+                    "target_param": param_name,
+                    "content_type": req.content_type,
+                    "headers": req.headers,
+                })  # type: ignore
+                if fam_proba:
+                    family = max(fam_proba.items(), key=lambda kv: kv[1])[0]
+            except Exception:
+                fam_proba = {}
 
     # Fallback to rules router
     if not family:

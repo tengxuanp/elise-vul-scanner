@@ -1,0 +1,83 @@
+INFO:root:Starting API (LOG_LEVEL=INFO, ELISE_ML_DEBUG=False, ELISE_ML_MODEL_DIR=-)
+WARNING:root:Router 'crawl_routes' not mounted (the 'package' argument is required to perform a relative import for '.routes.crawl_routes').
+INFO:root:Mounted router: category_routes at /api (tag: Categorization)
+WARNING:root:Router 'probe_routes' not mounted (the 'package' argument is required to perform a relative import for '.routes.probe_routes').
+INFO:root:Mounted router: recommend_routes at /api (tag: Recommender)
+INFO:root:Mounted router: job_routes at /api (tag: Job)
+INFO:modules.ml.enhanced_inference:✅ Successfully imported Enhanced ML modules using relative import.
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced sqli model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_sqli.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded sqli scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_sqli.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded sqli metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_sqli.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for sqli fully loaded and ready
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced xss model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_xss.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded xss scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_xss.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded xss metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_xss.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for xss fully loaded and ready
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced redirect model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_redirect.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded redirect scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_redirect.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded redirect metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_redirect.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for redirect fully loaded and ready
+INFO:modules.family_router:✅ Enhanced ML system available for family routing
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced sqli model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_sqli.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded sqli scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_sqli.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded sqli metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_sqli.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for sqli fully loaded and ready
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced xss model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_xss.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded xss scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_xss.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded xss metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_xss.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for xss fully loaded and ready
+INFO:modules.ml.enhanced_inference:✅ Loaded enhanced redirect model from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_ranker_redirect.joblib
+INFO:modules.ml.enhanced_inference:✅ Loaded redirect scaler from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_scaler_redirect.joblib, expects 48 features
+INFO:modules.ml.enhanced_inference:✅ Loaded redirect metadata from /Users/raphaelpang/code/elise/backend/modules/ml/enhanced_metadata_redirect.json
+INFO:modules.ml.enhanced_inference:✅ Enhanced ML for redirect fully loaded and ready
+INFO:modules.family_router:✅ Enhanced ML engine loaded for family classification
+INFO:modules.recommender:Loaded recommender meta: /Users/raphaelpang/code/elise/backend/modules/ml/recommender_meta.json (feature_dim=17)
+INFO:modules.recommender:Recommender ready: plugin=False, model=False, pipeline=False, feature_dim=17, rankers_exist={'sqli': True, 'xss': True, 'redirect': True}, family_clf=False, model_dir=/Users/raphaelpang/code/elise/backend/modules/ml
+INFO:root:Mounted router: fuzz_routes at /api (tag: Fuzzing)
+INFO:root:Mounted router: evidence_routes at /api (tag: Evidence)
+WARNING:root:Router 'verify_routes' not mounted (the 'package' argument is required to perform a relative import for '.routes.verify_routes').
+WARNING:root:Router 'report_routes' not mounted (the 'package' argument is required to perform a relative import for '.routes.report_routes').
+WARNING:root:Router 'ml_routes' not mounted (the 'package' argument is required to perform a relative import for '.routes.ml_routes').
+INFO:root:Mounted router: enhanced_fuzz_routes at /api (tag: Enhanced ML Fuzzing)
+✅ Backend directory already in Python path: /Users/raphaelpang/code/elise/backend
+✅ Added project root to Python path: /Users/raphaelpang/code/elise
+🔍 Attempting to mount router: crawl_routes
+❌ Router 'crawl_routes' not mounted: the 'package' argument is required to perform a relative import for '.routes.crawl_routes'
+🔍 Attempting to mount router: category_routes
+✅ Absolute import successful for category_routes
+✅ Router found for category_routes: <fastapi.routing.APIRouter object at 0x1101b0dd0>
+✅ Mounted router: category_routes at /api (tag: Categorization)
+🔍 Attempting to mount router: probe_routes
+❌ Router 'probe_routes' not mounted: the 'package' argument is required to perform a relative import for '.routes.probe_routes'
+🔍 Attempting to mount router: recommend_routes
+✅ Absolute import successful for recommend_routes
+✅ Router found for recommend_routes: <fastapi.routing.APIRouter object at 0x1101b1e50>
+✅ Mounted router: recommend_routes at /api (tag: Recommender)
+🔍 Attempting to mount router: job_routes
+✅ Absolute import successful for job_routes
+✅ Router found for job_routes: <fastapi.routing.APIRouter object at 0x1101c5d30>
+✅ Mounted router: job_routes at /api (tag: Job)
+🔍 Attempting to mount router: fuzz_routes
+✅ Enhanced ML system loaded successfully
+✅ Enhanced ML engine initialized: <modules.ml.enhanced_inference.EnhancedInferenceEngine object at 0x124df1790>
+DEBUG: Loading ML Recommender: <modules.recommender.Recommender object at 0x125b8fe30>
+DEBUG: ML Recommender loaded successfully: <modules.recommender.Recommender object at 0x125b8fe30>
+DEBUG: Recommender ready: True
+DEBUG: Recommender meta: {'feature_dim': 17, 'feature_names': None, 'note': 'Rankers expect [endpoint_feature_vector] + [payload_desc(20)] at inference.', 'families_trained': ['sqli', 'xss', 'redirect']}
+✅ Absolute import successful for fuzz_routes
+✅ Router found for fuzz_routes: <fastapi.routing.APIRouter object at 0x1101d5c10>
+✅ Mounted router: fuzz_routes at /api (tag: Fuzzing)
+🔍 Attempting to mount router: evidence_routes
+✅ Absolute import successful for evidence_routes
+✅ Router found for evidence_routes: <fastapi.routing.APIRouter object at 0x125c15f70>
+✅ Mounted router: evidence_routes at /api (tag: Evidence)
+🔍 Attempting to mount router: verify_routes
+❌ Router 'verify_routes' not mounted: the 'package' argument is required to perform a relative import for '.routes.verify_routes'
+🔍 Attempting to mount router: report_routes
+❌ Router 'report_routes' not mounted: the 'package' argument is required to perform a relative import for '.routes.report_routes'
+🔍 Attempting to mount router: ml_routes
+❌ Router 'ml_routes' not mounted: the 'package' argument is required to perform a relative import for '.routes.ml_routes'
+🔍 Attempting to mount router: enhanced_fuzz_routes
+✅ Absolute import successful for enhanced_fuzz_routes
+✅ Router found for enhanced_fuzz_routes: <fastapi.routing.APIRouter object at 0x130167ad0>
+✅ Mounted router: enhanced_fuzz_routes at /api (tag: Enhanced ML Fuzzing)

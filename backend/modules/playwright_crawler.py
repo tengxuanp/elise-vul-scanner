@@ -25,6 +25,39 @@ LOGIN_KEYWORDS = {"user", "username", "email", "pass", "password", "login"}
 CSRF_KEYS = ("csrf", "token", "authenticity", "_csrf", "__requestverificationtoken")
 HASH_ROUTE_RE = re.compile(r".*#/\S*")
 
+# Enhanced SPA route patterns for common frameworks
+SPA_ROUTE_PATTERNS = [
+    r"#/search",           # Search functionality
+    r"#/login",            # Authentication
+    r"#/register",         # Registration
+    r"#/profile",          # User profile
+    r"#/admin",            # Admin panel
+    r"#/dashboard",        # Dashboard
+    r"#/settings",         # Settings
+    r"#/products",         # Product listings
+    r"#/cart",             # Shopping cart
+    r"#/checkout",         # Checkout process
+    r"#/orders",           # Order management
+    r"#/feedback",         # Feedback forms
+    r"#/contact",          # Contact forms
+    r"#/about",            # About pages
+    r"#/help",             # Help/Support
+]
+
+# Common SPA route templates
+SPA_ROUTE_TEMPLATES = [
+    "#/search?q={param}",
+    "#/login?redirect={param}",
+    "#/profile?id={param}",
+    "#/products?category={param}",
+    "#/search?query={param}",
+    "#/filter?type={param}",
+    "#/view?item={param}",
+    "#/edit?id={param}",
+    "#/delete?id={param}",
+    "#/upload?file={param}",
+]
+
 
 # ------------------------------- helpers ------------------------------------
 
@@ -560,6 +593,286 @@ def crawl_site(
                 "enctype": enctype
             })
 
+    def discover_spa_routes(page, base_url: str):
+        """Discover SPA routes by executing JavaScript and checking common patterns."""
+        discovered_routes = []
+        
+        try:
+            # Wait for page to fully load
+            page.wait_for_timeout(2000)
+            
+                        # Execute JavaScript to find client-side routes
+            js_code = r"""
+            () => {
+                const routes = [];
+                
+                // Look for common SPA routing patterns
+                if (window.router || window.$router || window.Router) {
+                    routes.push('SPA_ROUTER_DETECTED');
+                }
+                
+                // Check for Angular, React, Vue indicators
+                if (window.angular || window.ng || document.querySelector('[ng-app]')) {
+                    routes.push('ANGULAR_DETECTED');
+                }
+                if (window.React || window.__REACT_DEVTOOLS_GLOBAL_HOOK__) {
+                    routes.push('REACT_DETECTED');
+                }
+                if (window.Vue || window.__VUE__) {
+                    routes.push('VUE_DETECTED');
+                }
+                
+                // Look for data attributes that might indicate routes
+                const routeElements = document.querySelectorAll('[data-route], [data-page], [data-view]');
+                routeElements.forEach(el => {
+                    const route = el.getAttribute('data-route') || el.getAttribute('data-page') || el.getAttribute('data-view');
+                    if (route) routes.push(route);
+                });
+                
+                // Check for hash-based navigation
+                const hashLinks = document.querySelectorAll('a[href^="#"]');
+                hashLinks.forEach(link => {
+                    const href = link.getAttribute('href');
+                    if (href && href !== '#') routes.push(href);
+                });
+                
+                // Look for JavaScript event handlers that might indicate routes
+                const clickHandlers = document.querySelectorAll('[onclick], [onclick*="router"], [onclick*="navigate"]');
+                clickHandlers.forEach(el => {
+                    const onclick = el.getAttribute('onclick');
+                    if (onclick && onclick.includes('#')) {
+                        const match = onclick.match(/#\/[\w\/-]+/);
+                        if (match) routes.push(match[0]);
+                    }
+                });
+                
+                // Check for common SPA navigation patterns in scripts
+                const scripts = document.querySelectorAll('script');
+                scripts.forEach(script => {
+                    if (script.textContent) {
+                        const content = script.textContent;
+                        // Look for route definitions
+                        const routeMatches = content.match(/['"`]\/#\/[\w\/-]+['"`]/g);
+                        if (routeMatches) {
+                            routeMatches.forEach(match => {
+                                const route = match.replace(/['"`]/g, '');
+                                if (route.startsWith('#/')) routes.push(route);
+                            });
+                        }
+                    }
+                });
+                
+                return routes;
+            }
+            """
+            
+            detected_patterns = page.evaluate(js_code)
+            print(f"[INFO] SPA patterns detected: {detected_patterns}")
+            
+            # Generate routes based on detected patterns and common templates
+            for template in SPA_ROUTE_TEMPLATES:
+                if any(pattern in template for pattern in detected_patterns):
+                    # Create a route with a sample parameter
+                    route_url = base_url + template.replace("{param}", "test")
+                    discovered_routes.append({
+                        "url": route_url,
+                        "method": "GET",
+                        "params": ["param"],
+                        "is_login": False,
+                        "csrf_params": [],
+                        "enctype": None,
+                        "source": "spa_template"
+                    })
+            
+            # Add specific routes based on detected patterns
+            if any("search" in pattern for pattern in detected_patterns):
+                discovered_routes.append({
+                    "url": base_url + "#/search?q=test",
+                    "method": "GET", 
+                    "params": ["q"],
+                    "is_login": False,
+                    "csrf_params": [],
+                    "enctype": None,
+                    "source": "spa_search"
+                })
+            
+            # Always add common SPA routes that are likely to exist
+            common_spa_routes = [
+                {"path": "#/login", "query_params": ["redirect", "return_to", "next"], "form_params": ["email", "password", "username"], "method": "POST", "is_login": True, "vulnerability_focus": ["sqli", "auth_bypass"]},
+                {"path": "#/search", "query_params": ["q", "query"], "form_params": [], "method": "GET", "is_login": False},
+                {"path": "#/register", "query_params": ["redirect", "return_to"], "form_params": ["email", "password", "repeatPassword"], "method": "POST", "is_login": False},
+                {"path": "#/profile", "query_params": ["id"], "form_params": [], "method": "GET", "is_login": False},
+                {"path": "#/admin", "query_params": ["section"], "form_params": [], "method": "GET", "is_login": False},
+            ]
+            
+            for route_info in common_spa_routes:
+                route_url = base_url + route_info["path"]
+                
+                # Determine content type based on method and parameters
+                content_type = "application/x-www-form-urlencoded" if route_info.get("form_params") else "text/html"
+                
+                endpoint_data = {
+                    "url": route_url,
+                    "method": route_info["method"],
+                    "path": route_url.split("?")[0],
+                    "content_type_hint": content_type,
+                    "param_locs": {
+                        "query": route_info.get("query_params", []),
+                        "form": route_info.get("form_params", []),
+                        "json": [],
+                    },
+                    "is_login": route_info.get("is_login", False),
+                    "csrf_params": [],
+                    "enctype": None,
+                    "source": "common_spa_route"
+                }
+                
+                # Add special flags for login endpoints
+                if route_info.get("is_login"):
+                    endpoint_data["vulnerability_focus"] = route_info.get("vulnerability_focus", [])
+                
+                discovered_routes.append(endpoint_data)
+            
+        except Exception as e:
+            print(f"[WARN] SPA route discovery failed: {e}")
+        
+        return discovered_routes
+
+    def generate_common_spa_routes_fallback(base_url: str) -> List[Dict[str, Any]]:
+        """Generate common SPA routes as fallback when discovery fails."""
+        common_routes = []
+        
+        # Common SPA route patterns with enhanced parameter detection
+        spa_patterns = [
+            {"path": "#/search", "query_params": ["q", "query", "search"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/login", "query_params": ["redirect", "return_to", "next"], "form_params": ["email", "password", "username"], "method": "POST", "is_login": True, "vulnerability_focus": ["sqli", "auth_bypass"]},
+            {"path": "#/register", "query_params": ["redirect", "return_to"], "form_params": ["email", "password", "repeatPassword"], "method": "POST", "is_login": False},
+            {"path": "#/profile", "query_params": ["id", "user_id"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/admin", "query_params": ["section", "tab"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/dashboard", "query_params": ["view", "tab"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/products", "query_params": ["category", "filter", "sort"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/cart", "query_params": ["item_id", "quantity"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/checkout", "query_params": ["step", "payment_method"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/orders", "query_params": ["status", "date"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/feedback", "query_params": ["type", "rating"], "form_params": [], "method": "GET", "is_login": False},
+            {"path": "#/contact", "query_params": ["subject", "priority"], "form_params": [], "method": "GET", "is_login": False},
+        ]
+        
+        for pattern in spa_patterns:
+            # Create a route with sample parameters
+            route_url = base_url + pattern["path"]
+            
+            # Determine content type based on method and parameters
+            content_type = "application/x-www-form-urlencoded" if pattern.get("form_params") else "text/html"
+            
+            route_data = {
+                "method": pattern["method"],
+                "url": route_url,
+                "path": route_url.split("?")[0],
+                "content_type_hint": content_type,
+                "param_locs": {
+                    "query": pattern.get("query_params", []),
+                    "form": pattern.get("form_params", []),
+                    "json": [],
+                },
+                "source": "common_spa_fallback"
+            }
+            
+            # Add special flags for login endpoints
+            if pattern.get("is_login"):
+                route_data["is_login"] = True
+                route_data["vulnerability_focus"] = pattern.get("vulnerability_focus", [])
+            
+            common_routes.append(route_data)
+        
+        return common_routes
+
+    def discover_additional_spa_routes(page, current_url: str) -> List[Dict[str, Any]]:
+        """Discover additional SPA routes from the current page."""
+        additional_routes = []
+        
+        try:
+            # Look for more hash links on this page
+            hash_links = page.evaluate("""
+                () => {
+                    const links = document.querySelectorAll('a[href^="#"]');
+                    const routes = [];
+                    links.forEach(link => {
+                        const href = link.getAttribute('href');
+                        if (href && href !== '#' && href.startsWith('#/')) {
+                            routes.push(href);
+                        }
+                    });
+                    return routes;
+                }
+            """)
+            
+            # Also look for JavaScript-based navigation
+            js_routes = page.evaluate("""
+                () => {
+                    const routes = [];
+                    // Look for common SPA navigation patterns
+                    if (window.router && window.router.routes) {
+                        try {
+                            routes.push(...Object.keys(window.router.routes));
+                        } catch (e) {}
+                    }
+                    if (window.$router && window.$router.options && window.$router.options.routes) {
+                        try {
+                            routes.push(...window.$router.options.routes.map(r => r.path));
+                        } catch (e) {}
+                    }
+                    return routes;
+                }
+            """)
+            
+            # Combine and deduplicate routes
+            all_routes = list(set(hash_links + js_routes))
+            
+            for route in all_routes:
+                if route.startswith('#/'):
+                    # Convert relative hash route to full URL
+                    full_route = current_url.split('#')[0] + route
+                    additional_routes.append({
+                        "url": full_route,
+                        "method": "GET",
+                        "params": infer_params_from_route(route),
+                        "is_login": False,
+                        "csrf_params": [],
+                        "enctype": None,
+                        "source": "additional_discovery"
+                    })
+                    
+        except Exception as e:
+            print(f"[WARN] Additional route discovery failed: {e}")
+            
+        return additional_routes
+
+    def infer_params_from_route(route: str) -> List[str]:
+        """Infer common parameters based on route path."""
+        params = []
+        
+        if "/search" in route:
+            params.extend(["q", "query", "search"])
+        elif "/login" in route or "/auth" in route:
+            params.extend(["redirect", "return_to", "next"])
+        elif "/profile" in route or "/user" in route:
+            params.extend(["id", "user_id"])
+        elif "/products" in route or "/items" in route:
+            params.extend(["category", "filter", "sort"])
+        elif "/cart" in route:
+            params.extend(["item_id", "quantity"])
+        elif "/checkout" in route:
+            params.extend(["step", "payment_method"])
+        elif "/orders" in route:
+            params.extend(["status", "date"])
+        elif "/feedback" in route:
+            params.extend(["type", "rating"])
+        elif "/contact" in route:
+            params.extend(["subject", "priority"])
+        
+        return params
+
     def crawl(url: str, depth: int, context):
         if depth > max_depth:
             return
@@ -617,15 +930,25 @@ def crawl_site(
                 # Hash-based SPA route (e.g., http://host/#/login)
                 if HASH_ROUTE_RE.match(full_url) and same_site(full_url, target_url):
                     try:
+                        print(f"[INFO] Discovering SPA route: {full_url}")
                         page.goto(full_url, timeout=15000, wait_until="networkidle")
                         # small wake after route change
                         try:
                             page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                            page.wait_for_timeout(200)
+                            page.wait_for_timeout(500)  # Increased wait time
                         except Exception:
                             pass
                         sub_html = page.content()
                         capture_forms_on_page(sub_html, full_url)
+                        
+                        # Also try to discover additional routes from this page
+                        try:
+                            additional_routes = discover_additional_spa_routes(page, full_url)
+                            if additional_routes:
+                                print(f"[INFO] Found {len(additional_routes)} additional routes from {full_url}")
+                        except Exception as e:
+                            print(f"[WARN] Additional route discovery failed: {e}")
+                            
                     except Exception as e:
                         print(f"[WARN] SPA route load failed {full_url}: {e}")
 
@@ -759,6 +1082,26 @@ def crawl_site(
                 print(f"[WARN] Auth bootstrap failed: {e}")
 
         try:
+            # Proactively discover hash routes before starting the main crawl
+            print(f"[INFO] Starting proactive SPA route discovery for {target_url}")
+            try:
+                page = context.new_page()
+                page.goto(target_url, timeout=20000, wait_until="networkidle")
+                page.wait_for_timeout(3000)  # Wait for SPA to fully load
+                
+                # Discover initial SPA routes
+                initial_spa_routes = discover_spa_routes(page, target_url)
+                if initial_spa_routes:
+                    print(f"[INFO] Proactively discovered {len(initial_spa_routes)} SPA routes")
+                    # Add these to raw_form_endpoints so they get processed
+                    for route in initial_spa_routes:
+                        raw_form_endpoints.append(route)
+                
+                page.close()
+            except Exception as e:
+                print(f"[WARN] Proactive SPA discovery failed: {e}")
+            
+            # Start the main crawl
             crawl(target_url, 0, context)
         finally:
             # Persist storage state for this job (optional, used by replay/fuzzer)
@@ -784,10 +1127,75 @@ def crawl_site(
             if rec.get("response_content_type") is None:
                 rec["response_content_type"] = response_meta[u].get("content-type")
 
+    # Discover SPA routes that might have been missed
+    spa_routes = []
+    try:
+        # Create a temporary page to discover SPA routes
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            page = context.new_page()
+            
+            # Navigate to the target URL
+            page.goto(target_url, timeout=20000, wait_until="networkidle")
+            page.wait_for_timeout(3000)  # Wait for SPA to load
+            
+            # Discover SPA routes
+            spa_routes = discover_spa_routes(page, target_url)
+            
+            browser.close()
+    except Exception as e:
+        print(f"[WARN] SPA route discovery failed: {e}")
+    
+    # Convert SPA routes to endpoint format
+    eps_from_spa = []
+    for route in spa_routes:
+        # Determine content type based on method and parameters
+        content_type = "application/x-www-form-urlencoded" if route.get("is_login") else "text/html"
+        
+        # Split parameters into query and form based on the route type
+        query_params = []
+        form_params = []
+        
+        if route.get("is_login"):
+            # Login routes have form parameters
+            form_params = route.get("params", [])
+        else:
+            # Other routes have query parameters
+            query_params = route.get("params", [])
+        
+        endpoint_data = {
+            "method": route["method"],
+            "url": route["url"],
+            "path": route["url"].split("?")[0],
+            "content_type_hint": content_type,
+            "param_locs": {
+                "query": query_params,
+                "form": form_params,
+                "json": [],
+            },
+        }
+        
+        # Add special flags for login endpoints
+        if route.get("is_login"):
+            endpoint_data["is_login"] = True
+            endpoint_data["vulnerability_focus"] = route.get("vulnerability_focus", [])
+        
+        eps_from_spa.append(endpoint_data)
+    
+    # Also generate common SPA routes as fallback
+    common_spa_routes = generate_common_spa_routes_fallback(target_url)
+    eps_from_spa.extend(common_spa_routes)
+    
     deduped_reqs = dedupe_requests(captured_requests)
     eps_from_network = endpoints_from_requests(deduped_reqs)
     eps_from_forms = endpoints_from_forms(raw_form_endpoints)
     merged = merge_endpoints(eps_from_forms, eps_from_network)
+    
+    # Add SPA routes to merged endpoints
+    if eps_from_spa:
+        merged.extend(eps_from_spa)
+        print(f"[INFO] Added {len(eps_from_spa)} SPA routes to discovered endpoints")
 
     # Optionally persist artifacts
     if out_dir and save_artifacts:

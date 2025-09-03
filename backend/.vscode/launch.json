@@ -1,0 +1,30 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/Users/raphaelpang/code/elise/backend/venv_py312/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:/Users/raphaelpang/code/elise/backend:/Users/raphaelpang/code/elise"
+            }
+        },
+        {
+            "name": "Python: FastAPI Backend",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "python": "/Users/raphaelpang/code/elise/backend/venv_py312/bin/python",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}:/Users/raphaelpang/code/elise/backend:/Users/raphaelpang/code/elise"
+            }
+        }
+    ]
+}
+

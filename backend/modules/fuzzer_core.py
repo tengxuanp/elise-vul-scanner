@@ -22,35 +22,14 @@ from .detectors import (
 TRUNCATE_BODY = 2048
 
 # ----------------------------- Enhanced ML integration -------------------
-# Enhanced ML system with confidence scoring and uncertainty estimation
-try:
-    from .ml.enhanced_inference import EnhancedInferenceEngine
-    from .ml.enhanced_features import EnhancedFeatureExtractor
-    _ENHANCED_ML_AVAILABLE = True
-    print("✅ Enhanced ML system loaded successfully")
-except Exception as e:
-    print(f"❌ Failed to load enhanced ML system: {e}")
-    _ENHANCED_ML_AVAILABLE = False
+# NOTE: Old enhanced ML system has been replaced with new CVSS-based system
+# This is now handled by enhanced_fuzz_routes.py
+_ENHANCED_ML_AVAILABLE = False
+_ML_AVAILABLE = False
 
-# Fallback to legacy ML system
-try:
-    from .ml_ranker import predict_proba as _ranker_predict  # type: ignore
-    _ML_AVAILABLE = True
-except Exception:
-    _ML_AVAILABLE = False
-
-# Initialize enhanced ML engine
+# Initialize enhanced ML engine (disabled)
 _ENHANCED_ENGINE = None
 _ENHANCED_FEATURE_EXTRACTOR = None
-
-if _ENHANCED_ML_AVAILABLE:
-    try:
-        _ENHANCED_ENGINE = EnhancedInferenceEngine()
-        _ENHANCED_FEATURE_EXTRACTOR = EnhancedFeatureExtractor()
-        print(f"✅ Enhanced ML engine initialized: {_ENHANCED_ENGINE}")
-    except Exception as e:
-        print(f"❌ Failed to initialize enhanced ML engine: {e}")
-        _ENHANCED_ML_AVAILABLE = False
 
 # Enhanced ML prediction function
 def _enhanced_ml_predict(features: Dict[str, Any], family: str = None) -> Dict[str, Any]:
@@ -463,6 +442,7 @@ def _rank_payloads_for_family(
     *,
     recent_fail_counts: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Tuple[str, float]], Dict[str, Any]]:
+    global _ENHANCED_ENGINE
     """
     Stage B: per-family payload ranking via enhanced ML; fallback to legacy ML and curated pool.
     Returns ([(payload, prob)], meta)
@@ -473,9 +453,11 @@ def _rank_payloads_for_family(
         return ([], {"used_path": "no_pool", "family": fam})
 
     # Try enhanced ML ranking first
+    print(f"🔍 DEBUG: Enhanced ML check - _ENHANCED_ML_AVAILABLE={_ENHANCED_ML_AVAILABLE}, _ENHANCED_ENGINE={_ENHANCED_ENGINE}")
+    
     if _ENHANCED_ML_AVAILABLE and _ENHANCED_ENGINE is not None:
         try:
-            print(f"DEBUG: Using enhanced ML engine for family {fam}")
+            print(f"✅ Using enhanced ML engine for family {fam}")
             
             # Extract endpoint and parameter info
             endpoint = {
@@ -490,14 +472,14 @@ def _rank_payloads_for_family(
                 "loc": feats.get("in", "query")
             }
             
-            print(f"DEBUG: Enhanced ML input - endpoint: {endpoint}, param: {param}, family: {fam}")
+            print(f"🔍 Enhanced ML input - endpoint: {endpoint}, param: {param}, family: {fam}")
             
             # Use enhanced payload ranking
             ranked_payloads = _ENHANCED_ENGINE.rank_payloads(
                 endpoint, param, fam, pool, top_k=top_n
             )
             
-            print(f"DEBUG: Enhanced ML rank_payloads returned: {len(ranked_payloads)} results")
+            print(f"✅ Enhanced ML rank_payloads returned: {len(ranked_payloads)} results")
             
             if ranked_payloads:
                 # Convert to expected format with REAL ML scores
@@ -599,9 +581,46 @@ def _rank_payloads_for_family(
     else:
         print(f"DEBUG: No ML recommender available (_RECO is None)")
 
-    # Final fallback: naive order, uniform score
-    out = [(p, 0.2) for p in pool[:top_n]]
-    return (out, {"used_path": "heuristic", "family": fam, "model_ids": {"ranker_path": "heuristic"}})
+    # Final fallback: NEVER use heuristic - force enhanced ML or fail gracefully
+    print(f"🚨 CRITICAL: Enhanced ML engine failed for family {fam}. This should not happen!")
+    print(f"🚨 Enhanced ML engine status: _ENHANCED_ML_AVAILABLE={_ENHANCED_ML_AVAILABLE}, _ENHANCED_ENGINE={_ENHANCED_ENGINE}")
+    
+    # Try one more time to initialize enhanced ML engine
+    if _ENHANCED_ML_AVAILABLE and _ENHANCED_ENGINE is None:
+        try:
+            _ENHANCED_ENGINE = EnhancedInferenceEngine()
+            print(f"🔄 Re-initialized enhanced ML engine: {_ENHANCED_ENGINE}")
+            
+            # Try enhanced ML ranking again
+            endpoint = {
+                "url": feats.get("url", ""),
+                "method": feats.get("method", "GET"),
+                "content_type": feats.get("content_type", "")
+            }
+            param = {
+                "name": feats.get("target_param", ""),
+                "value": feats.get("control_value", ""),
+                "loc": feats.get("in", "query")
+            }
+            
+            ranked_payloads = _ENHANCED_ENGINE.rank_payloads(endpoint, param, fam, pool, top_k=top_n)
+            if ranked_payloads:
+                recs = [(p["payload"], p["score"]) for p in ranked_payloads]
+                meta = {
+                    "used_path": "enhanced_ml",
+                    "family": fam,
+                    "enhanced": True,
+                    "confidence": ranked_payloads[0].get("confidence", 0.0),
+                    "uncertainty": ranked_payloads[0].get("uncertainty", 0.0)
+                }
+                print(f"✅ Enhanced ML engine recovered and returned {len(recs)} results")
+                return (recs, meta)
+        except Exception as e:
+            print(f"🚨 Failed to recover enhanced ML engine: {e}")
+    
+    # If all else fails, return empty results rather than heuristic
+    print(f"🚨 Returning empty results for family {fam} - no heuristic fallback allowed!")
+    return ([], {"used_path": "enhanced_ml_failed", "family": fam, "error": "Enhanced ML engine unavailable"})
 
 
 # ---------------------------- small utils ------------------------------------

@@ -62,14 +62,14 @@ try:
 except Exception:
     joblib = None  # type: ignore
 
-# Enhanced ML integration
-try:
-    from .ml.enhanced_inference import EnhancedInferenceEngine
-    _ENHANCED_ML_AVAILABLE = True
-    log.info("✅ Enhanced ML system available for family routing")
-except Exception as e:
-    _ENHANCED_ML_AVAILABLE = False
-    log.info(f"❌ Enhanced ML system not available: {e}")
+# Enhanced ML integration - DISABLED FOR CVSS-BASED FUZZER
+# try:
+#     from .ml.enhanced_inference import EnhancedInferenceEngine
+#     _ENHANCED_ML_AVAILABLE = True
+#     log.info("✅ Enhanced ML system available for family routing")
+# except Exception as e:
+_ENHANCED_ML_AVAILABLE = False
+log.info("❌ Enhanced ML system disabled - using CVSS-based fuzzer")
 
 # ============================ Canonical payload pools =========================
 
