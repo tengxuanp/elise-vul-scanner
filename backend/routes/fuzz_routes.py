@@ -816,8 +816,8 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
         has_ml_fields = bool(family_probs) or isinstance(ranker_score, (int, float)) or (isinstance(model_ids, (list, tuple)) and len(model_ids) > 0)
         used_path = raw_rm.get("used_path")
         # CRITICAL: Preserve the original used_path from evidence - don't overwrite ML paths!
-        if raw_rm.get("used_path") and raw_rm.get("used_path").startswith("ml:"):
-            used_path = raw_rm.get("used_path")  # Keep "ml:redirect", "ml:sqli", etc.
+        if raw_rm.get("used_path") and (raw_rm.get("used_path").startswith("ml:") or raw_rm.get("used_path") == "enhanced_ml"):
+            used_path = raw_rm.get("used_path")  # Keep "ml:redirect", "ml:sqli", "enhanced_ml", etc.
         elif has_ml_fields and not used_path:
             used_path = "family_ranker"  # Only use fallback if no ML path exists
 

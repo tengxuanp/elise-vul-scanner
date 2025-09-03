@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
@@ -21,32 +22,34 @@ except ImportError:
     xgb = None  # type: ignore
     XGB_AVAILABLE = False
 
+# Set up logging first
+log = logging.getLogger(__name__)
+
 # Enhanced ML imports with fallback
 try:
-    from .enhanced_features import EnhancedFeatureExtractor
-    from .enhanced_trainer import EnhancedModelTrainer
-    from .confidence_calibration import ConfidenceCalibrator
-except ImportError:
-    # Fallback for direct execution
-    try:
-        from enhanced_features import EnhancedFeatureExtractor
-        from enhanced_trainer import EnhancedModelTrainer
-        from confidence_calibration import ConfidenceCalibrator
-    except ImportError:
-        # Final fallback - create dummy classes
-        class EnhancedFeatureExtractor:
-            def extract_enhanced_features(self, *args, **kwargs):
-                return {"dummy": 0.0}
-        
-        class EnhancedModelTrainer:
-            pass
-        
-        class ConfidenceCalibrator:
-            def __init__(self, method="isotonic"):
-                self.method = method
-                self.is_fitted = False
-
-log = logging.getLogger(__name__)
+    # Use absolute import from 'backend' assuming the project root is in sys.path
+    # This is handled by the entrypoint in main.py
+    from backend.modules.ml.enhanced_features import EnhancedFeatureExtractor
+    from backend.modules.ml.enhanced_trainer import EnhancedModelTrainer
+    from backend.modules.ml.confidence_calibration import ConfidenceCalibrator
+    log.info("✅ Successfully imported Enhanced ML modules using absolute import.")
+except ImportError as e:
+    # Final fallback - create dummy classes
+    log.critical(f"🚨 CRITICAL: Failed to import EnhancedFeatureExtractor. Using dummy class. Error: {e!r}")
+    log.critical(f"🚨 This will cause ML scoring to fail! Check the import paths and package structure.")
+    
+    class EnhancedFeatureExtractor:
+        def extract_enhanced_features(self, *args, **kwargs):
+            log.error("🚨 DUMMY FEATURE EXTRACTOR BEING USED - ML SCORING WILL FAIL!")
+            return {"dummy": 0.0}
+    
+    class EnhancedModelTrainer:
+        pass
+    
+    class ConfidenceCalibrator:
+        def __init__(self, method="isotonic"):
+            self.method = method
+            self.is_fitted = False
 
 class EnhancedInferenceEngine:
     """
@@ -79,28 +82,48 @@ class EnhancedInferenceEngine:
             try:
                 # Load enhanced model
                 model_path = self.model_dir / f"enhanced_ranker_{family}.joblib"
-                if model_path.exists() and JOBLIB_AVAILABLE:
+                if (model_path.exists() and JOBLIB_AVAILABLE):
                     self.models[family] = joblib.load(model_path)
-                    log.info(f"Loaded enhanced {family} model from {model_path}")
+                    log.info(f"✅ Loaded enhanced {family} model from {model_path}")
+                else:
+                    log.warning(f"❌ Enhanced {family} model not found at {model_path}")
                 
                 # Load scaler
                 scaler_path = self.model_dir / f"enhanced_scaler_{family}.joblib"
-                if scaler_path.exists() and JOBLIB_AVAILABLE:
+                if (scaler_path.exists() and JOBLIB_AVAILABLE):
                     self.scalers[family] = joblib.load(scaler_path)
-                    log.info(f"Loaded {family} scaler from {scaler_path}")
+                    expected_features = getattr(self.scalers[family], 'n_features_in_', 'unknown')
+                    log.info(f"✅ Loaded {family} scaler from {scaler_path}, expects {expected_features} features")
+                else:
+                    log.warning(f"❌ Enhanced {family} scaler not found at {scaler_path}")
                 
                 # Load metadata
                 metadata_path = self.model_dir / f"enhanced_metadata_{family}.json"
                 if metadata_path.exists():
                     with open(metadata_path, 'r') as f:
                         self.metadata[family] = json.load(f)
-                    log.info(f"Loaded {family} metadata from {metadata_path}")
-                
+                    log.info(f"✅ Loaded {family} metadata from {metadata_path}")
+                else:
+                    log.warning(f"❌ Enhanced {family} metadata not found at {metadata_path}")
+
                 # Initialize calibrator
                 self.calibrators[family] = ConfidenceCalibrator(method="isotonic")
                 
+                # Verify model is properly loaded
+                if family in self.models and family in self.scalers:
+                    log.info(f"✅ Enhanced ML for {family} fully loaded and ready")
+                else:
+                    log.warning(f"⚠️ Enhanced ML for {family} partially loaded - model: {family in self.models}, scaler: {family in self.scalers}")
+                
             except Exception as e:
-                log.warning(f"Failed to load {family} model: {e}")
+                log.error(f"❌ Failed to load {family} enhanced ML components: {e}")
+                # Clean up partial loads
+                if family in self.models:
+                    del self.models[family]
+                if family in self.scalers:
+                    del self.scalers[family]
+                if family in self.metadata:
+                    del self.metadata[family]
     
     def predict_with_confidence(
         self,
@@ -129,16 +152,40 @@ class EnhancedInferenceEngine:
                 endpoint, param, family, context
             )
             
+            # CRITICAL DEBUG: Log the exact feature count and structure
+            log.info(f"DEBUG: Feature extraction result - count: {len(features)}, keys: {list(features.keys())[:10]}...")
+            log.info(f"DEBUG: Feature values shape: {np.array(list(features.values())).shape}")
+            
+            # Debug logging for payload-specific features
+            if context and 'payload' in context:
+                payload = context['payload']
+                payload_features = [k for k, v in features.items() if k.startswith('payload_')]
+                log.info(f"Extracted {len(payload_features)} payload-specific features for payload '{payload[:50]}': {payload_features[:5]}...")
+            
             # Convert features to numpy array
             feature_vector = np.array(list(features.values())).reshape(1, -1)
+            log.info(f"DEBUG: Feature vector shape before scaler: {feature_vector.shape}")
             
             # Check if we have the model
             if family not in self.models:
+                log.warning(f"No model loaded for family {family}, using fallback")
                 return self._fallback_prediction(endpoint, param, family, context)
+            
+            log.info(f"Using trained {family} model for prediction")
             
             # Preprocess features
             if family in self.scalers:
-                feature_vector = self.scalers[family].transform(feature_vector)
+                log.info(f"DEBUG: About to apply scaler for {family}, feature vector shape: {feature_vector.shape}")
+                try:
+                    expected_features = self.scalers[family].n_features_in_ if hasattr(self.scalers[family], 'n_features_in_') else 'unknown'
+                    log.info(f"DEBUG: Scaler expects {expected_features} features, got {feature_vector.shape[1]}")
+                    feature_vector = self.scalers[family].transform(feature_vector)
+                    log.info(f"DEBUG: Scaler transformation successful, new shape: {feature_vector.shape}")
+                except Exception as scaler_error:
+                    log.error(f"DEBUG: Scaler transformation failed: {scaler_error}")
+                    log.error(f"DEBUG: Feature vector content: {feature_vector.flatten()[:10]}...")
+                    log.warning(f"Scaler failed for {family}, using fallback prediction")
+                    return self._fallback_prediction(endpoint, param, family, context)
             
             # Make prediction
             model = self.models[family]
@@ -146,24 +193,29 @@ class EnhancedInferenceEngine:
                 # Classification model
                 raw_proba = model.predict_proba(feature_vector)[0]
                 prediction = model.predict(feature_vector)[0]
+                log.info(f"DEBUG: Classification model prediction - raw_proba: {raw_proba}, prediction: {prediction}")
             else:
                 # Ranking model
                 raw_proba = model.predict(feature_vector)[0]
                 prediction = 1 if raw_proba > 0.5 else 0
+                log.info(f"DEBUG: Ranking model prediction - raw_proba: {raw_proba}, prediction: {prediction}")
             
             # Ensure raw_proba is a scalar
             if hasattr(raw_proba, '__len__') and len(raw_proba) > 1:
                 raw_proba = raw_proba[1] if len(raw_proba) == 2 else raw_proba[0]  # For binary classification
             raw_proba = float(raw_proba)
+            log.info(f"DEBUG: Final raw_proba after scalar conversion: {raw_proba}")
             
             # Calibrate probabilities if calibrator is fitted
             calibrated_proba = self._calibrate_probability(family, raw_proba)
+            log.info(f"DEBUG: Calibrated probability: {calibrated_proba}")
             
             # Estimate uncertainty
             uncertainty = self._estimate_uncertainty(family, raw_proba, calibrated_proba)
             
             # Calculate confidence
             confidence = self._calculate_confidence(calibrated_proba, uncertainty)
+            log.info(f"DEBUG: Final confidence score: {confidence} for family {family}")
             
             # Prepare result
             result = {
@@ -174,8 +226,11 @@ class EnhancedInferenceEngine:
                 "confidence": float(confidence),
                 "uncertainty": float(uncertainty),
                 "features_used": len(features),
-                "model_type": self.metadata.get(family, {}).get("model_type", "unknown"),
-                "calibration_method": self.calibrators[family].method if family in self.calibrators else "none"
+                "model_type": self.metadata.get(family, {}).get("model_type", "enhanced_ml"),
+                "calibration_method": self.calibrators[family].method if family in self.calibrators else "none",
+                "used_path": "enhanced_ml",  # Indicate this used real ML
+                "is_ml_prediction": True,    # Clear flag for frontend
+                "fallback_used": False       # Not a fallback
             }
             
             # Add feature importance if available
@@ -275,36 +330,42 @@ class EnhancedInferenceEngine:
         param_name = param.get('name', '').lower()
         param_value = str(param.get('value', '')).lower()
         
+        score = 0.0
+        
         if family == 'sqli':
             # Check for SQL injection indicators
             sql_indicators = ['id', 'user_id', 'product_id', 'order_id', 'search', 'query']
-            probability = 0.3 if any(ind in param_name for ind in sql_indicators) else 0.1
+            if any(indicator in param_name for indicator in sql_indicators):
+                score = 0.1  # Assign a low base score for potential SQLi params
             
         elif family == 'xss':
             # Check for XSS indicators
-            xss_indicators = ['content', 'body', 'text', 'message', 'comment', 'title', 'name']
-            probability = 0.4 if any(ind in param_name for ind in xss_indicators) else 0.1
+            xss_indicators = ['name', 'message', 'comment', 'redirect', 'url']
+            if any(indicator in param_name for indicator in xss_indicators):
+                score = 0.1  # Assign a low base score for potential XSS params
             
         elif family == 'redirect':
             # Check for redirect indicators
-            redirect_indicators = ['next', 'return', 'redirect', 'url', 'target', 'callback']
-            probability = 0.5 if any(ind in param_name for ind in redirect_indicators) else 0.1
+            redirect_indicators = ['next', 'url', 'target', 'redirect', 'return_to']
+            if any(indicator in param_name for indicator in redirect_indicators):
+                score = 0.1  # Assign a low base score for potential redirect params
             
         else:
-            probability = 0.1
-        
+            score = 0.0
+
         return {
             "family": family,
-            "prediction": 1 if probability > 0.3 else 0,
-            "raw_probability": probability,
-            "calibrated_probability": probability,
-            "confidence": 0.5,  # Medium confidence for fallback
-            "confidence": 0.5,  # Medium confidence for fallback
-            "uncertainty": 0.5,  # High uncertainty for fallback
+            "prediction": 0,
+            "raw_probability": score,
+            "calibrated_probability": score,
+            "confidence": 0.1,  # Low confidence for heuristics
+            "uncertainty": 0.9, # High uncertainty
             "features_used": 0,
-            "model_type": "fallback",
+            "model_type": "heuristic",
             "calibration_method": "none",
-            "fallback_used": True
+            "used_path": "heuristic",     # Indicate this is heuristic
+            "is_ml_prediction": False,    # Clear flag for frontend 
+            "fallback_used": True         # This is a fallback
         }
     
     def rank_payloads(
@@ -317,51 +378,70 @@ class EnhancedInferenceEngine:
         top_k: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """
-        Rank payload candidates with enhanced features and confidence.
-        
-        Args:
-            endpoint: Endpoint information
-            param: Parameter information
-            family: Vulnerability family
-            candidates: List of payload candidates
-            context: Additional context
-            top_k: Number of top candidates to return
-        
-        Returns:
-            List of ranked payloads with confidence scores
+        Ranks payload candidates using the actual ML model for each payload.
+        Each payload gets individual ML scoring based on its specific content and features.
         """
         if not candidates:
             return []
-        
-        # Get base prediction for the endpoint-parameter combination
-        base_prediction = self.predict_with_confidence(endpoint, param, family, context)
-        
-        # Rank candidates based on family-specific heuristics
+
         ranked_candidates = []
-        
         for i, payload in enumerate(candidates):
-            # Calculate payload-specific score
-            payload_score = self._calculate_payload_score(payload, family, param)
-            
-            # Combine with base prediction
-            combined_score = (base_prediction["calibrated_probability"] + payload_score) / 2
-            
-            # Calculate confidence for this specific payload
-            payload_confidence = self._calculate_payload_confidence(
-                payload, family, base_prediction, context
-            )
-            
-            ranked_candidates.append({
-                "payload": payload,
-                "rank": i + 1,
-                "score": float(combined_score),
-                "confidence": float(payload_confidence),
-                "family": family,
-                "base_prediction": base_prediction["calibrated_probability"],
-                "payload_score": float(payload_score)
-            })
+            try:
+                # 1. Create payload-specific parameter context
+                payload_param = param.copy()
+                payload_param['value'] = payload  # Use the actual payload as the value
+                
+                # 2. Create payload-specific context that includes the payload content
+                payload_context = (context or {}).copy()
+                payload_context['payload'] = payload
+                payload_context['payload_length'] = len(payload)
+                payload_context['payload_hash'] = hashlib.md5(payload.encode()).hexdigest()[:8]
+                
+                # 3. Get ML prediction for this specific payload with payload-specific features
+                payload_prediction = self.predict_with_confidence(
+                    endpoint, payload_param, family, payload_context
+                )
+                
+                # 4. Extract ML-driven scores from the prediction
+                ml_score = payload_prediction.get("calibrated_probability", 0.0)
+                confidence = payload_prediction.get("confidence", 0.5)
+                uncertainty = payload_prediction.get("uncertainty", 0.5)
+                
+                ranked_candidates.append({
+                    "payload": payload,
+                    "rank": i + 1,
+                    "score": float(ml_score),
+                    "confidence": float(confidence),
+                    "uncertainty": float(uncertainty),
+                    "family": family,
+                    "raw_probability": payload_prediction.get("raw_probability", 0.0),
+                    "calibrated_probability": float(ml_score),
+                    "model_type": payload_prediction.get("model_type", "enhanced"),
+                    "features_used": payload_prediction.get("features_used", 0),
+                    "fallback_used": payload_prediction.get("fallback_used", False),
+                    "payload_specific": True  # Flag indicating this score is payload-specific
+                })
+                
+            except Exception as e:
+                log.warning(f"Failed to get ML prediction for payload {payload[:50]}: {e}")
+                # Fallback to basic scoring if ML fails for this payload
+                fallback_score = self._calculate_payload_score(payload, family, param)
+                ranked_candidates.append({
+                    "payload": payload,
+                    "rank": i + 1,
+                    "score": float(fallback_score),
+                    "confidence": 0.3,  # Low confidence for fallback
+                    "uncertainty": 0.7,  # High uncertainty for fallback
+                    "family": family,
+                    "raw_probability": fallback_score,
+                    "calibrated_probability": float(fallback_score),
+                    "model_type": "fallback",
+                    "features_used": 0,
+                    "fallback_used": True,
+                    "payload_specific": False  # Flag indicating this score is heuristic
+                })
         
-        # Sort by combined score
+        # 5. Sort candidates based on the ML score (highest first)
         ranked_candidates.sort(key=lambda x: x["score"], reverse=True)
         
         # Apply top_k if specified

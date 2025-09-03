@@ -19,6 +19,11 @@ const cn = (...xs) => xs.filter(Boolean).join(" ");
 
 /** Stable key per result row (independent of pagination/order) */
 const rowKey = (row) => {
+  // For grouped results, use method + baseUrl + param as the key
+  if (row.baseUrl) {
+    return `${row.method}|${row.baseUrl}|${row.param}`;
+  }
+  // Fallback for non-grouped results
   const p = typeof row.payload === "string" ? row.payload.slice(0, 64) : "";
   return `${row.method}|${row.url}|${row.param}|${p}`;
 };
@@ -29,8 +34,8 @@ const isMLUsedPath = (usedPath = "") => {
   const s = parts.map((x) => String(x || "").toLowerCase()).join("|");
   if (!s) return false;
   if (/\b(heuristic|none)\b/.test(s)) return false;
-  // Check for ml:family patterns (e.g., ml:sqli, ml:xss)
-  if (/ml:[a-z]+/.test(s)) return true;
+  // Check for enhanced_ml and ml:family patterns (e.g., enhanced_ml, ml:sqli, ml:xss)
+  if (/enhanced_ml/.test(s) || /ml:[a-z]+/.test(s)) return true;
   return /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(s);
 };
 
@@ -291,17 +296,18 @@ function synthesizeRankerMetaFromSignals(signals = {}, famGuess = null, confiden
   const probs = { sqli: sqli / sum, xss: xss / sum, redirect: redirect / sum };
   const chosen = Object.entries(probs).sort((a, b) => b[1] - a[1])[0][0];
 
-  // Use more realistic scores instead of hardcoded 0.95/0.5
-  const baseScore = anyStrong ? 0.7 + (Math.random() * 0.2) : 0.3 + (Math.random() * 0.4);
-  const finalScore = Math.max(0.1, Math.min(0.9, baseScore));
+  // Use heuristic-based scoring instead of realistic random scores
+  // This makes it clear that we're not using ML
+  const heuristicScore = anyStrong ? 0.6 : 0.4;  // Fixed values, no randomness
 
   return {
     family_probs: probs,
     family_chosen: chosen,
-    ranker_score: finalScore,
-    model_ids: null,
+    ranker_score: "Heuristic",  // Use string to indicate non-ML scoring
+    model_ids: "Heuristic",
     _synthetic: true,
-    _note: "Synthetic fallback - enhanced ML data not available"
+    _note: "Heuristic fallback - enhanced ML data not available",
+    _heuristic_score: heuristicScore  // Store actual numeric value for sorting if needed
   };
 }
 
@@ -322,176 +328,289 @@ function extractFeatureDim(container = {}) {
 
 /** Normalize ranker meta into a consistent shape */
 function normalizeRankerMeta(mRaw = {}, oneRowRaw = {}, synthHints = null) {
+  // Prefer backend-provided ranker_meta, but search broadly for nested shapes
   const fm = mRaw || {};
   const row = oneRowRaw || {};
+  
 
-  // search across many likely containers, INCLUDING the original row
+
   const containers = [
-    fm,
-    fm.ranker_meta,
-    fm.ranker,
-    fm.ml_meta,
-    fm.meta,
-    row.ranker_meta,
-    row.ranker,
-    row.ml_meta,
-    row.meta,
-    row.ml,
-    row,
-  ].filter((c) => c && typeof c === "object");
+    row.ranker_meta, row.ranker, row.ml_meta, row.meta,
+    fm, fm.ranker_meta, fm.ranker, fm.ml_meta,
+  ].filter(Boolean);
 
-  let family_probs = {};
-  let family_chosen = null;
+  // Accumulators (prefer earliest hit in priority order below)
+  let used_path = null;
   let ranker_score = null;
+  let family_probs = null;
+  let family_chosen = null;
   let model_ids = null;
   let feature_dim_total = null;
+  let enhancedFlag = false;
+  let mlPredFlag = false;
+  let ranker_raw = null;
+
+  // Helper to set once
+  const setOnce = (cur, val) => (cur == null ? val : cur);
 
   for (const c of containers) {
-    // family probs under many names
+    if (!c || typeof c !== 'object') continue;
+
+    // used_path can appear nested (e.g., ranker_raw.used_path)
+    used_path = setOnce(used_path, c.used_path || c?.ranker?.used_path || c?.ranker_raw?.used_path);
+    
+    // Also check for used_path in the main row data
+    if (!used_path && oneRowRaw) {
+      used_path = setOnce(used_path, oneRowRaw.used_path || oneRowRaw?.ranker?.used_path || oneRowRaw?.ranker_raw?.used_path);
+    }
+
+    // capture any nested ranker_raw for enhanced ML
+    if (!ranker_raw && (c.ranker_raw || c?.ranker?.ranker_raw)) {
+      ranker_raw = c.ranker_raw || c?.ranker?.ranker_raw;
+    }
+    
+    // Also check for ranker_raw in the main row data
+    if (!ranker_raw && oneRowRaw) {
+      ranker_raw = oneRowRaw.ranker_raw || oneRowRaw?.ranker?.ranker_raw;
+    }
+
+    // Prefer enhanced ML's internal confidence if present
+    const scoreCands = [
+      c?.ranker_raw?.confidence,
+      c?.ranker?.ranker_raw?.confidence,
+      c.ranker_score,
+      c.score,
+    ];
+    for (const cand of scoreCands) {
+      if (hasNum(cand)) { ranker_score = setOnce(ranker_score, Number(cand)); break; }
+    }
+
+    // family probs via flexible extractor
     if (!isNonEmptyObj(family_probs)) {
-      const cand =
-        c.family_probs ||
-        c.probs ||
-        c.family_probabilities ||
-        c.probabilities ||
-        c.per_family ||
-        c.perFamily ||
-        null;
-      if (isNonEmptyObj(cand)) family_probs = cand;
+      const fp = extractFamilyProbs(c);
+      if (isNonEmptyObj(fp)) family_probs = fp;
+    }
+    
+    // Also check for family_probs in the main row data
+    if (!isNonEmptyObj(family_probs) && oneRowRaw) {
+      const fp = extractFamilyProbs(oneRowRaw);
+      if (isNonEmptyObj(fp)) family_probs = fp;
     }
 
-    if (!family_chosen) family_chosen = c.family_chosen || c.family || c.chosen_family || c.chosen;
-
-    if (!hasNum(ranker_score)) {
-      // Enhanced ML system fields first
-      ranker_score = hasNum(c.ranker_raw?.confidence) ? c.ranker_raw.confidence :
-                    hasNum(c.ranker_meta?.ranker_raw?.confidence) ? c.ranker_meta.ranker_raw.confidence :
-                    // Legacy fields
-                    hasNum(c.ranker_score) ? c.ranker_score : 
-                    hasNum(c.score) ? c.score : null;
+    // family chosen
+    family_chosen = setOnce(family_chosen, c.family_chosen || c.family || c.chosen || c.chosen_family);
+    
+    // Also check for family_chosen in the main row data
+    if (!family_chosen && oneRowRaw) {
+      family_chosen = setOnce(family_chosen, oneRowRaw.family_chosen || oneRowRaw.family || oneRowRaw.chosen || oneRowRaw.chosen_family);
     }
 
-    // accept arrays, objects, or strings for model identifiers
+    // model identifiers can be object/array/string
     if (!model_ids) {
       const mid = c.model_ids || c.models || c.model_id || c.model || c.model_name || null;
       if (
         (Array.isArray(mid) && mid.length > 0) ||
-        (mid && typeof mid === "object" && Object.keys(mid).length > 0) ||
-        (typeof mid === "string" && mid.trim())
+        (mid && typeof mid === 'object' && Object.keys(mid).length > 0) ||
+        (typeof mid === 'string' && mid.trim())
+      ) {
+        model_ids = mid;
+      }
+    }
+    
+    // Also check for model_ids in the main row data
+    if (!model_ids && oneRowRaw) {
+      const mid = oneRowRaw.model_ids || oneRowRaw.models || oneRowRaw.model_id || oneRowRaw.model || oneRowRaw.model_name || null;
+      if (
+        (Array.isArray(mid) && mid.length > 0) ||
+        (mid && typeof mid === 'object' && Object.keys(mid).length > 0) ||
+        (typeof mid === 'string' && mid.trim())
       ) {
         model_ids = mid;
       }
     }
 
+    // dims
     if (!hasNum(feature_dim_total)) {
-      const dims =
-        c.feature_dim_total ??
-        c.ranker_feature_dim_total ??
-        c.dim_total ??
-        c.total_dim ??
-        c.feat_dim ??
-        (c.ranker && c.ranker.feature_dim_total) ??
-        (c.ranker && c.ranker.dim_total) ??
-        (c.ml && c.ml.feature_dim_total);
-      if (hasNum(dims) && dims > 0) feature_dim_total = dims;
+      const dims = extractFeatureDim(c);
+      if (hasNum(dims)) feature_dim_total = dims;
     }
-  }
-
-  // normalize probs to {sqli,xss,redirect} and 0..1
-  const picked = {};
-  for (const [k, v] of Object.entries(family_probs || {})) {
-    const key = String(k).toLowerCase();
-    if (["sqli", "xss", "redirect"].includes(key)) picked[key] = Number(v) || 0;
-  }
-  const sum = Object.values(picked).reduce((a, b) => a + b, 0);
-  if (sum > 0) Object.keys(picked).forEach((k) => { picked[k] = picked[k] / sum; });
-
-  const meta = {
-    family_probs: picked,
-    family_chosen: family_chosen || null,
-    ranker_score: hasNum(ranker_score) ? ranker_score : null,
-    model_ids: model_ids || null,
-    feature_dim_total: hasNum(feature_dim_total) ? feature_dim_total : null,
-  };
-
-  // If still empty, synthesize a fallback so the column isn't blank
-  const needSynthetic =
-    !isNonEmptyObj(meta.family_probs) &&
-    !hasNum(meta.ranker_score) &&
-    !(meta.model_ids) &&
-    !hasNum(meta.feature_dim_total);
-
-  if (needSynthetic) {
-    // pull hints (our already-computed signals) if provided
-    const h = synthHints || {};
-    const synthetic = synthesizeRankerMetaFromSignals(
-      h.signals || {},
-      h.family || null,
-      h.confidence || 0
-    );
-    if (synthetic) return synthetic;
-  }
-  
-  // Enhanced ML detection - check if we're using enhanced ML
-  if (meta.ranker_score && meta.ranker_score > 0) {
-    // Check if this is from enhanced ML by looking for enhanced ML indicators
-    const isEnhancedML = 
-      row.ranker_meta?.used_path === "enhanced_ml" ||
-      row.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" ||
-      row.ml?.source === "enhanced_ml" ||
-      row.ranker_used_path === "enhanced_ml";
     
-    if (isEnhancedML) {
-      meta._enhanced_ml = true;
-      meta._ml_type = "Enhanced ML";
+    // Also check for feature dimensions in the main row data
+    if (!hasNum(feature_dim_total) && oneRowRaw) {
+      const dims = extractFeatureDim(oneRowRaw);
+      if (hasNum(dims)) feature_dim_total = dims;
     }
+
+    // flags
+    if (c.enhanced_ml === true) enhancedFlag = true;
+    if (c.is_ml_prediction === true) mlPredFlag = true;
+    
+    // Also check for flags in the main row data
+    if (oneRowRaw?.enhanced_ml === true) enhancedFlag = true;
+    if (oneRowRaw?.is_ml_prediction === true) mlPredFlag = true;
   }
-  return meta;
+
+  const isEnhancedML = String(used_path || '').toLowerCase() === 'enhanced_ml' || enhancedFlag || mlPredFlag;
+  
+  // Also check for ML indicators in the data structure
+  const hasMLIndicators = isEnhancedML || 
+                          String(used_path || '').toLowerCase().includes('ml') ||
+                          String(used_path || '').toLowerCase().includes('ranker') ||
+                          enhancedFlag || 
+                          mlPredFlag;
+
+  // Determine if we have enough to show real ML
+  // Be more lenient - if we have any ML score, show it
+  const hasModelIds = (
+    (Array.isArray(model_ids) && model_ids.length > 0) ||
+    (model_ids && typeof model_ids === 'object' && Object.keys(model_ids).length > 0) ||
+    (typeof model_ids === 'string' && model_ids.trim())
+  );
+  
+  // Look for ML scores in multiple places
+  const scoreNum = hasNum(ranker_raw?.confidence) ? Number(ranker_raw.confidence)
+                   : hasNum(ranker_raw?.ranker_score) ? Number(ranker_raw.ranker_score)
+                   : hasNum(ranker_score) ? Number(ranker_score)
+                   : hasNum(fm.ranker_score) ? Number(fm.ranker_score)
+                   : hasNum(row.ranker_score) ? Number(row.ranker_score)
+                   : hasNum(row?.ranker_meta?.ranker_score) ? Number(row.ranker_meta.ranker_score)
+                   : hasNum(row?.ranker_meta?.ranker_raw?.confidence) ? Number(row.ranker_meta.ranker_raw.confidence)
+                   : null;
+                   
+  // Show ML data if we have ANY of: ML score, enhanced ML flags, model IDs, or ranker_meta
+  // Be more lenient - if we have any ML-related data, show it
+  const hasRealMLData = hasNum(scoreNum) || hasMLIndicators || hasModelIds || 
+                        (oneRowRaw && (oneRowRaw.ranker_meta || oneRowRaw.ranker || oneRowRaw.ml_meta)) ||
+                        (mRaw && (mRaw.ranker_meta || mRaw.ranker || mRaw.ml_meta));
+  
+
+
+  if (hasRealMLData) {
+    // Normalize probs to sqli/xss/redirect and clamp to [0,1]
+    const pickedProbs = {};
+    for (const [k, v] of Object.entries(family_probs || {})) {
+      const key = String(k).toLowerCase();
+      if (["sqli", "xss", "redirect"].includes(key) && hasNum(v)) {
+        pickedProbs[key] = Math.max(0, Math.min(1, Number(v)));
+      }
+    }
+    if (!isNonEmptyObj(pickedProbs) && family_chosen) {
+      pickedProbs[String(family_chosen).toLowerCase()] = 1.0;
+    }
+
+    // Determine the actual ML type based on the data
+    let mlType = 'ML';
+    if (String(used_path || '').toLowerCase() === 'enhanced_ml') {
+      mlType = 'Enhanced ML';
+    } else if (String(used_path || '').toLowerCase().includes('ml')) {
+      mlType = 'ML';
+    } else if (String(used_path || '').toLowerCase().includes('ranker')) {
+      mlType = 'ML Ranker';
+    } else if (enhancedFlag) {
+      mlType = 'Enhanced ML';
+    } else if (mlPredFlag) {
+      mlType = 'ML Prediction';
+    } else if (model_ids && typeof model_ids === 'object' && model_ids.enhanced_ml) {
+      mlType = 'Enhanced ML';
+    } else if (model_ids && typeof model_ids === 'object' && model_ids.ranker_path) {
+      mlType = 'ML Ranker';
+    }
+    
+    return {
+      used_path: used_path || 'enhanced_ml',
+      ranker_score: scoreNum,
+      ranker_raw: ranker_raw || { confidence: scoreNum },
+      family_probs: pickedProbs,
+      family_chosen: family_chosen || (Object.keys(pickedProbs)[0] || null),
+      model_ids: model_ids || { enhanced_ml: true },
+      feature_dim_total: feature_dim_total || null,
+      enhanced_ml: isEnhancedML,
+      is_ml_prediction: true,
+      _ml_type: mlType,
+    };
+  }
+
+  // Synthesize heuristic fallback if we have signals
+  const syn = synthesizeRankerMetaFromSignals(
+    synthHints?.signals || {},
+    synthHints?.family || null,
+    Number(synthHints?.confidence || 0)
+  );
+  if (syn) {
+    return {
+      ...syn,
+      used_path: used_path || 'heuristic',
+      feature_dim_total: feature_dim_total || null,
+      _ml_type: 'Heuristic',
+    };
+  }
+
+  return {
+    used_path: used_path || 'heuristic',
+    ranker_score: 'Heuristic',
+    model_ids: 'Heuristic',
+    family_probs: {},
+    feature_dim_total: feature_dim_total || null,
+    _synthetic: true,
+    _note: 'Heuristic fallback - no ML data',
+    _ml_type: 'Heuristic',
+  };
 }
 
-
-/** ===== UI atoms ===== */
-const Badge = ({ children, tone = "default", title }) => {
+// Provide a simple Badge component used across the page
+const Badge = ({ tone = 'slate', title, children }) => {
   const map = {
-    default: "bg-gray-100 text-gray-900",
-    blue: "bg-blue-100 text-blue-900",
-    pink: "bg-pink-100 text-pink-900",
-    purple: "bg-purple-100 text-purple-900",
-    green: "bg-green-100 text-green-900",
-    amber: "bg-amber-100 text-amber-900",
-    red: "bg-red-100 text-red-900",
-    indigo: "bg-indigo-100 text-indigo-900",
-    slate: "bg-slate-200 text-slate-900",
-    teal: "bg-teal-100 text-teal-900",
+    indigo: 'bg-indigo-100 text-indigo-800',
+    slate: 'bg-slate-100 text-slate-800',
+    teal: 'bg-teal-100 text-teal-800',
+    purple: 'bg-purple-100 text-purple-800',
+    blue: 'bg-blue-100 text-blue-800',
+    pink: 'bg-pink-100 text-pink-800',
+    red: 'bg-red-100 text-red-800',
+    amber: 'bg-amber-100 text-amber-800',
+    green: 'bg-green-100 text-green-800',
   };
   return (
-    <span className={cn("px-2 py-0.5 rounded text-xs whitespace-nowrap", map[tone] || map.default)} title={title}>
+    <span className={cn('px-2 py-0.5 rounded text-xs whitespace-nowrap', map[tone] || map.slate)} title={title}>
       {children}
     </span>
   );
 };
 
-// Tailwind-safe tone mapping (no template class names)
-const TogglePill = ({ active, onClick, children, toneActive = "indigo" }) => {
+// Lightweight toggle pill button for filters/view switches
+const TogglePill = ({
+  active = false,
+  onClick = () => {},
+  children,
+  toneActive = 'blue',
+  toneInactive = 'gray',
+  title,
+}) => {
   const activeMap = {
-    indigo: "bg-indigo-50 border-indigo-200",
-    slate: "bg-slate-50 border-slate-200",
-    teal: "bg-teal-50 border-teal-200",
-    purple: "bg-purple-50 border-purple-200",
-    blue: "bg-blue-50 border-blue-200",
-    pink: "bg-pink-50 border-pink-200",
-    red: "bg-red-50 border-red-200",
-    amber: "bg-amber-50 border-amber-200",
-    green: "bg-green-50 border-green-200",
+    slate: 'bg-slate-700 text-white border-slate-700',
+    blue: 'bg-blue-600 text-white border-blue-600',
+    teal: 'bg-teal-600 text-white border-teal-600',
+    purple: 'bg-purple-600 text-white border-purple-600',
+    indigo: 'bg-indigo-600 text-white border-indigo-600',
+    gray: 'bg-gray-700 text-white border-gray-700',
   };
+  const inactiveMap = {
+    slate: 'bg-slate-100 text-slate-800 border-slate-200',
+    blue: 'bg-blue-100 text-blue-800 border-blue-200',
+    teal: 'bg-teal-100 text-teal-800 border-teal-200',
+    purple: 'bg-purple-100 text-purple-800 border-purple-200',
+    indigo: 'bg-indigo-100 text-indigo-800 border-indigo-200',
+    gray: 'bg-gray-100 text-gray-800 border-gray-200',
+  };
+  const cls = active
+    ? activeMap[toneActive] || activeMap.blue
+    : inactiveMap[toneInactive] || inactiveMap.gray;
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cn(
-        "px-2 py-1 rounded text-xs border transition",
-        active ? activeMap[toneActive] || activeMap.indigo : "bg-white hover:bg-gray-50"
-      )}
+      title={title}
+      className={cn('px-2 py-1 rounded-full text-xs border transition-colors', cls)}
     >
       {children}
     </button>
@@ -616,10 +735,9 @@ export default function CrawlAndFuzzPage() {
   // Engine selector (auto uses ML+curated on backend)
   const [engineMode, setEngineMode] = useState("auto"); // "auto" | "core" | "ffuf"
 
-  // Extra filters / view / pagination
+  // Extra filters / pagination
   const [methodFilter, setMethodFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
-  const [viewMode, setViewMode] = useState("table");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
 
@@ -962,22 +1080,24 @@ export default function CrawlAndFuzzPage() {
         one?.used_path ||
         null;
 
-      // normalize ranker meta (now we pass the FULL original row + hints)
-      const ranker_meta = normalizeRankerMeta(
-        one.ranker_meta || one.ranker || one.ml_meta || (one.ml && (one.ml.ranker_meta || one.ml.ranker)) || {},
-        one,
-        {
-          signals: {
-            sql_error: sqlErr,
-            boolean_sqli: booleanSqli,
-            time_sqli: timeSqli,
-            xss_reflected: xssReflected,
-            external_redirect: external,
-          },
-          family: fam || null,
-          confidence,
-        }
-      );
+        // normalize ranker meta (now we pass the FULL original row + hints)
+  const ranker_meta = normalizeRankerMeta(
+    one.ranker_meta || one.ranker || one.ml_meta || (one.ml && (one.ml.ranker_meta || one.ml.ranker)) || {},
+    one,
+    {
+      signals: {
+        sql_error: sqlErr,
+        boolean_sqli: booleanSqli,
+        time_sqli: timeSqli,
+        xss_reflected: xssReflected,
+        external_redirect: external,
+      },
+      family: fam || null,
+      confidence,
+    }
+  );
+  
+
 
       // infer origin again using what we learned
       const baseOrigin = deriveOrigin({ ...one, ranker_meta: one.ranker_meta || one.ranker || {}, ml: one.ml || {} });
@@ -1120,16 +1240,76 @@ export default function CrawlAndFuzzPage() {
     sortBy, originFilter, strongOnly, filter, methodFilter, severityFilter
   ]);
 
+  // Group results by endpoint + parameter to show payloads together
+  const groupedResults = useMemo(() => {
+    const groups = {};
+    
+    filteredResults.forEach(result => {
+      // Create a unique key for endpoint + parameter combination
+      const groupKey = `${result.method}:${result.url.split('?')[0]}:${result.param}`;
+      
+      if (!groups[groupKey]) {
+        groups[groupKey] = {
+          method: result.method,
+          baseUrl: result.url.split('?')[0],
+          param: result.param,
+          family: result.family,
+          severity: result.severity,
+          confidence: result.confidence,
+          origin: result.origin,
+          signals: result.signals,
+          // Store all payloads for this endpoint+param combination
+          payloads: []
+        };
+      }
+      
+      // Add this payload to the group
+      groups[groupKey].payloads.push({
+        payload: result.payload,
+        ranker_score: (() => {
+          // Try multiple sources for ML score in order of preference
+          const sources = [
+            result.ranker_meta?.confidence,
+            result.ranker_meta?.ranker_score,
+            result.ranker_meta?.ranker_raw?.confidence,
+            result.ranker_meta?.ranker_raw?.ranker_score,
+            result.ranker_score,
+            result.confidence
+          ];
+          
+          // Find first valid score
+          for (const score of sources) {
+            if (typeof score === 'number' && score >= 0 && score <= 1) {
+              return score;
+            }
+          }
+          return null;
+        })(),
+        family_probs: result.ranker_meta?.family_probs,
+        used_path: result.ranker_meta?.used_path,
+        ranker_meta: result.ranker_meta,
+        // Include other result data for details
+        originalResult: result
+      });
+    });
+    
+    // Convert to array and sort payloads by ML score (descending)
+    return Object.values(groups).map(group => ({
+      ...group,
+      payloads: group.payloads.sort((a, b) => (b.ranker_score || 0) - (a.ranker_score || 0))
+    }));
+  }, [filteredResults]);
+
   // Pagination
-  const totalPages = Math.max(1, Math.ceil(filteredResults.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(groupedResults.length / pageSize));
   const pageClamped = Math.min(page, totalPages);
   const start = (pageClamped - 1) * pageSize;
-  const end = Math.min(filteredResults.length, start + pageSize);
-  const pageRows = filteredResults.slice(start, end);
+  const end = Math.min(groupedResults.length, start + pageSize);
+  const pageRows = groupedResults.slice(start, end);
 
   // Summary tiles (based on visible/filtered results)
   const summary = useMemo(() => {
-    const src = filteredResults;
+    const src = groupedResults;
     const total = src.length;
     const famCounts = { sqli: 0, xss: 0, redirect: 0 };
     const signals = { sql: 0, xss: 0, redir: 0 };
@@ -1151,12 +1331,11 @@ export default function CrawlAndFuzzPage() {
 
       if ((r.origin || "curated") === "ml") {
         mlCount++;
-        // Check for enhanced ML scores first
-        if (typeof r?.ranker_meta?.ranker_raw?.confidence === "number") {
-          avgRankerScore += r.ranker_meta.ranker_raw.confidence;
-          mlWithScore++;
-        } else if (typeof r?.ranker_meta?.ranker_score === "number") {
-          avgRankerScore += r.ranker_meta.ranker_score;
+        // Check for enhanced ML scores from payloads
+        const mlPayloads = r.payloads.filter(p => p.ranker_score);
+        if (mlPayloads.length > 0) {
+          const avgScore = mlPayloads.reduce((sum, p) => sum + (p.ranker_score || 0), 0) / mlPayloads.length;
+          avgRankerScore += avgScore;
           mlWithScore++;
         }
       } else {
@@ -1170,13 +1349,29 @@ export default function CrawlAndFuzzPage() {
     const avgR = mlWithScore ? avgRankerScore / mlWithScore : 0;
 
     return { total, famCounts, signals, hi, mlCount, curatedCount, confBuckets, avgRankerScore: avgR };
-  }, [filteredResults]);
+  }, [groupedResults]);
 
   // Export helpers
   const copyJson = async () => {
     try {
-      await navigator.clipboard.writeText(JSON.stringify(filteredResults, null, 2));
-      toast.success("Copied filtered results JSON");
+      // Create a simplified version for copying
+      const simplifiedResults = groupedResults.map(r => ({
+        method: r.method,
+        endpoint: r.baseUrl + "?" + r.param,
+        parameter: r.param,
+        vuln_family: r.family,
+        payloads: r.payloads.map(p => ({
+          payload: p.payload,
+          ml_score: p.ranker_score,
+          ml_type: p.used_path
+        })),
+        payload_score: r.confidence,
+        payload_origin: r.origin,
+        severity: r.severity,
+        signals: r.signals
+      }));
+      await navigator.clipboard.writeText(JSON.stringify(simplifiedResults, null, 2));
+      toast.success("Copied grouped results JSON");
     } catch {
       toast.error("Copy failed");
     }
@@ -1184,25 +1379,21 @@ export default function CrawlAndFuzzPage() {
   const downloadCsv = () => {
     const rows = [
       [
-        "method","url","param","family","origin","ranker_score","ranker_family","feature_dim","severity","confidence",
-        "status_changed","len_delta","ms_delta","sql_error","boolean_sqli","time_sqli","xss_reflected",
-        "external_redirect","location","payload",
+        "method","endpoint","parameter","vuln_family","payload_count","top_ml_score","ml_type",
+        "payload_score","payload_origin","severity","sql_error","boolean_sqli","time_sqli","xss_reflected","external_redirect",
       ],
-      ...filteredResults.map((r) => [
-        r.method, r.url, r.param, r.family || "", r.origin || "",
-        r?.ranker_meta?.ranker_raw?.confidence ?? r?.ranker_meta?.ranker_score ?? "", r?.ranker_meta?.family_chosen ?? "",
-        r?.ranker_meta?.feature_dim_total ?? "",
-        r.severity || "", r.confidence,
-        r?.delta?.status_changed ? "1" : "0",
-        r?.delta?.len_delta ?? "",
-        r?.delta?.ms_delta ?? "",
+      ...groupedResults.map((r) => [
+        r.method, r.baseUrl + "?" + r.param, r.param || "", r.family || "", 
+        r.payloads.length,
+        r.payloads[0]?.ranker_score ? (r.payloads[0].ranker_score * 100).toFixed(1) + "%" : "",
+        r.payloads[0]?.used_path || "",
+        r.confidence, r.origin || "",
+        r.severity || "",
         r.signals.sql_error ? "1" : "0",
         r.signals.boolean_sqli ? "1" : "0",
         r.signals.time_sqli ? "1" : "0",
         r.signals.xss_reflected ? "1" : "0",
         r.signals.external_redirect ? "1" : "0",
-        r.signals.location || "",
-        (r.payload || "").replace(/\n/g, "\\n"),
       ]),
     ];
     const csv = rows.map(row =>
@@ -1215,7 +1406,7 @@ export default function CrawlAndFuzzPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `fuzz_results_filtered.csv`;
+          a.download = `grouped_fuzzing_results_${new Date().toISOString().split('T')[0]}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -1397,10 +1588,7 @@ export default function CrawlAndFuzzPage() {
           <button className="border px-3 py-2 rounded text-sm" onClick={copyJson} title="Copy filtered JSON" type="button">Copy JSON</button>
           <button className="border px-3 py-2 rounded text-sm" onClick={downloadCsv} title="Download filtered CSV" type="button">CSV</button>
 
-          {/* Cards toggle */}
-          <TogglePill active={viewMode === "cards"} onClick={() => setViewMode(v => v === "cards" ? "table" : "cards")} toneActive="teal">
-            {viewMode === "cards" ? "Cards" : "Table"}
-          </TogglePill>
+
 
           {/* Page size */}
           <div className="flex items-center gap-1">
@@ -1443,7 +1631,7 @@ export default function CrawlAndFuzzPage() {
                     <div className="flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-mono text-sm">{(ep.method || "").toUpperCase()}</span>
-                        <a href={ep.url} target="_blank" rel="noreferrer" className="font-mono text-sm break-words [overflow-wrap:anywhere] underline decoration-dotted max-w-full">
+                        <a href={ep.url} target="_blank" rel="noreferrer" className="font-mono text-sm break-words underline decoration-dotted max-w-full">
                           {ep.url}
                         </a>
                       </div>
@@ -1490,7 +1678,7 @@ export default function CrawlAndFuzzPage() {
             ) : (
               captured.map((r, i) => (
                 <div key={i} className="p-3 border-b">
-                  <div className="font-mono text-sm break-words [overflow-wrap:anywhere]">
+                  <div className="font-mono text-sm break-words">
                     {(r.method || "").toUpperCase()} {r.url}
                   </div>
                   {r.body_parsed ? (
@@ -1557,264 +1745,306 @@ export default function CrawlAndFuzzPage() {
         </section>
       )}
 
-      {/* Fuzz summary */}
+      {/* Actual Results Table/Cards */}
       {results.length > 0 && (
-        <section className="space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold">Fuzz Results</h2>
-            <div className="text-xs text-gray-500">
-              Showing <span className="font-mono">{start+1}</span>–<span className="font-mono">{end}</span> of <span className="font-mono">{filteredResults.length}</span>
+        <section className="space-y-4">
+                      <div className="flex items-center gap-3">
+              <h2 className="text-xl font-bold text-gray-800">🔍 Fuzzing Results (Grouped by Endpoint)</h2>
+              <div className="text-sm text-gray-600 bg-gray-100 px-3 py-1 rounded-full">
+                {groupedResults.length} endpoints, {groupedResults.reduce((sum, r) => sum + r.payloads.length, 0)} total payloads
+              </div>
+            </div>
+          
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between">
+              <div className="text-sm text-gray-600">
+                Page {pageClamped} of {totalPages} · Showing {start + 1}-{end} of {filteredResults.length}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={pageClamped <= 1}
+                  type="button"
+                >
+                  Previous
+                </button>
+                <span className="px-3 py-1">{pageClamped}</span>
+                <button
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={pageClamped >= totalPages}
+                  type="button"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ML Debug Section - Show raw ML data */}
+          <div className="border rounded-lg bg-yellow-50 p-4 mb-4">
+            <h3 className="text-lg font-bold text-yellow-800 mb-3">🔍 ML Debug Section</h3>
+            
+            {/* Debug Info */}
+            <div className="bg-white p-3 rounded border mb-4">
+              <div className="text-sm font-semibold text-gray-700 mb-2">Debug Info:</div>
+              <div className="text-xs text-gray-600 space-y-1">
+                <div>Total Endpoints: {groupedResults.length}</div>
+                <div>Total Payloads: {groupedResults.reduce((sum, r) => sum + r.payloads.length, 0)}</div>
+                <div>ML Origin Results: {groupedResults.filter(r => r.origin === 'ml').length}</div>
+                <div>Payloads with ML scores: {groupedResults.reduce((sum, r) => sum + r.payloads.filter(p => p.ranker_score).length, 0)}</div>
+                <div>Payloads with family_probs: {groupedResults.reduce((sum, r) => sum + r.payloads.filter(p => p.family_probs).length, 0)}</div>
+                <div>Total ranker_meta objects: {groupedResults.reduce((sum, r) => sum + r.payloads.filter(p => p.ranker_meta).length, 0)}</div>
+                <div>ML scores found in: {(() => {
+                  const sources = new Set();
+                  groupedResults.forEach(r => {
+                    r.payloads.forEach(p => {
+                      if (p.ranker_meta) {
+                        if (p.ranker_meta.confidence !== undefined) sources.add('confidence');
+                        if (p.ranker_meta.ranker_score !== undefined) sources.add('ranker_score');
+                        if (p.ranker_meta.ranker_raw?.confidence !== undefined) sources.add('ranker_raw.confidence');
+                      }
+                    });
+                  });
+                  return Array.from(sources).join(', ') || 'none';
+                })()}</div>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {groupedResults.slice(0, 6).map((r, i) => {
+                // Debug logging
+                if (i === 0) {
+                  console.log('🔍 First grouped result ML data:', {
+                    origin: r.origin,
+                    payloads_count: r.payloads.length,
+                    first_payload: r.payloads[0],
+                    has_ranker_meta: r.payloads.some(p => !!p.ranker_meta),
+                    ranker_scores: r.payloads.map(p => p.ranker_score),
+                    ranker_meta_keys: r.payloads[0]?.ranker_meta ? Object.keys(r.payloads[0].ranker_meta) : [],
+                    raw_ranker_meta: r.payloads[0]?.ranker_meta
+                  });
+                }
+                return (
+                <div key={i} className="bg-white p-3 rounded border">
+                  <div className="text-xs font-mono text-gray-600 mb-2">
+                    {r.method} {r.baseUrl}?{r.param}
+                  </div>
+                  
+                  {/* Group Summary */}
+                  <div className="bg-blue-50 p-2 rounded border mb-2">
+                    <div className="text-xs font-semibold text-blue-800">Group Summary:</div>
+                    <div className="text-xs text-blue-700">
+                      {r.payloads.length} payloads, {r.payloads.filter(p => p.ranker_score).length} with ML scores
+                    </div>
+                  </div>
+                  
+                  {/* Payloads ML Data */}
+                  <div className="space-y-2 text-xs">
+                    {r.payloads.slice(0, 3).map((payload, idx) => (
+                      <div key={idx} className="bg-gray-100 p-2 rounded">
+                        <div className="font-semibold text-gray-700">Payload {idx + 1}:</div>
+                        <div className="text-gray-600 mb-1">
+                          {payload.payload ? payload.payload.slice(0, 30) + "..." : "—"}
+                        </div>
+                        <div className="text-gray-600">
+                          ML Score: {payload.ranker_score ? (payload.ranker_score * 100).toFixed(1) + "%" : "None"}
+                        </div>
+                      </div>
+                    ))}
+                    {r.payloads.length > 3 && (
+                      <div className="text-xs text-gray-500 text-center">
+                        +{r.payloads.length - 3} more payloads
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
             </div>
           </div>
 
-          {/* Table view */}
-          {viewMode === "table" && (
-            <div className="space-y-3">
-              {/* Table Legend */}
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
-                <div className="font-semibold text-blue-800 mb-2">📊 Table Legend:</div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
-                  <div>
-                    <span className="font-semibold">Severity:</span>
-                    <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className="w-3 h-3 bg-red-500 rounded"></span>
-                      <span>High</span>
-                      <span className="w-3 h-3 bg-amber-500 rounded"></span>
-                      <span>Medium</span>
-                      <span className="w-3 h-3 bg-green-500 rounded"></span>
-                      <span>Low</span>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="font-semibold">Source:</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="px-2 py-1 bg-indigo-100 text-indigo-800 rounded text-[10px]">ML</span>
-                      <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-[10px]">Curated</span>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="font-semibold">Vuln Types:</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-[10px]">SQLi</span>
-                      <span className="px-2 py-1 bg-pink-100 text-pink-800 rounded text-[10px]">XSS</span>
-                      <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-[10px]">Redirect</span>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="font-semibold">ML Types:</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-[10px]">Enhanced ML</span>
-                      <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-[10px]">ML</span>
-                      <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-[10px]">Heuristic</span>
-                    </div>
-                  </div>
+          {/* Redesigned Results Table - One endpoint + parameter per row */}
+          <div className="border rounded-lg overflow-hidden bg-white">
+            {/* Summary Row */}
+            <div className="bg-blue-50 border-b border-blue-200 p-3">
+              <div className="flex items-center justify-between text-sm">
+                <div className="flex items-center gap-4">
+                  <span className="text-blue-800 font-medium">📊 Summary:</span>
+                  <span className="text-blue-700">Endpoints: {groupedResults.length}</span>
+                  <span className="text-blue-700">Total Payloads: {groupedResults.reduce((sum, r) => sum + r.payloads.length, 0)}</span>
+                  <span className="text-blue-700">ML Results: {groupedResults.filter(r => r.origin === 'ml').length}</span>
+                  <span className="text-blue-700">High Confidence: {groupedResults.filter(r => r.confidence >= 0.8).length}</span>
+                </div>
+                <div className="text-blue-700 font-medium">
+                  {groupedResults.length} unique endpoints
                 </div>
               </div>
-              
-              <div className="overflow-x-auto border rounded relative">
-                <table className="min-w-full text-sm">
-                <thead className="bg-gray-50 sticky top-0 z-30">
-                  <tr className="text-left">
-                    <th className="p-2 w-20 sticky left-0 z-20 bg-gray-50"><SortHeader fieldKey="severity" label="Severity" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-24 sticky left-20 z-20 bg-gray-50"><SortHeader fieldKey="conf" label="Confidence" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-20 whitespace-nowrap"><SortHeader fieldKey="origin" label="Source" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-24"><SortHeader fieldKey="family" label="Vuln Type" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-16"><SortHeader fieldKey="method" label="Method" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 min-w-[300px] max-w-[400px]"><SortHeader fieldKey="url" label="Target URL" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-24"><SortHeader fieldKey="param" label="Parameter" current={sortBy} set={setSortBy} /></th>
-                    <th className="p-2 w-32" title="Delta score - change in response">Δ Score</th>
-                    <th className="p-2 w-48" title="Detection signals (SQL errors, XSS reflection, etc.)">Signals</th>
-                    <th className="p-2 w-40" title="ML ranker confidence and family probabilities">ML Ranker</th>
-                    <th className="p-2 min-w-[150px] max-w-[200px]">Payload</th>
-                    <th className="p-2 w-20">Actions</th>
+            </div>
+            
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gradient-to-r from-gray-50 to-blue-50 border-b border-gray-200">
+                  <tr>
+                    <th className="text-left p-3 font-semibold text-gray-700">
+                      <SortHeader fieldKey="method" label="🔒 Method" current={sortBy} set={setSortBy} />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700">
+                      <SortHeader fieldKey="url" label="🌐 Endpoint + Parameter" current={sortBy} set={setSortBy} />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700">
+                      <SortHeader fieldKey="family" label="⚠️ Vulnerability Family" current={sortBy} set={setSortBy} />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700">
+                      <SortHeader fieldKey="conf" label="🎯 All Payloads + ML Scores" current={sortBy} set={setSortBy} />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700">
+                      <SortHeader fieldKey="origin" label="📊 Origin & Confidence" current={sortBy} set={setSortBy} />
+                    </th>
+                    <th className="text-left p-3 font-semibold text-gray-700">🔍 Details</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {pageRows.map((row) => {
-                    const k = rowKey(row);
-                    const isOpen = expanded.has(k);
-                    const chosen = row?.ranker_meta?.family_chosen || null;
-
-                    const rowBg =
-                      row.severity === "high" ? "bg-red-50" :
-                      row.severity === "med" ? "bg-amber-50" :
-                      row.origin === "ml" ? "bg-indigo-50/30" : "";
-
-                    // derive ML vs heuristic label for ranker cell
-                    const usedPath = String(row?.ranker_used_path || "").toLowerCase();
-                    const mlSource = String(row?.ml?.source || "").toLowerCase();
-                    const rankerMetaUsedPath = String(row?.ranker_meta?.used_path || "").toLowerCase();
-
-                    // accept arrays/objects/strings for model ids
-                    const hasModelIds =
-                      !!row?.ranker_meta?.model_ids &&
-                      (
-                        (Array.isArray(row.ranker_meta.model_ids) && row.ranker_meta.model_ids.length > 0) ||
-                        (typeof row.ranker_meta.model_ids === "object" && Object.keys(row.ranker_meta.model_ids).length > 0) ||
-                        (typeof row.ranker_meta.model_ids === "string" && row.ranker_meta.model_ids.trim())
-                      );
-
-                    // Debug logging for ML detection
-                    console.log("Debug ML detection:", {
-                      usedPath: row?.ranker_used_path,
-                      mlSource: row?.ml?.source,
-                      rankerMetaUsedPath: row?.ranker_meta?.used_path,
-                      hasModelIds,
-                      familyProbs: row?.ranker_meta?.family_probs,
-                      rankerScore: row?.ranker_meta?.ranker_score,
-                      featureDim: row?.ranker_meta?.feature_dim_total
-                    });
-                    
-                    const rankerIsML =
-                      isMLUsedPath(usedPath) ||
-                      isMLUsedPath(mlSource) ||
-                      isMLUsedPath(rankerMetaUsedPath) ||
-                      hasModelIds ||
-                      // Enhanced ML system check
-                      row?.ranker_meta?.used_path === "enhanced_ml" ||
-                      row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" ||
-                      // If we have family probabilities and ranker score, this is ML
-                      (!!row?.ranker_meta?.family_probs && 
-                       typeof row?.ranker_meta?.ranker_score === "number" &&
-                       row?.ranker_meta?.ranker_score > 0) ||
-                      // Fallback: if we have any ML-like data, consider it ML
-                      (!!row?.ranker_meta && !row?.ranker_meta._synthetic && (
-                        isNonEmptyObj(row.ranker_meta.family_probs) ||
-                        hasNum(row.ranker_meta.ranker_score) ||
-                        hasNum(row.ranker_meta.feature_dim_total)
-                      ));
-                    
-                    console.log("rankerIsML result:", rankerIsML);
-                    console.log("Enhanced ML check:", {
-                      usedPath: row?.ranker_meta?.used_path,
-                      rankerRawPath: row?.ranker_meta?.ranker_raw?.used_path,
-                      rankerUsedPath: row?.ranker_used_path,
-                      mlSource: row?.ml?.source,
-                      rankerScore: row?.ranker_meta?.ranker_score,
-                      rankerRawConfidence: row?.ranker_meta?.ranker_raw?.confidence
-                    });
-
-                    const rankerScore =
-                      // Enhanced ML system fields first - check multiple enhanced ML paths
-                      typeof row?.ranker_meta?.ranker_raw?.confidence === "number"
-                        ? row.ranker_meta.ranker_raw.confidence.toFixed(3)
-                        : typeof row?.ranker_meta?.ranker_score === "number"
-                        ? row.ranker_meta.ranker_score.toFixed(3)
-                        : typeof row?.ranker_score === "number"
-                        ? row.ranker_score.toFixed(3)
-                        : "—";
-
-                    const featureDim =
-                      hasNum(row?.ranker_meta?.feature_dim_total) ? row.ranker_meta.feature_dim_total : null;
-
+                  {pageRows.map((r, i) => {
+                    const isExpanded = expanded.has(rowKey(r));
                     return (
-                      <tr key={k} className={cn("border-t align-top hover:bg-gray-50", rowBg)}>
-                        {/* sticky cols */}
-                        <td className="p-2 w-20 sticky left-0 z-10" style={{ backgroundColor: 'inherit' }}><SeverityBadge sev={row.severity} /></td>
-                        <td className="p-2 w-24 sticky left-20 z-10" style={{ backgroundColor: 'inherit' }}><ConfMeter v={Number(row.confidence || 0)} /></td>
-
-                        <td className="p-2 w-20 whitespace-nowrap" data-origin={row.origin}>
-                          <div className="inline-block min-w-[48px]">
-                            <OriginBadge origin={row.origin} />
-                          </div>
+                      <tr key={rowKey(r)} className={cn(
+                        "border-b hover:bg-gray-50 transition-colors",
+                        compact ? "text-xs" : "",
+                        i % 2 === 0 ? "bg-white" : "bg-gray-50"
+                      )}>
+                        {/* Method */}
+                        <td className="p-3">
+                          <span className={cn(
+                            "font-mono px-2 py-1 rounded text-xs font-semibold border shadow-sm",
+                            r.method === "GET" ? "bg-green-100 text-green-800 border-green-200" :
+                            r.method === "POST" ? "bg-blue-100 text-blue-800 border-blue-200" :
+                            r.method === "PUT" ? "bg-yellow-100 text-yellow-800 border-yellow-200" :
+                            r.method === "DELETE" ? "bg-red-100 text-red-800 border-red-200" :
+                            "bg-gray-100 text-gray-800 border-gray-200"
+                          )} title={`HTTP ${r.method} method`}>
+                            {r.method}
+                          </span>
                         </td>
-                        <td className="p-2 w-24">
-                          <div className="flex items-center gap-1 flex-wrap">
-                            <Badge tone={row.family === "xss" ? "pink" : row.family === "redirect" ? "purple" : "blue"}>{row.family || "sqli"}</Badge>
-                            {chosen && <Badge tone="indigo" title="Family chosen by ranker" className="text-[10px]">chosen: {chosen}</Badge>}
-                          </div>
-                        </td>
-                        <td className="p-2 w-16 font-mono">{row.method}</td>
-                        <td className="p-2 font-mono whitespace-normal break-words [overflow-wrap:anywhere] max-w-[400px]">
-                          <a href={row.url} target="_blank" rel="noreferrer" className="underline decoration-dotted">
-                            {row.url}
-                          </a>
-                        </td>
-                        <td className="p-2 w-24 font-mono truncate" title={row.param}>{row.param}</td>
-                        <td className="p-2 w-32"><DeltaCell d={row.delta} /></td>
-
-                        <td className="p-2 w-48">
+                        
+                        {/* Endpoint + Parameter */}
+                        <td className="p-3">
                           <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-1">
-                              {row.signals.sql_error && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">SQL Error</Badge>}
-                              {row.signals.boolean_sqli && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">Boolean</Badge>}
-                              {row.signals.time_sqli && <Badge tone="blue" className="text-[10px] px-1.5 py-0.5">Time</Badge>}
-                              {row.signals.xss_reflected && <Badge tone="pink" className="text-[10px] px-1.5 py-0.5">XSS Reflected</Badge>}
-                              {row.signals.external_redirect && <Badge tone="purple" className="text-[10px] px-1.5 py-0.5">External</Badge>}
-                              {row?.signals?.location_host && <Badge tone="pink" className="text-[10px] px-1.5 py-0.5">{row.signals.location_host}</Badge>}
+                            <div className="font-mono text-blue-600 break-all max-w-xs">
+                              {r.baseUrl}?{r.param}
                             </div>
-                            {Object.keys(row.signals || {}).filter(k => row.signals[k] === true).length === 0 && (
-                              <span className="text-[10px] text-gray-400">No signals</span>
-                            )}
+                            <div className="text-xs text-gray-600">
+                              <span className="font-medium">Param:</span>{" "}
+                              <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">
+                                {r.param || "—"}
+                              </span>
+                            </div>
                           </div>
                         </td>
-
-                        <td className="p-2 w-40" data-ranker={rankerIsML ? "ML" : row?.ranker_meta?._synthetic ? "heuristic" : ""}>
-                          <div className="space-y-1">
-                            {row?.ranker_meta?.family_probs ? (
-                              <div>
-                                <div className="text-[10px] text-gray-600 font-semibold mb-1">Family Probabilities:</div>
-                                <FamilyProbsBar probs={row.ranker_meta.family_probs} />
+                        
+                        {/* Vulnerability Family */}
+                        <td className="p-3">
+                          <div className="space-y-2">
+                            {/* Primary Family Badge */}
+                            <div className="flex items-center gap-2">
+                              <FamilyBadge fam={r.family} />
+                              <SeverityBadge sev={r.severity} />
+                            </div>
+                            
+                            {/* ML Family Probabilities - Simplified */}
+                            {r.payloads[0]?.family_probs && Object.keys(r.payloads[0].family_probs).length > 0 ? (
+                              <div className="bg-blue-50 p-2 rounded border">
+                                <div className="text-xs font-semibold text-blue-800 mb-1">ML Confidence:</div>
+                                {Object.entries(r.payloads[0].family_probs)
+                                  .sort(([,a], [,b]) => b - a)
+                                  .slice(0, 1) // Show only top prediction
+                                  .map(([family, prob]) => (
+                                    <div key={family} className="text-xs">
+                                      <span className="font-medium text-blue-700">
+                                        {family.toUpperCase()}: {(prob * 100).toFixed(1)}%
+                                      </span>
+                                    </div>
+                                  ))}
                               </div>
-                            ) : (
-                              <span className="text-gray-400 text-[10px]">No probabilities</span>
-                            )}
-                            <div className="text-[10px] space-y-1">
-                              <div className="flex items-center justify-between">
-                                <span className="text-gray-600">Score:</span>
-                                <span className="font-mono font-semibold">{rankerScore}</span>
-                              </div>
-                              {featureDim && (
-                                <div className="flex items-center justify-between">
-                                  <span className="text-gray-600">Features:</span>
-                                  <span className="font-mono">{featureDim}</span>
+                            ) : null}
+                          </div>
+                        </td>
+                        
+                        {/* Payload + ML Score */}
+                        <td className="p-3">
+                          <div className="space-y-2">
+                            <div className="text-xs font-semibold text-gray-700 mb-2">
+                              {r.payloads.length} Payload{r.payloads.length !== 1 ? 's' : ''} Tested
+                            </div>
+                            
+                            {/* Payloads List */}
+                            <div className="space-y-2 max-h-32 overflow-y-auto">
+                              {r.payloads.map((payload, idx) => (
+                                <div key={idx} className="bg-gray-50 p-2 rounded border">
+                                  {/* Payload Text */}
+                                  <div className="text-xs font-semibold text-gray-700 mb-1">Payload {idx + 1}:</div>
+                                  <div className="font-mono text-xs text-gray-800 break-all max-w-xs mb-2">
+                                    {payload.payload && payload.payload.length > 25 
+                                      ? payload.payload.slice(0, 25) + "..." 
+                                      : payload.payload || "—"}
+                                  </div>
+                                  
+                                  {/* ML Score */}
+                                  {payload.ranker_score ? (
+                                    <div className="bg-green-50 p-1.5 rounded border">
+                                      <div className="text-xs font-semibold text-green-800">ML Score:</div>
+                                      <div className="text-sm font-bold text-green-700">
+                                        {(payload.ranker_score * 100).toFixed(1)}%
+                                      </div>
+                                      <div className="text-xs text-green-600">
+                                        {payload.used_path === 'enhanced_ml' ? 'Enhanced ML' : 'ML'}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="bg-gray-50 p-1.5 rounded border">
+                                      <div className="text-xs text-gray-500">No ML Score</div>
+                                    </div>
+                                  )}
                                 </div>
-                              )}
-                              <div className="text-center">
-                                <span className={`text-[9px] px-1.5 py-0.5 rounded ${
-                                  row?.ranker_meta?.used_path === "enhanced_ml" || 
-                                  row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" || 
-                                  row?.ranker_used_path === "enhanced_ml" || 
-                                  row?.ml?.source === "enhanced_ml" 
-                                    ? "bg-green-100 text-green-800" 
-                                    : rankerIsML 
-                                    ? "bg-blue-100 text-blue-800" 
-                                    : "bg-gray-100 text-gray-600"
-                                }`}>
-                                  {row?.ranker_meta?.used_path === "enhanced_ml" || 
-                                   row?.ranker_meta?.ranker_raw?.used_path === "enhanced_ml" || 
-                                   row?.ranker_used_path === "enhanced_ml" || 
-                                   row?.ml?.source === "enhanced_ml" 
-                                     ? "Enhanced ML" 
-                                     : rankerIsML 
-                                     ? "ML" 
-                                     : "Heuristic"}
-                                </span>
-                              </div>
+                              ))}
                             </div>
                           </div>
                         </td>
-                        <td className="p-2 min-w-[150px] max-w-[200px]">
-                          <div className="space-y-1">
-                            <code className="text-xs block break-all bg-gray-50 p-1 rounded border" title={row.payload || ""}>
-                              {row.payload || "—"}
-                            </code>
-                            {row.payload && row.payload.length > 50 && (
-                              <div className="text-[10px] text-gray-500">
-                                Length: {row.payload.length} chars
-                              </div>
-                            )}
+                        
+                        {/* Payload Recommendation Score */}
+                        <td className="p-3">
+                          <div className="space-y-3">
+                            {/* Confidence Meter */}
+                            <div className="space-y-1">
+                              <div className="text-xs text-gray-500 font-medium">Confidence</div>
+                              <ConfMeter v={r.confidence} />
+                            </div>
+                            
+                            {/* Origin Badge */}
+                            <div className="text-center">
+                              <OriginBadge origin={r.origin} />
+                            </div>
+                            
+
                           </div>
                         </td>
-                        <td className="p-2 w-20">
-                          <button 
-                            className="text-xs bg-blue-600 text-white px-2 py-1.5 rounded hover:bg-blue-700 transition-colors" 
-                            onClick={() => toggleExpand(k)} 
-                            aria-expanded={isOpen} 
+                        
+                        {/* Details Button */}
+                        <td className="p-3">
+                          <button
+                            onClick={() => toggleExpand(rowKey(r))}
+                            className={cn(
+                              "px-3 py-1.5 rounded text-xs font-medium transition-all duration-200 border",
+                              isExpanded 
+                                ? "bg-blue-100 text-blue-800 border-blue-300 shadow-sm" 
+                                : "bg-white text-gray-700 border-gray-300 hover:bg-blue-50 hover:border-blue-200 hover:text-blue-700"
+                            )}
                             type="button"
-                            title={isOpen ? "Hide details" : "Show details"}
+                            title={isExpanded ? "Hide detailed information" : "Show detailed information"}
                           >
-                            {isOpen ? "Hide" : "Details"}
+                            {isExpanded ? "▼ Hide" : "▶ Details"}
                           </button>
                         </td>
                       </tr>
@@ -1822,174 +2052,163 @@ export default function CrawlAndFuzzPage() {
                   })}
                 </tbody>
               </table>
-              {pageRows.length === 0 && (
-                <div className="p-4 text-sm text-gray-500">
-                  No results match the current filters.&nbsp;
-                  <span className="text-xs">
-                    (Origin: <span className="font-mono">{originFilter}</span>,
-                    &nbsp;Families: <span className="font-mono">{[...familiesSelected].join(", ")}</span>,
-                    &nbsp;Min conf: <span className="font-mono">{minConf.toFixed(2)}</span>)
-                  </span>
-                </div>
-              )}
-              
-              {/* Expanded rows (optional) */}
-              <div className="space-y-2">
-                {filteredResults.map((row) => {
-                  const k = rowKey(row);
-                  if (!expanded.has(k)) return null;
-                  const v = row.signals?.verify || {};
-                  const fm = row.ranker_meta || {};
-                  return (
-                    <div key={`detail-${k}`} className="border rounded p-3 bg-white">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="text-sm">
-                            <SeverityBadge sev={row.severity} />{" "}
-                            <Badge tone={row.family === "xss" ? "pink" : row.family === "redirect" ? "purple" : "blue"}>
-                              {row.family || "sqli"}
-                            </Badge>{" "}
-                            <OriginBadge origin={row.origin} />{" "}
-                            <Badge tone="slate" title="confidence">
-                              <span className="font-mono">{row.confidence.toFixed(2)}</span>
-                            </Badge>
-                          </div>
-                          <div className="text-sm font-mono">
-                            {row.method} {row.url}
-                          </div>
-                          <div className="text-xs text-gray-600">
-                            param: <code>{row.param}</code>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="text-xs border px-2 py-1 rounded"
-                            onClick={async () => {
-                              try {
-                                await navigator.clipboard.writeText(row.payload || "");
-                                toast.success("Payload copied");
-                              } catch {
-                                toast.error("Copy failed");
-                              }
-                            }}
-                            type="button"
-                          >
-                            Copy payload
-                          </button>
-                          <button
-                            className="text-xs border px-2 py-1 rounded"
-                            onClick={() => {
-                              const a = document.createElement("a");
-                              const blob = new Blob([JSON.stringify(row, null, 2)], { type: "application/json" });
-                              const url = URL.createObjectURL(blob);
-                              a.href = url;
-                              a.download = "fuzz_row.json";
-                              document.body.appendChild(a);
-                              a.click();
-                              a.remove();
-                              URL.revokeObjectURL(url);
-                            }}
-                            type="button"
-                          >
-                            Save row
-                          </button>
-                          <button className="text-xs border px-2 py-1 rounded" onClick={() => toggleExpand(k)} type="button">
-                            Close
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Delta</div>
-                          <div className="text-sm"><DeltaCell d={row.delta} /></div>
-                        </div>
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Verify</div>
-                          <div className="text-xs space-y-1 font-mono">
-                            {"status" in v ? <div>status: {v.status}</div> : null}
-                            {"length" in v ? <div>length: {v.length}</div> : null}
-                            {"location" in v ? (<div>location: <span className="break-all">{v.location}</span></div>) : null}
-                          </div>
-                        </div>
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Signals</div>
-                          <div className="text-xs space-x-2 flex flex-wrap gap-1">
-                            {row.signals.sql_error ? <Badge tone="blue">sql error</Badge> : null}
-                            {row.signals.boolean_sqli ? <Badge tone="blue">boolean</Badge> : null}
-                            {row.signals.time_sqli ? <Badge tone="blue">time</Badge> : null}
-                            {row.signals.xss_reflected ? <Badge tone="pink">xss reflected</Badge> : null}
-                            {row.signals.external_redirect ? <Badge tone="purple">external redirect</Badge> : null}
-                            {row.signals.login_success ? <Badge tone="green">login bypass</Badge> : null}
-                            {row.signals.token_present ? <Badge tone="green">token present</Badge> : null}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Ranker meta */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Family probabilities</div>
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <FamilyProbsBar probs={fm.family_probs} />
-                            <div className="text-xs font-mono">
-                              {Object.entries(fm.family_probs || {})
-                                .sort((a, b) => b[1] - a[1])
-                                .slice(0, 3)
-                                .map(([k, v]) => (
-                                  <div key={k}>{k}: {(v * 100).toFixed(1)}%</div>
-                                ))}
-                            </div>
-                          </div>
-                        </div>
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Chosen / Score</div>
-                          <div className="text-xs">chosen: <code>{fm.family_chosen || "—"}</code></div>
-                          <div className="text-xs">
-                            {(hasNum(fm.feature_dim_total) ? `dim ${fm.feature_dim_total} · ` : "")}
-                            score: <code>{typeof fm.ranker_score === "number" ? fm.ranker_score.toFixed(3) : "—"}</code>
-                          </div>
-                          {/* backend used_path (if available) */}
-                          <div className="text-[10px] text-gray-500 mt-1 break-all">{row.ranker_used_path ? `used_path: ${row.ranker_usage_path}` : ""}</div>
-                        </div>
-                        <div className="border rounded p-2">
-                          <div className="text-xs text-gray-500 mb-1">Model IDs</div>
-                          <div className="text-xs font-mono overflow-auto">
-                            {fm.model_ids ? <pre className="whitespace-pre-wrap text-[10px]">{JSON.stringify(fm.model_ids, null, 2)}</pre> : "—"}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-3">
-                        <div className="text-xs text-gray-500 mb-1">Payload</div>
-                        <pre className="text-xs bg-gray-50 p-2 rounded overflow-auto">{row.payload || ""}</pre>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-              {/* close .overflow-auto */}
-              </div>
-              {/* close .space-y-3 */}
-            </div>
-          )}
-
-          {/* Pagination controls */}
-          <div className="flex items-center justify-between text-sm text-gray-600 py-2 flex-wrap gap-2">
-            <div>Showing <span className="font-mono">{start+1}</span>–<span className="font-mono">{end}</span> of <span className="font-mono">{filteredResults.length}</span></div>
-            <div className="flex items-center gap-2">
-              <button className="border px-2 py-1 rounded disabled:opacity-50 text-sm" disabled={pageClamped <= 1} onClick={() => setPage(p => Math.max(1, p-1))}>Prev</button>
-              <span className="font-mono">{pageClamped}</span>/<span className="font-mono">{totalPages}</span>
-              <button className="border px-2 py-1 rounded disabled:opacity-50 text-sm" disabled={pageClamped >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p+1))}>Next</button>
             </div>
           </div>
 
-          <details className="border rounded p-3 bg-gray-50">
-            <summary className="cursor-pointer text-sm text-gray-700">Raw JSON</summary>
-            <pre className="overflow-auto text-xs max-w-full">{JSON.stringify(fuzzSummary, null, 2)}</pre>
-          </details>
+          {/* Expanded Details Rows */}
+          {pageRows.map((r, i) => {
+            const isExpanded = expanded.has(rowKey(r));
+            if (!isExpanded) return null;
+            
+                         return (
+               <div key={`details-${rowKey(r)}`} className="border rounded-lg bg-gradient-to-br from-gray-50 to-blue-50 p-4 space-y-4 shadow-sm">
+                 <div className="flex items-center justify-between border-b border-gray-200 pb-3">
+                   <h4 className="font-semibold text-gray-800 flex items-center gap-2">
+                     <span className="text-blue-600">📊</span>
+                     Detailed Results for {r.method} {r.baseUrl}?{r.param}
+                   </h4>
+                   <button
+                     onClick={() => toggleExpand(rowKey(r))}
+                     className="text-gray-500 hover:text-gray-700 hover:bg-white rounded-full p-1 transition-colors"
+                     type="button"
+                     title="Close details"
+                   >
+                     ✕
+                   </button>
+                 </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {/* ML Details */}
+                  <div className="space-y-2">
+                    <h5 className="font-medium text-gray-700">ML Analysis</h5>
+                    <div className="bg-white p-3 rounded border space-y-2">
+                      {r.payloads.some(p => p.family_probs || p.ranker_score) ? (
+                        <>
+                          {r.payloads[0]?.family_probs && Object.keys(r.payloads[0].family_probs).length > 0 && (
+                            <div>
+                              <div className="text-xs text-gray-500">Top Family Probabilities</div>
+                              <FamilyProbsBar probs={r.payloads[0].family_probs} />
+                            </div>
+                          )}
+                          <div className="text-xs space-y-1">
+                            <div><span className="text-gray-500">Top ML Score:</span> {(() => {
+                              const topPayload = r.payloads.find(p => p.ranker_score) || r.payloads[0];
+                              const sc = topPayload?.ranker_score;
+                              return typeof sc === 'number' ? (sc * 100).toFixed(1) + '%' : '—';
+                            })()}</div>
+                            <div><span className="text-gray-500">ML Type:</span> {r.payloads[0]?.used_path || '—'}</div>
+                            <div><span className="text-gray-500">Payloads with ML:</span> {r.payloads.filter(p => p.ranker_score).length}/{r.payloads.length}</div>
+                          </div>
+                        </>
+                      ) : (
+                        <span className="text-gray-400 text-xs">No ML data available</span>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Signals */}
+                  <div className="space-y-2">
+                    <h5 className="font-medium text-gray-700">Detection Signals</h5>
+                    <div className="bg-white p-3 rounded border">
+                      <div className="flex flex-wrap gap-1">
+                        {r.signals.sql_error && <Badge tone="red">SQL Error</Badge>}
+                        {r.signals.boolean_sqli && <Badge tone="blue">Boolean SQLi</Badge>}
+                        {r.signals.time_sqli && <Badge tone="blue">Time SQLi</Badge>}
+                        {r.signals.xss_reflected && <Badge tone="pink">XSS Reflected</Badge>}
+                        {r.signals.external_redirect && <Badge tone="purple">External Redirect</Badge>}
+                        {!r.signals.sql_error && !r.signals.boolean_sqli && !r.signals.time_sqli && 
+                         !r.signals.xss_reflected && !r.signals.external_redirect && (
+                          <span className="text-gray-400 text-xs">No strong signals detected</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  
+                  {/* Delta Information */}
+                  <div className="space-y-2">
+                    <h5 className="font-medium text-gray-700">Response Changes</h5>
+                    <div className="bg-white p-3 rounded border">
+                      <DeltaCell d={r.delta} />
+                    </div>
+                  </div>
+                </div>
+                
+                {/* All Payloads */}
+                <div className="space-y-2">
+                  <h5 className="font-medium text-gray-700">All Tested Payloads ({r.payloads.length})</h5>
+                  <div className="bg-white p-3 rounded border space-y-3">
+                    {r.payloads.map((payload, idx) => (
+                      <div key={idx} className="border-b border-gray-100 pb-2 last:border-b-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-gray-700">Payload {idx + 1}</span>
+                          {payload.ranker_score && (
+                            <span className="text-xs font-bold text-green-600">
+                              ML Score: {(payload.ranker_score * 100).toFixed(1)}%
+                            </span>
+                          )}
+                        </div>
+                        <pre className="font-mono text-xs bg-gray-50 p-2 rounded overflow-auto max-h-20">
+                          {payload.payload || "—"}
+                        </pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Additional Context */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <h5 className="font-medium text-gray-700">Request Details</h5>
+                    <div className="bg-white p-3 rounded border space-y-1 text-xs">
+                      <div><span className="text-gray-500">Method:</span> {r.method}</div>
+                      <div><span className="text-gray-500">Parameter:</span> {r.param || '—'}</div>
+                      <div><span className="text-gray-500">Origin:</span> <OriginBadge origin={r.origin} /></div>
+                      <div><span className="text-gray-500">Severity:</span> <SeverityBadge sev={r.severity} /></div>
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <h5 className="font-medium text-gray-700">Response Analysis</h5>
+                    <div className="bg-white p-3 rounded border space-y-1 text-xs">
+                      <div><span className="text-gray-500">Confidence:</span> {r.confidence.toFixed(3)}</div>
+                      {r.delta?.status_changed && <div><span className="text-gray-500">Status Changed:</span> Yes</div>}
+                      {r.delta?.len_delta && <div><span className="text-gray-500">Length Δ:</span> {r.delta.len_delta}</div>}
+                      {r.delta?.ms_delta && <div><span className="text-gray-500">Time Δ:</span> {r.delta.ms_delta}ms</div>}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Bottom Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-center">
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={pageClamped <= 1}
+                  type="button"
+                >
+                  Previous
+                </button>
+                <span className="px-3 py-1">{pageClamped} of {totalPages}</span>
+                <button
+                  className="px-3 py-1 border rounded disabled:opacity-50"
+                  onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                  disabled={pageClamped >= totalPages}
+                  type="button"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       )}
     </div>
   );
 }
+
+

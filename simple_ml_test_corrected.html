@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corrected ML Score Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .ml { background-color: #d4edda; border-color: #28a745; }
+        .heuristic { background-color: #fff3cd; border-color: #ffc107; }
+        .error { background-color: #f8d7da; border-color: #dc3545; }
+        button { padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .code { background-color: #f8f9fa; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; }
+        .endpoint { background-color: #e7f3ff; border: 1px solid #b3d9ff; padding: 10px; margin: 10px 0; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>Corrected ML Score Test</h1>
+    <p>Testing ML scoring using the correct endpoints at /api/ml</p>
+    
+    <div class="endpoint">
+        <h3>Available ML Endpoints:</h3>
+        <ul>
+            <li><code>/api/ml/info</code> - ML system info</li>
+            <li><code>/api/ml/family_proba</code> - Family prediction</li>
+            <li><code>/api/ml/recommend</code> - Payload recommendation</li>
+        </ul>
+    </div>
+    
+    <button onclick="testMLInfo()">Test ML Info</button>
+    <button onclick="testFamilyPrediction()">Test Family Prediction</button>
+    <button onclick="testPayloadRecommendation()">Test Payload Recommendation</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const BACKEND_URL = 'http://localhost:8000';
+        const API_PREFIX = '/api';
+        
+        // Test 1: ML system info
+        async function testMLInfo() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing ML System Info...</h3>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}${API_PREFIX}/ml/info`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ ML System Info</h4>';
+                html += '<p><strong>Recommender Ready:</strong> ' + (data.recommender?.ready ? 'Yes' : 'No') + '</p>';
+                html += '<p><strong>Model Type:</strong> ' + (data.recommender?.model_type || 'None') + '</p>';
+                html += '<p><strong>Feature Dimension:</strong> ' + (data.recommender?.feature_dim || 'Unknown') + '</p>';
+                html += '<p><strong>Rankers Loaded:</strong></p>';
+                html += '<div class="code">';
+                for (const [family, loaded] of Object.entries(data.recommender?.rankers_loaded || {})) {
+                    html += `${family}: ${loaded ? '✅ Loaded' : '❌ Not Loaded'}\n`;
+                }
+                html += '</div>';
+                html += '<p><strong>Family Classifier:</strong> ' + (data.family_classifier?.loaded ? '✅ Loaded' : '❌ Not Loaded') + '</p>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result error">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Test 2: Family prediction
+        async function testFamilyPrediction() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing Family Prediction...</h3>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}${API_PREFIX}/ml/family_proba`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/signup',
+                        param: 'ref_page',
+                        method: 'GET',
+                        content_type: 'text/html'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ Family Prediction Result</h4>';
+                html += '<p><strong>Top Family:</strong> ' + (data.top_family || 'Unknown') + '</p>';
+                html += '<p><strong>Model Loaded:</strong> ' + (data.model_loaded ? 'Yes' : 'No') + '</p>';
+                html += '<p><strong>Calibrator Loaded:</strong> ' + (data.calibrator_loaded ? 'Yes' : 'No') + '</p>';
+                html += '<p><strong>Family Probabilities:</strong></p>';
+                html += '<div class="code">';
+                for (const [family, prob] of Object.entries(data.proba || {})) {
+                    html += `${family}: ${(prob * 100).toFixed(1)}%\n`;
+                }
+                html += '</div>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result error">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Test 3: Payload recommendation
+        async function testPayloadRecommendation() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing Payload Recommendation...</h3>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}${API_PREFIX}/ml/recommend`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/signup',
+                        param: 'ref_page',
+                        method: 'GET',
+                        content_type: 'text/html',
+                        family: 'sqli',
+                        candidates: [
+                            "' OR 1=1--",
+                            "' OR 'a'='a'--",
+                            "1' OR 1=1--",
+                            "admin'--",
+                            "test"
+                        ],
+                        top_n: 5
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ Payload Recommendation Result</h4>';
+                html += '<p><strong>Family:</strong> ' + (data.family || 'Unknown') + '</p>';
+                html += '<p><strong>Payload Origin:</strong> ' + (data.payload_origin || 'Unknown') + '</p>';
+                html += '<p><strong>Top Ranked Payloads:</strong></p>';
+                html += '<div class="code">';
+                data.payloads.forEach((rec, index) => {
+                    html += `${index + 1}. ${rec.payload} (confidence: ${(rec.p * 100).toFixed(1)}%)\n`;
+                });
+                html += '</div>';
+                html += '<p><strong>Ranker Meta:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data.ranker_meta, null, 2) + '</div>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result error">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Auto-test ML info on page load
+        window.onload = function() {
+            testMLInfo();
+        };
+    </script>
+</body>
+</html>

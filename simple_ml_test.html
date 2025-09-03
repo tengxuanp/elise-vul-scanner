@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple ML Score Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .result { margin: 10px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .ml { background-color: #d4edda; border-color: #28a745; }
+        .heuristic { background-color: #fff3cd; border-color: #ffc107; }
+        button { padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        .code { background-color: #f8f9fa; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; }
+    </style>
+</head>
+<body>
+    <h1>Simple ML Score Test</h1>
+    <p>Directly test ML scoring without crawling</p>
+    
+    <button onclick="testMLScoring()">Test ML Scoring</button>
+    <button onclick="testPayloadRanking()">Test Payload Ranking</button>
+    <button onclick="testFamilyPrediction()">Test Family Prediction</button>
+    
+    <div id="results"></div>
+
+    <script>
+        const BACKEND_URL = 'http://localhost:8000';
+        
+        // Test 1: Direct ML scoring
+        async function testMLScoring() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing Direct ML Scoring...</h3>';
+            
+            try {
+                // Test with a simple SQL injection scenario
+                const response = await fetch(`${BACKEND_URL}/ml/family_proba`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/signup',
+                        param: 'ref_page',
+                        method: 'GET',
+                        content_type: 'text/html'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ ML Family Prediction Result</h4>';
+                html += '<p><strong>Family Probabilities:</strong></p>';
+                html += '<div class="code">';
+                for (const [family, prob] of Object.entries(data.family_probs || {})) {
+                    html += `${family}: ${(prob * 100).toFixed(1)}%\n`;
+                }
+                html += '</div>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result heuristic">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Test 2: Payload ranking
+        async function testPayloadRanking() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing Payload Ranking...</h3>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/ml/recommend`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/signup',
+                        param: 'ref_page',
+                        method: 'GET',
+                        content_type: 'text/html',
+                        family: 'sqli',
+                        candidates: [
+                            "' OR 1=1--",
+                            "' OR 'a'='a'--",
+                            "1' OR 1=1--",
+                            "admin'--",
+                            "test"
+                        ],
+                        top_n: 5
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ Payload Ranking Result</h4>';
+                html += '<p><strong>Top Ranked Payloads:</strong></p>';
+                html += '<div class="code">';
+                data.recommendations.forEach((rec, index) => {
+                    html += `${index + 1}. ${rec.payload} (confidence: ${(rec.confidence * 100).toFixed(1)}%)\n`;
+                });
+                html += '</div>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result heuristic">❌ Error: ' + error.message + '</div>';
+            }
+        }
+        
+        // Test 3: Family prediction
+        async function testFamilyPrediction() {
+            const resultsDiv = document.getElementById('results');
+            resultsDiv.innerHTML = '<h3>Testing Family Prediction...</h3>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/ml/family_proba`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/login',
+                        param: 'username',
+                        method: 'POST',
+                        content_type: 'application/x-www-form-urlencoded'
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                
+                let html = '<div class="result ml">';
+                html += '<h4>✅ Family Prediction Result</h4>';
+                html += '<p><strong>Predicted Family:</strong> ' + (data.family || 'Unknown') + '</p>';
+                html += '<p><strong>Family Probabilities:</strong></p>';
+                html += '<div class="code">';
+                for (const [family, prob] of Object.entries(data.family_probs || {})) {
+                    html += `${family}: ${(prob * 100).toFixed(1)}%\n`;
+                }
+                html += '</div>';
+                html += '<p><strong>Raw Response:</strong></p>';
+                html += '<div class="code">' + JSON.stringify(data, null, 2) + '</div>';
+                html += '</div>';
+                
+                resultsDiv.innerHTML = html;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = '<div class="result heuristic">❌ Error: ' + error.message + '</div>';
+            }
+        }
+    </script>
+</body>
+</html>

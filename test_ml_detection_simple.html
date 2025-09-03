@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Detection Test - Crawl & Fuzz localhost:8082</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; border-radius: 5px; }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .failure { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        .code { background-color: #f8f9fa; padding: 10px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; }
+        .result-row { margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 3px; }
+        .ml-result { background-color: #e8f5e8; border-color: #4caf50; }
+        .heuristic-result { background-color: #fff3cd; border-color: #ffc107; }
+        button { padding: 10px 20px; margin: 5px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        button:disabled { background-color: #6c757d; cursor: not-allowed; }
+        .loading { color: #6c757d; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>ML Detection Test</h1>
+    <p>Testing ML detection by crawling and fuzzing localhost:8082</p>
+    
+    <div class="section info">
+        <h3>Backend Status</h3>
+        <p><strong>Backend URL:</strong> http://localhost:8000</p>
+        <p><strong>Target:</strong> http://localhost:8082/</p>
+        <button onclick="testBackendConnection()">Test Backend Connection</button>
+        <div id="backend-status"></div>
+    </div>
+    
+    <div class="section info">
+        <h3>Crawl & Fuzz</h3>
+        <button onclick="startCrawlAndFuzz()" id="crawl-btn">Start Crawl & Fuzz</button>
+        <div id="crawl-status"></div>
+    </div>
+    
+    <div class="section info">
+        <h3>Results</h3>
+        <div id="results"></div>
+    </div>
+
+    <script>
+        const BACKEND_URL = 'http://localhost:8000';
+        
+        // Test backend connection
+        async function testBackendConnection() {
+            const statusDiv = document.getElementById('backend-status');
+            statusDiv.innerHTML = '<span class="loading">Testing connection...</span>';
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/health`, {
+                    method: 'GET',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = '<span style="color: green;">✅ Backend is running and accessible</span>';
+                } else {
+                    statusDiv.innerHTML = '<span style="color: orange;">⚠️ Backend responded but with status: ' + response.status + '</span>';
+                }
+            } catch (error) {
+                statusDiv.innerHTML = '<span style="color: red;">❌ Backend connection failed: ' + error.message + '</span>';
+            }
+        }
+        
+        // Start crawl and fuzz process
+        async function startCrawlAndFuzz() {
+            const btn = document.getElementById('crawl-btn');
+            const statusDiv = document.getElementById('crawl-status');
+            const resultsDiv = document.getElementById('results');
+            
+            btn.disabled = true;
+            statusDiv.innerHTML = '<span class="loading">Starting crawl and fuzz...</span>';
+            resultsDiv.innerHTML = '';
+            
+            try {
+                // Step 1: Start crawl
+                statusDiv.innerHTML = '<span class="loading">Step 1: Starting crawl...</span>';
+                const crawlResponse = await fetch(`${BACKEND_URL}/crawl`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: 'http://localhost:8082/',
+                        max_pages: 5,
+                        max_depth: 2
+                    })
+                });
+                
+                if (!crawlResponse.ok) {
+                    throw new Error(`Crawl failed: ${crawlResponse.status}`);
+                }
+                
+                const crawlData = await crawlResponse.json();
+                const jobId = crawlData.job_id;
+                
+                statusDiv.innerHTML = '<span class="loading">Step 2: Crawl started, job ID: ' + jobId + '</span>';
+                
+                // Step 2: Wait for crawl to complete
+                let crawlComplete = false;
+                let attempts = 0;
+                const maxAttempts = 30; // 30 seconds max
+                
+                while (!crawlComplete && attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    attempts++;
+                    
+                    try {
+                        const statusResponse = await fetch(`${BACKEND_URL}/crawl/status/${jobId}`);
+                        if (statusResponse.ok) {
+                            const statusData = await statusResponse.json();
+                            statusDiv.innerHTML = '<span class="loading">Step 2: Crawl in progress... (' + attempts + 's) - Status: ' + statusData.status + '</span>';
+                            
+                            if (statusData.status === 'completed') {
+                                crawlComplete = true;
+                                statusDiv.innerHTML = '<span style="color: green;">✅ Crawl completed!</span>';
+                            }
+                        }
+                    } catch (error) {
+                        console.log('Status check failed:', error);
+                    }
+                }
+                
+                if (!crawlComplete) {
+                    throw new Error('Crawl timed out after 30 seconds');
+                }
+                
+                // Step 3: Get crawled endpoints
+                statusDiv.innerHTML = '<span class="loading">Step 3: Getting crawled endpoints...</span>';
+                const endpointsResponse = await fetch(`${BACKEND_URL}/crawl/endpoints/${jobId}`);
+                
+                if (!endpointsResponse.ok) {
+                    throw new Error(`Failed to get endpoints: ${endpointsResponse.status}`);
+                }
+                
+                const endpointsData = await endpointsResponse.json();
+                const endpoints = endpointsData.endpoints || [];
+                
+                statusDiv.innerHTML = '<span style="color: green;">✅ Found ' + endpoints.length + ' endpoints</span>';
+                
+                if (endpoints.length === 0) {
+                    throw new Error('No endpoints found from crawl');
+                }
+                
+                // Step 4: Start fuzzing
+                statusDiv.innerHTML = '<span class="loading">Step 4: Starting fuzz job...</span>';
+                
+                // Select first few endpoints for fuzzing
+                const fuzzTargets = endpoints.slice(0, 3).map(ep => ({
+                    url: ep.url,
+                    method: ep.method || 'GET',
+                    param: ep.params?.[0] || 'id' // Use first param or default to 'id'
+                }));
+                
+                const fuzzResponse = await fetch(`${BACKEND_URL}/fuzz`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        targets: fuzzTargets,
+                        families: ['sqli', 'xss', 'redirect']
+                    })
+                });
+                
+                if (!fuzzResponse.ok) {
+                    throw new Error(`Fuzz failed: ${fuzzResponse.status}`);
+                }
+                
+                const fuzzData = await fuzzResponse.json();
+                const fuzzJobId = fuzzData.job_id;
+                
+                statusDiv.innerHTML = '<span class="loading">Step 5: Fuzz started, job ID: ' + fuzzJobId + '</span>';
+                
+                // Step 5: Wait for fuzz to complete
+                let fuzzComplete = false;
+                attempts = 0;
+                
+                while (!fuzzComplete && attempts < maxAttempts) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    attempts++;
+                    
+                    try {
+                        const fuzzStatusResponse = await fetch(`${BACKEND_URL}/fuzz/status/${fuzzJobId}`);
+                        if (fuzzStatusResponse.ok) {
+                            const fuzzStatusData = await fuzzStatusResponse.json();
+                            statusDiv.innerHTML = '<span class="loading">Step 5: Fuzz in progress... (' + attempts + 's) - Status: ' + fuzzStatusData.status + '</span>';
+                            
+                            if (fuzzStatusData.status === 'completed') {
+                                fuzzComplete = true;
+                                statusDiv.innerHTML = '<span style="color: green;">✅ Fuzz completed!</span>';
+                            }
+                        }
+                    } catch (error) {
+                        console.log('Fuzz status check failed:', error);
+                    }
+                }
+                
+                if (!fuzzComplete) {
+                    throw new Error('Fuzz timed out after 30 seconds');
+                }
+                
+                // Step 6: Get fuzz results
+                statusDiv.innerHTML = '<span class="loading">Step 6: Getting fuzz results...</span>';
+                const resultsResponse = await fetch(`${BACKEND_URL}/fuzz/results/${fuzzJobId}`);
+                
+                if (!resultsResponse.ok) {
+                    throw new Error(`Failed to get results: ${resultsResponse.status}`);
+                }
+                
+                const resultsData = await resultsResponse.json();
+                const results = resultsData.results || [];
+                
+                statusDiv.innerHTML = '<span style="color: green;">✅ Fuzz completed! Found ' + results.length + ' results</span>';
+                
+                // Step 7: Display results with ML detection
+                displayResults(results);
+                
+            } catch (error) {
+                statusDiv.innerHTML = '<span style="color: red;">❌ Error: ' + error.message + '</span>';
+                console.error('Error:', error);
+            } finally {
+                btn.disabled = false;
+            }
+        }
+        
+        // Display results with ML detection analysis
+        function displayResults(results) {
+            const resultsDiv = document.getElementById('results');
+            
+            if (results.length === 0) {
+                resultsDiv.innerHTML = '<p>No results found.</p>';
+                return;
+            }
+            
+            let html = '<h4>Fuzz Results (' + results.length + ' total):</h4>';
+            
+            // Group results by ML detection
+            let mlCount = 0;
+            let heuristicCount = 0;
+            let unknownCount = 0;
+            
+            results.forEach((result, index) => {
+                // Analyze ML detection
+                const mlInfo = analyzeMLDetection(result);
+                
+                if (mlInfo.isML) mlCount++;
+                else if (mlInfo.isHeuristic) heuristicCount++;
+                else unknownCount++;
+                
+                const rowClass = mlInfo.isML ? 'ml-result' : 'heuristic-result';
+                
+                html += `
+                    <div class="result-row ${rowClass}">
+                        <h5>Result ${index + 1}</h5>
+                        <p><strong>URL:</strong> ${result.url || 'N/A'}</p>
+                        <p><strong>Parameter:</strong> ${result.param || 'N/A'}</p>
+                        <p><strong>Payload:</strong> ${result.payload || 'N/A'}</p>
+                        <p><strong>Family:</strong> ${result.family || 'N/A'}</p>
+                        <p><strong>Confidence:</strong> ${result.confidence || 'N/A'}</p>
+                        <p><strong>ML Detection:</strong> ${mlInfo.label}</p>
+                        <p><strong>Used Path:</strong> ${mlInfo.usedPath || 'N/A'}</p>
+                        <p><strong>ML Type:</strong> ${mlInfo.mlType || 'N/A'}</p>
+                        <p><strong>Ranker Score:</strong> ${mlInfo.rankerScore || 'N/A'}</p>
+                        <details>
+                            <summary>Raw Data</summary>
+                            <div class="code">${JSON.stringify(result, null, 2)}</div>
+                        </details>
+                    </div>
+                `;
+            });
+            
+            // Summary
+            html += `
+                <div class="section info">
+                    <h4>Summary</h4>
+                    <p><strong>ML Results:</strong> ${mlCount}</p>
+                    <p><strong>Heuristic Results:</strong> ${heuristicCount}</p>
+                    <p><strong>Unknown:</strong> ${unknownCount}</p>
+                    <p><strong>Total:</strong> ${results.length}</p>
+                </div>
+            `;
+            
+            resultsDiv.innerHTML = html;
+        }
+        
+        // Analyze ML detection for a single result
+        function analyzeMLDetection(result) {
+            // Check for ranker_meta
+            const rankerMeta = result.ranker_meta || {};
+            const usedPath = rankerMeta.used_path || result.ranker_used_path || result.used_path;
+            
+            // Check for ML flags
+            const isML = result.is_ml === true || result.ml === true || rankerMeta.enhanced_ml === true || rankerMeta.is_ml_prediction === true;
+            
+            // Check for model IDs
+            const hasModelIds = rankerMeta.model_ids && (
+                (Array.isArray(rankerMeta.model_ids) && rankerMeta.model_ids.length > 0) ||
+                (typeof rankerMeta.model_ids === 'object' && Object.keys(rankerMeta.model_ids).length > 0)
+            );
+            
+            // Check for ML path patterns
+            const isMLPath = usedPath && (
+                usedPath === 'enhanced_ml' ||
+                usedPath.startsWith('ml:') ||
+                /(family[-_ ]?ranker|family[-_ ]?router|ml[-_ ]?ranker|ml[-_ ]?router|generic[-_ ]?ranker|plugin|ranker|router)/.test(usedPath)
+            );
+            
+            // Determine ML type
+            let mlType = 'Unknown';
+            if (usedPath === 'enhanced_ml') mlType = 'Enhanced ML';
+            else if (usedPath && usedPath.startsWith('ml:')) mlType = 'Legacy ML';
+            else if (isMLPath) mlType = 'ML Ranker';
+            else if (isML) mlType = 'ML (flags)';
+            
+            // Determine if this is ML or heuristic
+            const isMLResult = isML || isMLPath || hasModelIds || (rankerMeta.ranker_score && typeof rankerMeta.ranker_score === 'number');
+            const isHeuristicResult = usedPath === 'heuristic' || usedPath === 'none' || !usedPath;
+            
+            let label = 'Unknown';
+            if (isMLResult) label = 'ML';
+            else if (isHeuristicResult) label = 'Heuristic';
+            
+            return {
+                isML: isMLResult,
+                isHeuristic: isHeuristicResult,
+                label: label,
+                usedPath: usedPath,
+                mlType: mlType,
+                rankerScore: rankerMeta.ranker_score,
+                enhancedML: rankerMeta.enhanced_ml,
+                isMLPrediction: rankerMeta.is_ml_prediction
+            };
+        }
+        
+        // Auto-test backend connection on page load
+        window.onload = function() {
+            testBackendConnection();
+        };
+    </script>
+</body>
+</html>

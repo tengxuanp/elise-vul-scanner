@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced ML Fix Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .test-section {
+            margin-bottom: 30px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        .success { background-color: #d4edda; border-color: #c3e6cb; }
+        .error { background-color: #f8d7da; border-color: #f5c6cb; }
+        .info { background-color: #d1ecf1; border-color: #bee5eb; }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover { background-color: #0056b3; }
+        .json-output {
+            background-color: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 10px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 10px;
+        }
+        .status-indicator {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .status-success { background-color: #28a745; color: white; }
+        .status-error { background-color: #dc3545; color: white; }
+        .status-unknown { background-color: #6c757d; color: white; }
+    </style>
+</head>
+<body>
+    <h1>Enhanced ML Fix Verification Test</h1>
+    
+    <div class="container">
+        <h2>Backend Status</h2>
+        <button onclick="testBackend()">Test Backend Connection</button>
+        <span id="backend-status" class="status-indicator status-unknown">Unknown</span>
+        <div id="backend-output" class="json-output" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h2>Enhanced ML API Test</h2>
+        <p>This test will check if the enhanced ML API is working and if family_probs is properly populated.</p>
+        <button onclick="testEnhancedML()">Test Enhanced ML Scoring</button>
+        <span id="ml-status" class="status-indicator status-unknown">Unknown</span>
+        <div id="ml-output" class="json-output" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h2>Evidence API Test</h2>
+        <p>This test will fetch recent evidence results to check for enhanced ML data.</p>
+        <button onclick="testEvidence()">Fetch Recent Evidence</button>
+        <span id="evidence-status" class="status-indicator status-unknown">Unknown</span>
+        <div id="evidence-output" class="json-output" style="display: none;"></div>
+    </div>
+
+    <div class="container">
+        <h2>Fix Verification Results</h2>
+        <div id="verification-results" class="test-section info">
+            <p>Run the tests above to verify the enhanced ML fix is working.</p>
+        </div>
+    </div>
+
+    <script>
+        async function testBackend() {
+            const statusEl = document.getElementById('backend-status');
+            const outputEl = document.getElementById('backend-output');
+            
+            try {
+                statusEl.textContent = 'Testing...';
+                statusEl.className = 'status-indicator status-unknown';
+                
+                const response = await fetch('http://localhost:8000/api/evidence');
+                const text = await response.text();
+                
+                outputEl.style.display = 'block';
+                outputEl.textContent = `Status: ${response.status}\nResponse: ${text}`;
+                
+                if (response.ok) {
+                    statusEl.textContent = 'Connected';
+                    statusEl.className = 'status-indicator status-success';
+                } else {
+                    statusEl.textContent = 'Error';
+                    statusEl.className = 'status-indicator status-error';
+                }
+            } catch (error) {
+                statusEl.textContent = 'Failed';
+                statusEl.className = 'status-indicator status-error';
+                outputEl.style.display = 'block';
+                outputEl.textContent = `Error: ${error.message}`;
+            }
+        }
+
+        async function testEnhancedML() {
+            const statusEl = document.getElementById('ml-status');
+            const outputEl = document.getElementById('ml-output');
+            
+            try {
+                statusEl.textContent = 'Testing...';
+                statusEl.className = 'status-indicator status-unknown';
+                
+                const testPayload = {
+                    url: "http://testphp.vulnweb.com/artists.php?artist=1",
+                    method: "GET",
+                    params: {"artist": "1"},
+                    vulnerability_type: "sqli"
+                };
+                
+                const response = await fetch('http://localhost:8000/api/ml/enhanced-score', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(testPayload)
+                });
+                
+                const result = await response.json();
+                
+                outputEl.style.display = 'block';
+                outputEl.textContent = JSON.stringify(result, null, 2);
+                
+                // Check for family_probs
+                if (result.family_probs && Object.keys(result.family_probs).length > 0) {
+                    statusEl.textContent = 'Fixed ✅';
+                    statusEl.className = 'status-indicator status-success';
+                    updateVerificationResults('Enhanced ML API is working and family_probs is populated!', 'success');
+                } else {
+                    statusEl.textContent = 'Issue Found';
+                    statusEl.className = 'status-indicator status-error';
+                    updateVerificationResults('Enhanced ML API responding but family_probs is empty', 'error');
+                }
+            } catch (error) {
+                statusEl.textContent = 'Failed';
+                statusEl.className = 'status-indicator status-error';
+                outputEl.style.display = 'block';
+                outputEl.textContent = `Error: ${error.message}`;
+                updateVerificationResults('Enhanced ML API test failed', 'error');
+            }
+        }
+
+        async function testEvidence() {
+            const statusEl = document.getElementById('evidence-status');
+            const outputEl = document.getElementById('evidence-output');
+            
+            try {
+                statusEl.textContent = 'Testing...';
+                statusEl.className = 'status-indicator status-unknown';
+                
+                const response = await fetch('http://localhost:8000/api/evidence');
+                const results = await response.json();
+                
+                outputEl.style.display = 'block';
+                
+                if (results && results.length > 0) {
+                    // Check first few results for enhanced ML data
+                    const mlResults = results.filter(r => r.ranker_score !== null);
+                    const enhancedMLResults = mlResults.filter(r => {
+                        const meta = r.metadata || {};
+                        return meta.family_probs && Object.keys(meta.family_probs).length > 0;
+                    });
+                    
+                    outputEl.textContent = `Found ${results.length} total results\n` +
+                                         `Found ${mlResults.length} with ML scores\n` +
+                                         `Found ${enhancedMLResults.length} with proper family_probs\n\n` +
+                                         `Sample results:\n${JSON.stringify(results.slice(0, 3), null, 2)}`;
+                    
+                    if (enhancedMLResults.length > 0) {
+                        statusEl.textContent = 'Fixed ✅';
+                        statusEl.className = 'status-indicator status-success';
+                        updateVerificationResults(`Found ${enhancedMLResults.length} results with proper enhanced ML data!`, 'success');
+                    } else if (mlResults.length > 0) {
+                        statusEl.textContent = 'Partial';
+                        statusEl.className = 'status-indicator status-error';
+                        updateVerificationResults('Found ML results but family_probs still empty', 'error');
+                    } else {
+                        statusEl.textContent = 'No ML Data';
+                        statusEl.className = 'status-indicator status-unknown';
+                        updateVerificationResults('No ML scored results found - try running a new crawl/fuzz', 'info');
+                    }
+                } else {
+                    statusEl.textContent = 'No Data';
+                    statusEl.className = 'status-indicator status-unknown';
+                    outputEl.textContent = 'No evidence results found';
+                    updateVerificationResults('No evidence results found - try running a crawl/fuzz operation', 'info');
+                }
+            } catch (error) {
+                statusEl.textContent = 'Failed';
+                statusEl.className = 'status-indicator status-error';
+                outputEl.style.display = 'block';
+                outputEl.textContent = `Error: ${error.message}`;
+                updateVerificationResults('Evidence API test failed', 'error');
+            }
+        }
+
+        function updateVerificationResults(message, type) {
+            const resultsEl = document.getElementById('verification-results');
+            const timestamp = new Date().toLocaleTimeString();
+            
+            resultsEl.innerHTML += `<p><strong>[${timestamp}]</strong> ${message}</p>`;
+            resultsEl.className = `test-section ${type}`;
+        }
+
+        // Auto-test backend connection on page load
+        window.onload = function() {
+            testBackend();
+        };
+    </script>
+</body>
+</html>

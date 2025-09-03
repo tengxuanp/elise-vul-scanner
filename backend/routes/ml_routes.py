@@ -24,6 +24,15 @@ from ..modules.recommender import Recommender
 # ---- Endpoint feature extraction (cheap) ----
 from ..modules.feature_extractor import FeatureExtractor
 
+# Try to import EnhancedInferenceEngine for enhanced ML scoring
+try:
+    from ..modules.ml.enhanced_inference import EnhancedInferenceEngine
+    _ENHANCED_ENGINE = EnhancedInferenceEngine()
+    _ENHANCED_OK = True
+except Exception as _e:
+    _ENHANCED_ENGINE = None  # type: ignore
+    _ENHANCED_OK = False
+
 router = APIRouter(prefix="/ml", tags=["ml"])
 
 # Reuse singletons across requests
@@ -44,6 +53,20 @@ class TargetSpec(BaseModel):
     control_value: Optional[str] = None
 
     model_config = ConfigDict(populate_by_name=True)  # allow using "in" in payloads
+
+
+# New request schema for enhanced ML scoring endpoint
+class EnhancedScoreRequest(BaseModel):
+    url: str
+    method: str = "GET"
+    params: Optional[Dict[str, Any]] = None
+    param: Optional[str] = None
+    family: Optional[str] = Field(default=None, alias="vulnerability_type")
+    headers: Optional[Dict[str, str]] = None
+    content_type: Optional[str] = None
+    top_n: int = 3
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class FamilyProbaResponse(BaseModel):
@@ -155,13 +178,61 @@ def family_proba(spec: TargetSpec) -> FamilyProbaResponse:
     model_loaded = bool(getattr(fam_clf, "model", None)) if fam_clf else False
     calibrator_loaded = bool(getattr(fam_clf, "cal", None)) if fam_clf else False
 
-    if fam_clf and getattr(fam_clf, "predict_proba", None):
+    # Try enhanced ML first
+    if _ENHANCED_ENGINE is not None and _ENHANCED_OK:
         try:
-            proba = fam_clf.predict_proba(t)  # type: ignore
-        except Exception:
-            proba = {}
+            endpoint = {
+                "url": spec.url,
+                "method": spec.method,
+                "content_type": spec.content_type
+            }
+            param = {
+                "name": spec.target_param,
+                "value": spec.control_value or "",
+                "loc": spec.location
+            }
+            
+            # Get predictions for each family using enhanced ML
+            family_probs = {}
+            for family in ["sqli", "xss", "redirect"]:
+                try:
+                    result = _ENHANCED_ENGINE.predict_with_confidence(endpoint, param, family)
+                    prob = result.get("calibrated_probability", result.get("raw_probability", 0.0))
+                    family_probs[family] = float(prob)
+                except Exception as e:
+                    print(f"Enhanced ML prediction failed for {family}: {e}")
+                    family_probs[family] = 0.0
+            
+            # Normalize probabilities
+            s = sum(family_probs.values()) or 1.0
+            proba = {k: v / s for k, v in family_probs.items()}
+            
+            model_loaded = True
+            calibrator_loaded = True
+            
+            print(f"✅ Enhanced ML used for family prediction: {proba}")
+            
+        except Exception as e:
+            print(f"⚠️ Enhanced ML failed, falling back to legacy: {e}")
+            # Fallback to legacy
+            if fam_clf and getattr(fam_clf, "predict_proba", None):
+                try:
+                    proba = fam_clf.predict_proba(t)  # type: ignore
+                    model_loaded = True
+                except Exception:
+                    proba = {}
+            else:
+                proba = {}
     else:
-        proba = {}
+        # Legacy path
+        if fam_clf and getattr(fam_clf, "predict_proba", None):
+            try:
+                proba = fam_clf.predict_proba(t)  # type: ignore
+                model_loaded = True
+            except Exception:
+                proba = {}
+        else:
+            proba = {}
 
     rule_best = None
     rules_ranked = None
@@ -221,18 +292,85 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
     if not pool:
         raise HTTPException(status_code=400, detail=f"No candidate payloads for family '{family}'")
 
-    # Endpoint features (payload-agnostic)
-    feats = fe.extract_endpoint_features(
-        url=req.url, param=req.param, method=req.method, content_type=req.content_type, headers=req.headers
-    )
-
-    ranked = reco.recommend(
-        feats=feats,
-        top_n=max(1, req.top_n),
-        threshold=max(0.0, min(1.0, req.threshold)),
-        family=family,
-        pool=pool,
-    )
+    # Try enhanced ML first, fallback to legacy
+    if _ENHANCED_ENGINE is not None and _ENHANCED_OK:
+        try:
+            # Use enhanced ML engine
+            endpoint = {
+                "url": req.url,
+                "method": req.method,
+                "content_type": req.content_type
+            }
+            param = {
+                "name": req.param,
+                "value": "",  # No control value in this context
+                "loc": "query"
+            }
+            
+            # Use enhanced payload ranking
+            ranked_payloads = _ENHANCED_ENGINE.rank_payloads(
+                endpoint, param, family, pool, top_k=req.top_n
+            )
+            
+            if ranked_payloads:
+                # Convert to expected format
+                ranked = []
+                for item in ranked_payloads:
+                    ranked.append((item["payload"], item["score"]))
+                
+                # Build enhanced ML metadata
+                meta = {
+                    "used_path": "enhanced_ml",
+                    "family": family,
+                    "enhanced": True,
+                    "confidence": ranked_payloads[0].get("confidence", 0.0),
+                    "uncertainty": ranked_payloads[0].get("uncertainty", 0.0),
+                    "ranker_score": ranked_payloads[0].get("score", 0.0),
+                    "family_probs": {family: 1.0},
+                    "model_ids": {"ranker_path": f"enhanced_{family}_xgboost", "enhanced_ml": True},
+                    "feature_dim_total": 48,
+                    "family_chosen": family,
+                    "enhanced_ml": True,
+                    "is_ml_prediction": True,
+                    "fallback_used": False
+                }
+                
+                print(f"✅ Enhanced ML used for {family} - {len(ranked)} payloads ranked")
+                
+            else:
+                raise Exception("Enhanced ML returned no results")
+                
+            # Ensure meta is defined for enhanced ML path
+            if 'meta' not in locals():
+                meta = {"used_path": "enhanced_ml", "family": family}
+                
+        except Exception as e:
+            print(f"⚠️ Enhanced ML failed, falling back to legacy: {e}")
+            # Fallback to legacy
+            feats = fe.extract_endpoint_features(
+                url=req.url, param=req.param, method=req.method, content_type=req.content_type, headers=req.headers
+            )
+            ranked = reco.recommend(
+                feats=feats,
+                top_n=max(1, req.top_n),
+                threshold=max(0.0, min(1.0, req.threshold)),
+                family=family,
+                pool=pool,
+            )
+            meta = {"used_path": "legacy", "family": family}
+    else:
+        # Legacy path
+        feats = fe.extract_endpoint_features(
+            url=req.url, param=req.param, method=req.method, content_type=req.content_type, headers=req.headers
+        )
+        ranked = reco.recommend(
+            feats=feats,
+            top_n=max(1, req.top_n),
+            threshold=max(0.0, min(1.0, req.threshold)),
+            family=family,
+            pool=pool,
+        )
+        meta = {"used_path": "legacy", "family": family}
 
     items = [RecommendItem(payload=p, p=float(s)) for p, s in ranked]
 
@@ -255,6 +393,115 @@ def recommend(req: RecommendRequest) -> RecommendResponse:
         payload_origin="ml",
         ranker_meta=ranker_meta,
     )
+
+
+@router.post("/enhanced-score")
+def enhanced_score(req: EnhancedScoreRequest) -> Dict[str, Any]:
+    """
+    Enhanced ML scoring endpoint.
+    Returns family probabilities and top payload ranking metadata compatible with UI/evidence.
+    """
+    # Determine target parameter
+    param_name = (req.param or "").strip()
+    if not param_name:
+        d = req.params or {}
+        if isinstance(d, dict) and d:
+            # pick first non-empty key
+            for k in d.keys():
+                if str(k).strip():
+                    param_name = str(k)
+                    break
+        if not param_name:
+            param_name = "id"
+
+    # Determine family
+    family = (req.family or "").strip().lower()
+    fam_proba: Dict[str, float] = {}
+
+    # Try ML family classifier first
+    if not family and fam_clf and getattr(fam_clf, "predict_proba", None):
+        try:
+            fam_proba = fam_clf.predict_proba({
+                "url": req.url,
+                "method": req.method,
+                "in": "query",
+                "target_param": param_name,
+                "content_type": req.content_type,
+                "headers": req.headers,
+            })  # type: ignore
+            if fam_proba:
+                family = max(fam_proba.items(), key=lambda kv: kv[1])[0]
+        except Exception:
+            fam_proba = {}
+
+    # Fallback to rules router
+    if not family:
+        if choose_family is not None:
+            try:
+                family = choose_family({
+                    "url": req.url, "method": req.method, "in": "query",
+                    "target_param": param_name, "content_type": req.content_type, "headers": req.headers,
+                })["family"]
+            except Exception:
+                family = "sqli"
+        else:
+            family = "sqli"
+
+    # Ensure family probs non-empty
+    if not fam_proba:
+        fam_proba = {family: 1.0}
+
+    # Candidate payloads
+    try:
+        pool = payload_pool_for(family)  # type: ignore[name-defined]
+    except Exception:
+        pool = []
+    if not pool:
+        pool = ["test"]
+    candidates = pool[: max(1, req.top_n * 5)]  # widen pool a bit
+
+    # Build endpoint/param dicts for the engine
+    endpoint = {"url": req.url, "method": req.method, "content_type": req.content_type}
+    param = {"name": param_name, "value": (req.params or {}).get(param_name, ""), "loc": "query"}
+    context = {"headers": req.headers or {}, "payload_origin": "ml"}
+
+    ranked: List[Dict[str, Any]] = []
+    if _ENHANCED_OK and _ENHANCED_ENGINE is not None:
+        try:
+            ranked = _ENHANCED_ENGINE.rank_payloads(endpoint, param, family, candidates, context=context, top_k=req.top_n)
+        except Exception as e:
+            ranked = []
+    # Minimal fallback scoring when enhanced engine unavailable
+    if not ranked:
+        ranked = [{"payload": p, "score": 0.4, "confidence": 0.4, "family": family, "features_used": 0, "fallback_used": True} for p in candidates[: req.top_n]]
+
+    top = ranked[0] if ranked else {"score": 0.0, "confidence": 0.0, "features_used": 0, "fallback_used": True}
+
+    ranker_raw = {
+        "confidence": float(top.get("confidence", top.get("score", 0.0))),
+        "calibrated_probability": float(top.get("calibrated_probability", top.get("score", 0.0))),
+        "raw_probability": float(top.get("raw_probability", top.get("score", 0.0))),
+    }
+
+    resp = {
+        "family": family,
+        "family_probs": fam_proba,
+        "used_path": "enhanced_ml" if _ENHANCED_OK else "heuristic",
+        "ranker_score": ranker_raw["confidence"],
+        "flags": {
+            "enhanced_ml": bool(_ENHANCED_OK),
+            "is_ml_prediction": True,
+            "fallback_used": bool(top.get("fallback_used", False)),
+        },
+        "model_ids": {
+            "ranker_path": f"enhanced_{family}_xgboost",
+            "enhanced_ml": True,
+        },
+        "feature_dim_total": int(top.get("features_used", 0)) or None,
+        "ranker_raw": ranker_raw,
+        "ranked": ranked,
+    }
+    return resp
 
 
 @router.get("/pools")

@@ -46,6 +46,34 @@ def same_origin(a: str, b: str) -> bool:
         return False
 
 
+# NEW: treat http↔https upgrades and www. host normalization as same-site
+# This helps avoid "0 endpoints" when targets redirect to https or www.
+
+def _canon_host(h: Optional[str]) -> str:
+    s = (h or "").strip().lower()
+    if s.startswith("www."):
+        s = s[4:]
+    return s
+
+
+def same_site(a: str, b: str) -> bool:
+    try:
+        ua, ub = urlparse(a), urlparse(b)
+        ha, hb = _canon_host(ua.hostname), _canon_host(ub.hostname)
+        if not ha or not hb or ha != hb:
+            return False
+        pa = ua.port or default_port(ua.scheme)
+        pb = ub.port or default_port(ub.scheme)
+        # Allow http(80) ↔ https(443) upgrades, but otherwise require same port
+        if pa == pb:
+            return True
+        if {pa, pb} <= {80, 443}:
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def default_port(scheme: Optional[str]) -> int:
     return 443 if (scheme or "").lower() == "https" else 80
 
@@ -294,8 +322,8 @@ def crawl_site(
             url = strip_fragment(r.get("url") or "")
             if not url:
                 continue
-            # NOISE CUT: same-origin and no socket.io
-            if not same_origin(url, target_url):
+            # NOISE CUT: same-site (allow https upgrade) and no socket.io
+            if not same_site(url, target_url):
                 continue
             if "/socket.io/" in urlparse(url).path:
                 continue
@@ -342,7 +370,7 @@ def crawl_site(
         out: List[Dict[str, Any]] = []
         for f in forms:
             url = strip_fragment(f["url"])
-            if not same_origin(url, target_url):
+            if not same_site(url, target_url):
                 continue
             if "/socket.io/" in urlparse(url).path:
                 continue
@@ -424,10 +452,10 @@ def crawl_site(
     def capture_request(request):
         try:
             url = request.url
-            # NOISE CUT: static, cross-origin, socket.io
+            # NOISE CUT: static, cross-site, socket.io
             if is_static_resource(url):
                 return
-            if not same_origin(url, target_url):
+            if not same_site(url, target_url):
                 return
             if "/socket.io/" in urlparse(url).path:
                 return
@@ -486,7 +514,7 @@ def crawl_site(
     def capture_response(response):
         try:
             url = response.url
-            if not same_origin(url, target_url):
+            if not same_site(url, target_url):
                 return
             if "/socket.io/" in urlparse(url).path:
                 return
@@ -511,10 +539,10 @@ def crawl_site(
             method = (form.get("method") or "GET").upper()
             full_action_url = urljoin(base_url, action)
 
-            # NOISE CUT: static, cross-origin, socket.io
+            # NOISE CUT: static, cross-site, socket.io
             if is_static_resource(full_action_url):
                 continue
-            if not same_origin(full_action_url, target_url):
+            if not same_site(full_action_url, target_url):
                 continue
             if "/socket.io/" in urlparse(full_action_url).path:
                 continue
@@ -550,7 +578,7 @@ def crawl_site(
         # Also harvest forms on frame navigations (SPAs using pushState)
         def _on_frame_nav(frame):
             try:
-                if frame and frame.url and same_origin(frame.url, target_url):
+                if frame and frame.url and same_site(frame.url, target_url):
                     html2 = frame.content()
                     capture_forms_on_page(html2, frame.url)
             except Exception:
@@ -587,7 +615,7 @@ def crawl_site(
                     continue
 
                 # Hash-based SPA route (e.g., http://host/#/login)
-                if HASH_ROUTE_RE.match(full_url) and same_origin(full_url, target_url):
+                if HASH_ROUTE_RE.match(full_url) and same_site(full_url, target_url):
                     try:
                         page.goto(full_url, timeout=15000, wait_until="networkidle")
                         # small wake after route change
@@ -602,7 +630,7 @@ def crawl_site(
                         print(f"[WARN] SPA route load failed {full_url}: {e}")
 
                 # Same-origin regular links: record GET endpoint & recurse
-                if same_origin(full_url, target_url):
+                if same_site(full_url, target_url):
                     if "/socket.io/" in urlparse(full_url).path:
                         continue
                     # Record GET "discoveries" (query keys only; do not invent body params)

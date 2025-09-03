@@ -1,7 +1,34 @@
 # backend/main.py
 from __future__ import annotations
 
+import sys
 import os
+
+# --- START: FIX PYTHON PATH ---
+# This block ensures that the correct directory is added to the Python path.
+# This allows imports like 'from modules.ml...' to work correctly
+# regardless of how the script is executed.
+
+# Get the absolute path of the directory containing this file (backend/)
+backend_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Add the backend directory to the system path if it's not already there
+# This allows imports like 'from modules.ml...' to work
+if backend_dir not in sys.path:
+    sys.path.insert(0, backend_dir)
+    print(f"✅ Added backend directory to Python path: {backend_dir}")
+else:
+    print(f"✅ Backend directory already in Python path: {backend_dir}")
+
+# Also add the project root (parent of backend) for absolute imports like 'from backend.modules...'
+project_root = os.path.dirname(backend_dir)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+    print(f"✅ Added project root to Python path: {project_root}")
+else:
+    print(f"✅ Project root already in Python path: {project_root}")
+# --- END: FIX PYTHON PATH ---
+
 import logging
 import importlib
 from contextlib import asynccontextmanager
