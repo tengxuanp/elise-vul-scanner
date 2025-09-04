@@ -503,8 +503,20 @@ class EnhancedMLFuzzer:
             response = self._simulate_request(target, payload)
             logger.info(f"🔍 Response for payload '{payload[:30]}...': status={response['status']}, time={response['response_time']}")
             
-            # Classify vulnerability
-            vulnerability = self.classify_vulnerability(target, payload, response)
+            # Use real vulnerability detection if available
+            if "vulnerability_detected" in response and response["vulnerability_detected"] is not None:
+                # Use real detection results
+                vuln_type = VulnerabilityType.SQL_INJECTION if response.get("vulnerability_type") == "sqli" else VulnerabilityType.XSS
+                cvss_metrics = self.cvss_templates[vuln_type]
+                
+                vulnerability = VulnerabilityAssessment(
+                    vulnerability_type=vuln_type,
+                    confidence_score=0.8 if response["vulnerability_detected"] else 0.0,
+                    cvss_metrics=cvss_metrics
+                )
+            else:
+                # Fallback to ML classification
+                vulnerability = self.classify_vulnerability(target, payload, response)
             
             # Create result
             result = FuzzResult(
@@ -600,37 +612,45 @@ class EnhancedMLFuzzer:
         return payloads[:count]
     
     def _simulate_request(self, target: FuzzTarget, payload: str) -> Dict[str, Any]:
-        """Simulate HTTP request (in production, make actual requests)"""
-        logger.info(f"🌐 Simulating request for payload: {payload[:30]}...")
+        """Make actual HTTP request using real fuzzer"""
+        logger.info(f"🌐 Making real HTTP request for payload: {payload[:30]}...")
         
-        # Simulate different response scenarios based on payload content
-        if "script" in payload.lower():
-            return {
-                "status": 200,
-                "response_time": 0.5,
-                "content": f"<div>Search results for: {payload}</div>",
-                "content_length": len(payload) * 2
+        try:
+            # Import and use the real fuzzer
+            from .real_fuzzer import RealHTTPFuzzer
+            
+            # Create real fuzzer instance
+            fuzzer = RealHTTPFuzzer()
+            
+            # Create endpoint dict for real fuzzer
+            endpoint = {
+                "url": target.url,
+                "param": target.param,
+                "method": target.method
             }
-        elif "sql" in payload.lower() or "union" in payload.lower() or "or" in payload.lower():
+            
+            # Make actual HTTP request
+            result = fuzzer.fuzz_endpoint(endpoint, payload)
+            
+            # Convert result to expected format
+            return {
+                "status": result.response_status,
+                "response_time": result.response_time,
+                "content": result.response_body,
+                "content_length": len(result.response_body) if result.response_body else 0,
+                "vulnerability_detected": result.vulnerability_detected,
+                "vulnerability_type": result.vulnerability_type,
+                "evidence": result.detection_evidence  # Fixed: use detection_evidence instead of evidence
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Error making real HTTP request: {e}")
+            # Fallback to simulation
             return {
                 "status": 500,
-                "response_time": 2.0,
-                "content": "Internal Server Error",
+                "response_time": 1.0,
+                "content": f"Error: {str(e)}",
                 "content_length": 100
-            }
-        elif "ls" in payload or "whoami" in payload:
-            return {
-                "status": 200,
-                "response_time": 1.5,
-                "content": "Command executed successfully",
-                "content_length": 200
-            }
-        else:
-            return {
-                "status": 200,
-                "response_time": 0.3,
-                "content": f"Parameter value: {payload}",
-                "content_length": len(payload) + 20
             }
 
 

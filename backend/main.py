@@ -149,49 +149,17 @@ _include_optional_router(app, "enhanced_fuzz_routes", "Enhanced ML Fuzzing")
 # Mount the enhanced crawl router
 _include_optional_router(app, "enhanced_crawl_routes", "Enhanced Crawl")
 
+# Mount the ML fuzzing router
+_include_optional_router(app, "ml_fuzzing_routes", "ML Fuzzing")
+
+# Mount the exploitation router
+_include_optional_router(app, "exploitation_routes", "Exploitation")
+
 # Note: Enhanced ML fuzzing is now handled by the enhanced_fuzz_routes router
 # The direct endpoints have been removed to avoid conflicts with the new CVSS-based system
 
-# ------------------------- Enhanced Crawl Endpoint -------------------------
-@app.post("/api/enhanced-crawl")
-async def enhanced_crawl_direct(request: Dict[str, Any]):
-    """
-    Simple endpoint discovery for testing the enhanced ML fuzzer
-    """
-    try:
-        target_url = request.get("target_url", "http://localhost:8082/")
-        max_endpoints = request.get("max_endpoints", 20)
-        
-        print(f"🔍 Enhanced Crawl: Discovering endpoints from {target_url}")
-        
-        # Simple endpoint discovery (no complex crawling)
-        discovered_endpoints = [
-            {"url": f"{target_url}?q=test", "param": "q", "method": "GET", "type": "discovered"},
-            {"url": f"{target_url}search?query=test", "param": "query", "method": "GET", "type": "discovered"},
-            {"url": f"{target_url}api/test?input=test", "param": "input", "method": "GET", "type": "discovered"},
-            {"url": f"{target_url}form?name=test", "param": "name", "method": "POST", "type": "discovered"},
-            {"url": f"{target_url}admin?user=test", "param": "user", "method": "GET", "type": "discovered"},
-            {"url": f"{target_url}profile?id=test", "param": "id", "method": "GET", "type": "discovered"},
-            {"url": f"{target_url}upload?file=test", "param": "file", "method": "POST", "type": "discovered"},
-            {"url": f"{target_url}redirect?url=test", "param": "url", "method": "GET", "type": "discovered"},
-        ]
-        
-        # Limit to max_endpoints
-        discovered_endpoints = discovered_endpoints[:max_endpoints]
-        
-        print(f"✅ Enhanced Crawl: Discovered {len(discovered_endpoints)} endpoints")
-        
-        return {
-            "status": "success",
-            "message": f"Enhanced crawl completed for {target_url}",
-            "target_url": target_url,
-            "discovered_endpoints": len(discovered_endpoints),
-            "endpoints": discovered_endpoints
-        }
-        
-    except Exception as e:
-        print(f"❌ Enhanced crawl failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Enhanced crawl failed: {e}")
+# REMOVED: Duplicate endpoint that was overriding the enhanced crawler router
+# The enhanced crawler is now handled by the enhanced_crawl_routes router
 
 if __name__ == "__main__":
     import uvicorn
