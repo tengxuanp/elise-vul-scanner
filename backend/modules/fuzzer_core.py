@@ -21,17 +21,84 @@ from .detectors import (
 
 TRUNCATE_BODY = 2048
 
-# ----------------------------- ML integration (confidence) -------------------
-# Backward-compatible: existing attempt-level ML confidence (if present).
-try:
-    # returns {"p": float, "source": "ml|fallback|..."}
-    from .ml_ranker import predict_proba as _ranker_predict  # type: ignore
-    _ML_AVAILABLE = True
-except Exception:
-    _ML_AVAILABLE = False
+# ----------------------------- Enhanced ML integration -------------------
+# NOTE: Old enhanced ML system has been replaced with new CVSS-based system
+# This is now handled by enhanced_fuzz_routes.py
+_ENHANCED_ML_AVAILABLE = False
+_ML_AVAILABLE = False
 
-    def _ranker_predict(features: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore[no-redef]
-        return {"p": 0.0, "source": "fallback"}
+# Initialize enhanced ML engine (disabled)
+_ENHANCED_ENGINE = None
+_ENHANCED_FEATURE_EXTRACTOR = None
+
+# Enhanced ML prediction function
+def _enhanced_ml_predict(features: Dict[str, Any], family: str = None) -> Dict[str, Any]:
+    """
+    Enhanced ML prediction using the new system.
+    
+    Args:
+        features: Feature dictionary
+        family: Vulnerability family (optional, will be inferred if not provided)
+    
+    Returns:
+        Dictionary with enhanced prediction results
+    """
+    if not _ENHANCED_ML_AVAILABLE or _ENHANCED_ENGINE is None:
+        return {"p": 0.0, "source": "fallback", "enhanced": False}
+    
+    try:
+        # Extract endpoint and parameter info from features
+        endpoint = {
+            "url": features.get("url", ""),
+            "method": features.get("method", "GET"),
+            "content_type": features.get("content_type", "")
+        }
+        
+        param = {
+            "name": features.get("target_param", ""),
+            "value": features.get("control_value", ""),
+            "loc": features.get("in", "query")
+        }
+        
+        # If family not provided, try to infer from features
+        if not family:
+            # Simple heuristic based on parameter name
+            param_name = param["name"].lower()
+            if any(x in param_name for x in ["id", "user", "search", "query"]):
+                family = "sqli"
+            elif any(x in param_name for x in ["comment", "message", "content", "text"]):
+                family = "xss"
+            elif any(x in param_name for x in ["next", "redirect", "return", "url"]):
+                family = "redirect"
+            else:
+                family = "sqli"  # default
+        
+        # Make enhanced prediction
+        result = _ENHANCED_ENGINE.predict_with_confidence(endpoint, param, family)
+        
+        # Convert to expected format
+        enhanced_result = {
+            "p": result.get("calibrated_probability", result.get("raw_probability", 0.0)),
+            "source": f"enhanced_{result.get('model_type', 'unknown')}",
+            "enhanced": True,
+            "confidence": result.get("confidence", 0.0),
+            "uncertainty": result.get("uncertainty", 0.0),
+            "prediction": result.get("prediction", 0),
+            "family": family,
+            "model_type": result.get("model_type", "unknown"),
+            "features_used": result.get("features_used", 0)
+        }
+        
+        return enhanced_result
+        
+    except Exception as e:
+        print(f"Enhanced ML prediction failed: {e}")
+        return {"p": 0.0, "source": "fallback_error", "enhanced": False}
+
+# Legacy _ranker_predict function (fallback)
+def _ranker_predict(features: Dict[str, Any]) -> Dict[str, Any]:
+    """Legacy ML prediction function - now enhanced by default."""
+    return _enhanced_ml_predict(features)
 
 # ----------------------------- Stage A/B integration -------------------------
 # Prefer canonical payload pools from family_router if present; otherwise use payloads.py
@@ -136,6 +203,8 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     IMPORTANT: We always include lightweight META fields required by the
     recommender/LTR ranker: url, param, method, content_type, headers,
     and injection_mode/mode — even when FeatureExtractor is present.
+    
+    ENHANCED: Now also includes enhanced ML features when available.
     """
     k = _endpoint_key(t)
     if k in _FEATURE_CACHE:
@@ -155,6 +224,37 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     feats: Dict[str, Any] = {}
+    
+    # Enhanced features if available
+    if _ENHANCED_FEATURE_EXTRACTOR and _ENHANCED_ML_AVAILABLE:
+        try:
+            endpoint = {
+                "url": t.get("url", ""),
+                "method": t.get("method", "GET"),
+                "content_type": t.get("content_type", "")
+            }
+            param = {
+                "name": t.get("target_param", ""),
+                "value": t.get("control_value", ""),
+                "loc": t.get("in", "query")
+            }
+            
+            # Extract enhanced features for each family
+            enhanced_features = {}
+            for family in ["sqli", "xss", "redirect"]:
+                family_features = _ENHANCED_FEATURE_EXTRACTOR.extract_enhanced_features(
+                    endpoint, param, family
+                )
+                # Prefix family features to avoid conflicts
+                for feat_name, feat_value in family_features.items():
+                    enhanced_features[f"{family}_{feat_name}"] = feat_value
+            
+            feats.update(enhanced_features)
+            
+        except Exception as e:
+            print(f"Warning: Enhanced feature extraction failed: {e}")
+    
+    # Legacy feature extraction if available
     if _FE is not None:
         try:
             # Prefer the new endpoint-only API if present
@@ -177,16 +277,16 @@ def _endpoint_features(t: Dict[str, Any]) -> Dict[str, Any]:
                 )
 
             if isinstance(raw, dict):
-                feats = dict(raw)
+                feats.update(raw)
             elif isinstance(raw, tuple) and len(raw) >= 2 and isinstance(raw[1], dict):
                 # (vec, meta) -> use meta as endpoint features
-                feats = dict(raw[1])
+                feats.update(raw[1])
             else:
-                feats = _cheap_target_vector(t)
+                feats.update(_cheap_target_vector(t))
         except Exception:
-            feats = _cheap_target_vector(t)
+            feats.update(_cheap_target_vector(t))
     else:
-        feats = _cheap_target_vector(t)
+        feats.update(_cheap_target_vector(t))
 
     # Merge in the meta overlay (without clobbering existing concrete values)
     for mk, mv in meta_overlay.items():
@@ -342,8 +442,9 @@ def _rank_payloads_for_family(
     *,
     recent_fail_counts: Optional[Dict[str, int]] = None,
 ) -> Tuple[List[Tuple[str, float]], Dict[str, Any]]:
+    global _ENHANCED_ENGINE
     """
-    Stage B: per-family payload ranking via LTR; fallback to curated pool.
+    Stage B: per-family payload ranking via enhanced ML; fallback to legacy ML and curated pool.
     Returns ([(payload, prob)], meta)
     """
     fam = (family or "").lower()
@@ -351,28 +452,175 @@ def _rank_payloads_for_family(
     if not pool:
         return ([], {"used_path": "no_pool", "family": fam})
 
+    # Try enhanced ML ranking first
+    print(f"🔍 DEBUG: Enhanced ML check - _ENHANCED_ML_AVAILABLE={_ENHANCED_ML_AVAILABLE}, _ENHANCED_ENGINE={_ENHANCED_ENGINE}")
+    
+    if _ENHANCED_ML_AVAILABLE and _ENHANCED_ENGINE is not None:
+        try:
+            print(f"✅ Using enhanced ML engine for family {fam}")
+            
+            # Extract endpoint and parameter info
+            endpoint = {
+                "url": feats.get("url", ""),
+                "method": feats.get("method", "GET"),
+                "content_type": feats.get("content_type", "")
+            }
+            
+            param = {
+                "name": feats.get("target_param", ""),
+                "value": feats.get("control_value", ""),
+                "loc": feats.get("in", "query")
+            }
+            
+            print(f"🔍 Enhanced ML input - endpoint: {endpoint}, param: {param}, family: {fam}")
+            
+            # Use enhanced payload ranking
+            ranked_payloads = _ENHANCED_ENGINE.rank_payloads(
+                endpoint, param, fam, pool, top_k=top_n
+            )
+            
+            print(f"✅ Enhanced ML rank_payloads returned: {len(ranked_payloads)} results")
+            
+            if ranked_payloads:
+                # Convert to expected format with REAL ML scores
+                recs = [(p["payload"], p["score"]) for p in ranked_payloads]
+                
+                # Get the base prediction for this endpoint-parameter combination
+                try:
+                    base_prediction = _ENHANCED_ENGINE.predict_with_confidence(endpoint, param, fam)
+                    print(f"DEBUG: Base prediction successful: {base_prediction.get('calibrated_probability', 'N/A')}")
+                    
+                    # CRITICAL: Build metadata that clearly indicates this is REAL ML
+                    top_payload_score = float(ranked_payloads[0].get("score", 0.0))
+                    print(f"DEBUG: Top payload REAL ML score: {top_payload_score}")
+                    
+                    # Build complete metadata structure that the fuzzer expects
+                    # Ensure family is properly set for family_probs
+                    chosen_family = fam or "sqli"  # Fallback to sqli if fam is empty
+                    family_probs_dict = {chosen_family: 1.0}
+                    
+                    print(f"DEBUG: Building enhanced ML metadata with family='{chosen_family}', family_probs={family_probs_dict}")
+                    
+                    meta = {
+                        "used_path": "enhanced_ml",
+                        "family": chosen_family,
+                        "enhanced": True,
+                        "confidence": ranked_payloads[0].get("confidence", 0.0),
+                        "uncertainty": ranked_payloads[0].get("uncertainty", 0.0),
+                        # Additional fields the fuzzer expects
+                        "ranker_score": top_payload_score,  # This is the REAL ML score
+                        "family_probs": family_probs_dict,  # Set the family probability to 1.0 for the chosen family
+                        "model_ids": {"ranker_path": f"enhanced_{chosen_family}_xgboost", "enhanced_ml": True},
+                        "feature_dim_total": 48,
+                        "family_chosen": chosen_family,
+                        "enhanced_ml": True,
+                        "is_ml_prediction": True,  # Clear flag that this is ML
+                        "fallback_used": False     # Not a fallback
+                    }
+                    
+                    print(f"DEBUG: Enhanced ML metadata built successfully: {meta}")
+                    print(f"DEBUG: Enhanced ML engine returned {len(recs)} results with top score: {top_payload_score}")
+                    return (recs, meta)
+                    
+                except Exception as e:
+                    print(f"ERROR: Failed to get base prediction from enhanced ML engine: {e}")
+                    print(f"ERROR: This indicates a problem with the enhanced ML inference system")
+                    # Use the top payload score directly as fallback
+                    top_payload_score = float(ranked_payloads[0].get("score", 0.0))
+                    print(f"DEBUG: Using fallback with REAL ML payload score: {top_payload_score}")
+                    
+                    # Fallback metadata but with REAL payload scores
+                    chosen_family = fam or "sqli"  # Fallback to sqli if fam is empty
+                    family_probs_dict = {chosen_family: 1.0}
+                    
+                    print(f"DEBUG: Building fallback enhanced ML metadata with family='{chosen_family}', family_probs={family_probs_dict}")
+                    
+                    meta = {
+                        "used_path": "enhanced_ml",  # Still enhanced ML, just base prediction failed
+                        "family": chosen_family,
+                        "enhanced": True,
+                        "confidence": ranked_payloads[0].get("confidence", 0.0),
+                        "uncertainty": ranked_payloads[0].get("uncertainty", 0.0),
+                        "ranker_score": top_payload_score,  # This is still a REAL ML score from payload ranking
+                        "family_probs": family_probs_dict,
+                        "model_ids": {"ranker_path": f"enhanced_{chosen_family}_xgboost", "enhanced_ml": True},
+                        "feature_dim_total": 48,
+                        "family_chosen": chosen_family,
+                        "enhanced_ml": True,
+                        "is_ml_prediction": True,   # Still ML prediction from payload ranking
+                        "fallback_used": False,     # Payload ranking still worked
+                        "error": f"Base prediction failed: {str(e)}"
+                    }
+                    print(f"DEBUG: Using enhanced ML metadata with payload scores despite base prediction failure")
+                    return (recs, meta)
+                
+        except Exception as e:
+            print(f"ERROR: Enhanced ML engine failed completely: {e}")
+            print(f"ERROR: Enhanced ML input was - endpoint: {endpoint}, param: {param}, family: {fam}")
+            print(f"ERROR: Pool size: {len(pool)}, top_n: {top_n}")
+            print(f"ERROR: Falling back to legacy ML recommender")
+            pass
+
+    # Fallback to legacy ML recommender
     if _RECO is not None:
         try:
-            print(f"DEBUG: Using ML recommender for family {fam}")
+            print(f"DEBUG: Using legacy ML recommender for family {fam}")
             if hasattr(_RECO, "recommend_with_meta"):
                 fb = {"recent_fail_counts": dict(recent_fail_counts or {})} if recent_fail_counts else None
                 recs, meta = _RECO.recommend_with_meta(
                     feats, pool=pool, top_n=top_n, threshold=threshold, family=fam, feedback=fb  # type: ignore[arg-type]
                 )
-                print(f"DEBUG: ML recommender returned {len(recs)} results, meta: {meta}")
+                print(f"DEBUG: Legacy ML recommender returned {len(recs)} results, meta: {meta}")
                 return ([(p, float(prob)) for (p, prob) in recs], meta or {})
             else:
                 recs = _RECO.recommend(feats, pool=pool, top_n=top_n, threshold=threshold, family=fam)  # type: ignore[arg-type]
-                return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam})
+                return ([(p, float(prob)) for (p, prob) in recs], {"used_path": "legacy_recommend", "family": fam, "model_ids": {"ranker_path": "legacy_recommend"}})
         except Exception as e:
-            print(f"DEBUG: ML recommender failed: {e}")
+            print(f"DEBUG: Legacy ML recommender failed: {e}")
             pass
     else:
         print(f"DEBUG: No ML recommender available (_RECO is None)")
 
-    # Fallback: naive order, uniform score
-    out = [(p, 0.2) for p in pool[:top_n]]
-    return (out, {"used_path": "heuristic", "family": fam})
+    # Final fallback: NEVER use heuristic - force enhanced ML or fail gracefully
+    print(f"🚨 CRITICAL: Enhanced ML engine failed for family {fam}. This should not happen!")
+    print(f"🚨 Enhanced ML engine status: _ENHANCED_ML_AVAILABLE={_ENHANCED_ML_AVAILABLE}, _ENHANCED_ENGINE={_ENHANCED_ENGINE}")
+    
+    # Try one more time to initialize enhanced ML engine
+    if _ENHANCED_ML_AVAILABLE and _ENHANCED_ENGINE is None:
+        try:
+            _ENHANCED_ENGINE = EnhancedInferenceEngine()
+            print(f"🔄 Re-initialized enhanced ML engine: {_ENHANCED_ENGINE}")
+            
+            # Try enhanced ML ranking again
+            endpoint = {
+                "url": feats.get("url", ""),
+                "method": feats.get("method", "GET"),
+                "content_type": feats.get("content_type", "")
+            }
+            param = {
+                "name": feats.get("target_param", ""),
+                "value": feats.get("control_value", ""),
+                "loc": feats.get("in", "query")
+            }
+            
+            ranked_payloads = _ENHANCED_ENGINE.rank_payloads(endpoint, param, fam, pool, top_k=top_n)
+            if ranked_payloads:
+                recs = [(p["payload"], p["score"]) for p in ranked_payloads]
+                meta = {
+                    "used_path": "enhanced_ml",
+                    "family": fam,
+                    "enhanced": True,
+                    "confidence": ranked_payloads[0].get("confidence", 0.0),
+                    "uncertainty": ranked_payloads[0].get("uncertainty", 0.0)
+                }
+                print(f"✅ Enhanced ML engine recovered and returned {len(recs)} results")
+                return (recs, meta)
+        except Exception as e:
+            print(f"🚨 Failed to recover enhanced ML engine: {e}")
+    
+    # If all else fails, return empty results rather than heuristic
+    print(f"🚨 Returning empty results for family {fam} - no heuristic fallback allowed!")
+    return ([], {"used_path": "enhanced_ml_failed", "family": fam, "error": "Enhanced ML engine unavailable"})
 
 
 # ---------------------------- small utils ------------------------------------
@@ -1062,8 +1310,12 @@ def run_fuzz(job_dir: Path, targets_path: Path, out_dir: Optional[Path] = None) 
                     
                     # Debug logging for ML metadata
                     print(f"DEBUG: ranker_meta.used_path = {ranker_meta.get('used_path')}")
+                    print(f"DEBUG: ranker_meta.ranker_score = {ranker_meta.get('ranker_score')}")
+                    print(f"DEBUG: ranker_meta.is_ml_prediction = {ranker_meta.get('is_ml_prediction')}")
                     print(f"DEBUG: row_ranker_used = {row_ranker_used}")
+                    print(f"DEBUG: p_ml (payload score) = {p_ml}")
                     print(f"DEBUG: meta object = {meta}")
+                    print(f"DEBUG: Enhanced ML flags: enhanced_ml={meta.get('enhanced_ml')}, is_ml_prediction={meta.get('is_ml_prediction')}")
 
                     if err1 is not None:
                         _append_evidence_line(

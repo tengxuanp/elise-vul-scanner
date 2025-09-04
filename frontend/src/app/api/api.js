@@ -99,6 +99,42 @@ export const fuzzByJob = async (job_id, opts = {}) => {
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
 };
 
+/**
+ * ENHANCED ML FUZZER - Direct enhanced ML integration (no heuristic fallbacks)
+ * Stage A: Family prediction using enhanced ML
+ * Stage B: Payload recommendation using enhanced ML
+ */
+export const fuzzByJobEnhancedML = async (job_id, opts = {}) => {
+  const {
+    selection = null,
+    topN = 3,
+    bearerToken,
+    bearer_token,
+    bearer,
+    token,
+  } = opts;
+
+  // For enhanced ML, we need to convert selection to targets format
+  if (!selection || selection.length === 0) {
+    throw new Error('Enhanced ML fuzzing requires explicit endpoint selection');
+  }
+
+  const targets = selection.map(endpoint => ({
+    url: endpoint.url,
+    param: endpoint.params?.[0] || 'q', // Default to 'q' if no params specified
+    method: endpoint.method || 'GET',
+    job_id: job_id
+  }));
+
+  console.log('Enhanced ML Fuzzer: Targets prepared:', targets);
+  console.log('Enhanced ML Fuzzer: Calling /enhanced-fuzz endpoint');
+
+  const response = await api.post('/enhanced-fuzz', { targets });
+  console.log('Enhanced ML Fuzzer: Response received:', response.data);
+  
+  return response.data;
+};
+
 // Convenience: send only chosen endpoint shapes to the backend (defaults to core engine)
 export const fuzzSelected = async (
   job_id,
@@ -127,6 +163,36 @@ export const fuzzSelected = async (
   if (extras) body.extra_headers = extras;
 
   return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
+};
+
+/**
+ * ENHANCED ML FUZZER - Direct enhanced ML integration for selected endpoints
+ * Stage A: Family prediction using enhanced ML
+ * Stage B: Payload recommendation using enhanced ML
+ */
+export const fuzzSelectedEnhancedML = async (
+  job_id,
+  selection, // array of { method, url, params? }
+  opts = {}
+) => {
+  if (!selection || selection.length === 0) {
+    throw new Error('Enhanced ML fuzzing requires explicit endpoint selection');
+  }
+
+  const targets = selection.map(endpoint => ({
+    url: endpoint.url,
+    param: endpoint.params?.[0] || 'q', // Default to 'q' if no params specified
+    method: endpoint.method || 'GET',
+    job_id: job_id
+  }));
+
+  console.log('Enhanced ML Fuzzer (Selected): Targets prepared:', targets);
+  console.log('Enhanced ML Fuzzer (Selected): Calling /enhanced-fuzz endpoint');
+
+  const response = await api.post('/enhanced-fuzz', { targets });
+  console.log('Enhanced ML Fuzzer (Selected): Response received:', response.data);
+  
+  return response.data;
 };
 
 // If you expose a pollable results route per job, keep this.

@@ -1,0 +1,167 @@
+INFO:root:Starting API (LOG_LEVEL=INFO, ELISE_ML_DEBUG=False, ELISE_ML_MODEL_DIR=-)
+WARNING:root:Router 'crawl_routes' not mounted: attempted relative import beyond top-level package
+INFO:root:Mounted router: category_routes at /api (tag: Categorization)
+WARNING:root:Router 'probe_routes' not mounted: attempted relative import beyond top-level package
+INFO:root:Mounted router: recommend_routes at /api (tag: Recommender)
+INFO:root:Mounted router: job_routes at /api (tag: Job)
+WARNING:root:Router 'fuzz_routes' not mounted: expected 'except' or 'finally' block (fuzz_routes.py, line 993)
+INFO:root:Mounted router: evidence_routes at /api (tag: Evidence)
+WARNING:root:Router 'verify_routes' not mounted: attempted relative import beyond top-level package
+WARNING:root:Router 'report_routes' not mounted: attempted relative import beyond top-level package
+WARNING:root:Router 'ml_routes' not mounted: attempted relative import beyond top-level package
+INFO:root:Mounted router: enhanced_fuzz_routes at /api (tag: Enhanced ML Fuzzing)
+INFO:root:Mounted router: enhanced_crawl_routes at /api (tag: Enhanced Crawl)
+INFO:     Started server process [19269]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:routes.enhanced_fuzz_routes:🚀 Starting enhanced ML fuzzing for 1 targets
+INFO:modules.enhanced_ml_fuzzer:🚀 Initializing CVSS-based Enhanced ML Fuzzer
+INFO:modules.enhanced_ml_fuzzer:✅ CVSS-based Enhanced ML Fuzzer initialized successfully
+INFO:routes.enhanced_fuzz_routes:✅ Enhanced ML Fuzzer initialized successfully
+INFO:routes.enhanced_fuzz_routes:🔍 Fuzzer type: <class 'modules.enhanced_ml_fuzzer.EnhancedMLFuzzer'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_patterns: True
+INFO:routes.enhanced_fuzz_routes:🔍 Has cvss_templates: True
+INFO:routes.enhanced_fuzz_routes:🔍 Fuzzer instance: <class 'modules.enhanced_ml_fuzzer.EnhancedMLFuzzer'>
+INFO:routes.enhanced_fuzz_routes:🎯 Created FuzzTarget: http://localhost:8082/ param=q
+INFO:routes.enhanced_fuzz_routes:🧪 Calling fuzzer.fuzz_multiple_targets with 1 targets, top_k=5
+INFO:modules.enhanced_ml_fuzzer:🚀 Starting CVSS-based fuzzing for http://localhost:8082/ param=q
+INFO:modules.enhanced_ml_fuzzer:🧪 Generated 5 payloads: ["' OR '1'='1...", '; ls -la...', 'https://evil.com...', '../../../etc/passwd...', "<script>alert('XSS')..."]
+INFO:modules.enhanced_ml_fuzzer:🌐 Simulating request for payload: ' OR '1'='1...
+INFO:modules.enhanced_ml_fuzzer:🔍 Response for payload '' OR '1'='1...': status=500, time=2.0
+INFO:modules.enhanced_ml_fuzzer:🔍 Classifying vulnerability for payload: ' OR '1'='1...
+INFO:modules.enhanced_ml_fuzzer:✅ Detected vulnerability type: sqli
+INFO:modules.enhanced_ml_fuzzer:🎯 Vulnerability assessment: sqli, CVSS: 6.8, Confidence: 0.77
+INFO:modules.enhanced_ml_fuzzer:✅ Created result with exploitation potential: 0.6400000000000001
+INFO:modules.enhanced_ml_fuzzer:🌐 Simulating request for payload: ; ls -la...
+INFO:modules.enhanced_ml_fuzzer:🔍 Response for payload '; ls -la...': status=200, time=1.5
+INFO:modules.enhanced_ml_fuzzer:🔍 Classifying vulnerability for payload: ; ls -la...
+INFO:modules.enhanced_ml_fuzzer:✅ Detected vulnerability type: rce
+INFO:modules.enhanced_ml_fuzzer:🎯 Vulnerability assessment: rce, CVSS: 6.8, Confidence: 0.53
+INFO:modules.enhanced_ml_fuzzer:✅ Created result with exploitation potential: 0.504
+INFO:modules.enhanced_ml_fuzzer:🌐 Simulating request for payload: https://evil.com...
+INFO:modules.enhanced_ml_fuzzer:🔍 Response for payload 'https://evil.com...': status=200, time=0.3
+INFO:modules.enhanced_ml_fuzzer:🔍 Classifying vulnerability for payload: https://evil.com...
+INFO:modules.enhanced_ml_fuzzer:✅ Detected vulnerability type: redirect
+INFO:modules.enhanced_ml_fuzzer:🎯 Vulnerability assessment: redirect, CVSS: 1.2, Confidence: 0.65
+INFO:modules.enhanced_ml_fuzzer:✅ Created result with exploitation potential: 0.328
+INFO:modules.enhanced_ml_fuzzer:🌐 Simulating request for payload: ../../../etc/passwd...
+INFO:modules.enhanced_ml_fuzzer:🔍 Response for payload '../../../etc/passwd...': status=200, time=0.3
+INFO:modules.enhanced_ml_fuzzer:🔍 Classifying vulnerability for payload: ../../../etc/passwd...
+INFO:modules.enhanced_ml_fuzzer:✅ Detected vulnerability type: lfi
+INFO:modules.enhanced_ml_fuzzer:🎯 Vulnerability assessment: lfi, CVSS: 4.2, Confidence: 0.65
+INFO:modules.enhanced_ml_fuzzer:✅ Created result with exploitation potential: 0.44800000000000006
+INFO:modules.enhanced_ml_fuzzer:🌐 Simulating request for payload: <script>alert('XSS')</script>...
+INFO:modules.enhanced_ml_fuzzer:🔍 Response for payload '<script>alert('XSS')</script>...': status=200, time=0.5
+INFO:modules.enhanced_ml_fuzzer:🔍 Classifying vulnerability for payload: <script>alert('XSS')</script>...
+INFO:modules.enhanced_ml_fuzzer:✅ Detected vulnerability type: xss
+INFO:modules.enhanced_ml_fuzzer:🎯 Vulnerability assessment: xss, CVSS: 2.4, Confidence: 0.71
+INFO:modules.enhanced_ml_fuzzer:✅ Created result with exploitation potential: 0.4
+INFO:modules.enhanced_ml_fuzzer:🎉 CVSS-based fuzzing completed with 5 results
+INFO:routes.enhanced_fuzz_routes:🎉 Fuzzer returned 5 results
+INFO:routes.enhanced_fuzz_routes:🔄 Converting 5 results to response format
+INFO:routes.enhanced_fuzz_routes:🔍 Processing result 1: payload=' OR '1'='1...
+INFO:routes.enhanced_fuzz_routes:🔍 Result type: <class 'modules.enhanced_ml_fuzzer.FuzzResult'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_assessment: True
+INFO:routes.enhanced_fuzz_routes:✅ Adding vulnerability assessment for result 1
+INFO:routes.enhanced_fuzz_routes:✅ Added response result 1
+INFO:routes.enhanced_fuzz_routes:🔍 Processing result 2: payload=; ls -la...
+INFO:routes.enhanced_fuzz_routes:🔍 Result type: <class 'modules.enhanced_ml_fuzzer.FuzzResult'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_assessment: True
+INFO:routes.enhanced_fuzz_routes:✅ Adding vulnerability assessment for result 2
+INFO:routes.enhanced_fuzz_routes:✅ Added response result 2
+INFO:routes.enhanced_fuzz_routes:🔍 Processing result 3: payload=../../../etc/passwd...
+INFO:routes.enhanced_fuzz_routes:🔍 Result type: <class 'modules.enhanced_ml_fuzzer.FuzzResult'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_assessment: True
+INFO:routes.enhanced_fuzz_routes:✅ Adding vulnerability assessment for result 3
+INFO:routes.enhanced_fuzz_routes:✅ Added response result 3
+INFO:routes.enhanced_fuzz_routes:🔍 Processing result 4: payload=<script>alert('XSS')</script>...
+INFO:routes.enhanced_fuzz_routes:🔍 Result type: <class 'modules.enhanced_ml_fuzzer.FuzzResult'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_assessment: True
+INFO:routes.enhanced_fuzz_routes:✅ Adding vulnerability assessment for result 4
+INFO:routes.enhanced_fuzz_routes:✅ Added response result 4
+INFO:routes.enhanced_fuzz_routes:🔍 Processing result 5: payload=https://evil.com...
+INFO:routes.enhanced_fuzz_routes:🔍 Result type: <class 'modules.enhanced_ml_fuzzer.FuzzResult'>
+INFO:routes.enhanced_fuzz_routes:🔍 Has vulnerability_assessment: True
+INFO:routes.enhanced_fuzz_routes:✅ Adding vulnerability assessment for result 5
+INFO:routes.enhanced_fuzz_routes:✅ Added response result 5
+INFO:routes.enhanced_fuzz_routes:🎉 Enhanced ML fuzzing completed: 5 results
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/pydantic/main.py:426: UserWarning: Pydantic serializer warnings:
+  Expected `str` but got `float` with value `0.4` - serialized value may not be as expected
+  return self.__pydantic_serializer__.to_python(
+/Library/Frameworks/Python.framework/Versions/3.12/lib/python3.12/site-packages/pydantic/main.py:426: UserWarning: Pydantic serializer warnings:
+  Expected `str` but got `float` with value `0.1` - serialized value may not be as expected
+  return self.__pydantic_serializer__.to_python(
+🔍 Attempting absolute import: routes.crawl_routes
+❌ Absolute import failed for crawl_routes: attempted relative import beyond top-level package
+🔍 Attempting another absolute import: routes.crawl_routes
+❌ Both absolute and relative imports failed for crawl_routes: attempted relative import beyond top-level package
+🔍 Attempting absolute import: routes.category_routes
+✅ Router 'category_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/categorized-endpoints']
+🔍 Router route count before mounting: 1
+✅ Mounted router: category_routes at /api (tag: Categorization)
+🔍 Router routes after mounting: ['/categorized-endpoints']
+🔍 Router route count after mounting: 1
+🔍 Attempting absolute import: routes.probe_routes
+❌ Absolute import failed for probe_routes: attempted relative import beyond top-level package
+🔍 Attempting another absolute import: routes.probe_routes
+❌ Both absolute and relative imports failed for probe_routes: attempted relative import beyond top-level package
+🔍 Attempting absolute import: routes.recommend_routes
+✅ Router 'recommend_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/recommend_payloads', '/recommend_probed', '/diagnostics/ltr']
+🔍 Router route count before mounting: 3
+✅ Mounted router: recommend_routes at /api (tag: Recommender)
+🔍 Router routes after mounting: ['/recommend_payloads', '/recommend_probed', '/diagnostics/ltr']
+🔍 Router route count after mounting: 3
+🔍 Attempting absolute import: routes.job_routes
+✅ Router 'job_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/job/start', '/job/phase/{job_id}/{phase}', '/job/{job_id}']
+🔍 Router route count before mounting: 3
+✅ Mounted router: job_routes at /api (tag: Job)
+🔍 Router routes after mounting: ['/job/start', '/job/phase/{job_id}/{phase}', '/job/{job_id}']
+🔍 Router route count after mounting: 3
+🔍 Attempting absolute import: routes.fuzz_routes
+❌ Absolute import failed for fuzz_routes: expected 'except' or 'finally' block (fuzz_routes.py, line 993)
+🔍 Attempting another absolute import: routes.fuzz_routes
+❌ Both absolute and relative imports failed for fuzz_routes: expected 'except' or 'finally' block (fuzz_routes.py, line 993)
+🔍 Attempting absolute import: routes.evidence_routes
+✅ Router 'evidence_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/evidence/record', '/evidence/by_job/{job_id}', '/evidence/{evidence_id}', '/evidence/{evidence_id}/artifact', '/evidence/summary/{job_id}']
+🔍 Router route count before mounting: 5
+✅ Mounted router: evidence_routes at /api (tag: Evidence)
+🔍 Router routes after mounting: ['/evidence/record', '/evidence/by_job/{job_id}', '/evidence/{evidence_id}', '/evidence/{evidence_id}/artifact', '/evidence/summary/{job_id}']
+🔍 Router route count after mounting: 5
+🔍 Attempting absolute import: routes.verify_routes
+❌ Absolute import failed for verify_routes: attempted relative import beyond top-level package
+🔍 Attempting another absolute import: routes.verify_routes
+❌ Both absolute and relative imports failed for verify_routes: attempted relative import beyond top-level package
+🔍 Attempting absolute import: routes.report_routes
+❌ Absolute import failed for report_routes: attempted relative import beyond top-level package
+🔍 Attempting another absolute import: routes.report_routes
+❌ Both absolute and relative imports failed for report_routes: attempted relative import beyond top-level package
+🔍 Attempting absolute import: routes.ml_routes
+❌ Absolute import failed for ml_routes: attempted relative import beyond top-level package
+🔍 Attempting another absolute import: routes.ml_routes
+❌ Both absolute and relative imports failed for ml_routes: attempted relative import beyond top-level package
+🔍 Attempting absolute import: routes.enhanced_fuzz_routes
+❌ Relative import failed: attempted relative import beyond top-level package
+✅ Enhanced ML Fuzzer imported successfully (absolute)
+✅ Router 'enhanced_fuzz_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/enhanced-fuzz', '/fuzz/single', '/enhanced-health', '/enhanced-info']
+🔍 Router route count before mounting: 4
+✅ Mounted router: enhanced_fuzz_routes at /api (tag: Enhanced ML Fuzzing)
+🔍 Router routes after mounting: ['/enhanced-fuzz', '/fuzz/single', '/enhanced-health', '/enhanced-info']
+🔍 Router route count after mounting: 4
+🔍 Attempting absolute import: routes.enhanced_crawl_routes
+✅ Enhanced ML Fuzzer imported successfully (absolute)
+✅ Router 'enhanced_crawl_routes' imported successfully (absolute)
+🔍 Router routes before mounting: ['/crawl', '/crawl-and-fuzz', '/health', '/info']
+🔍 Router route count before mounting: 4
+✅ Mounted router: enhanced_crawl_routes at /api (tag: Enhanced Crawl)
+🔍 Router routes after mounting: ['/crawl', '/crawl-and-fuzz', '/health', '/info']
+🔍 Router route count after mounting: 4
+INFO:     127.0.0.1:49860 - "POST /api/enhanced-fuzz HTTP/1.1" 200 OK
+🔍 Enhanced Crawl: Discovering endpoints from http://localhost:8082/
+✅ Enhanced Crawl: Discovered 5 endpoints
+INFO:     127.0.0.1:49865 - "POST /api/enhanced-crawl HTTP/1.1" 200 OK

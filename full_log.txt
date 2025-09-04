@@ -1,0 +1,1048 @@
+DEBUG: Enhanced ML metadata built successfully: {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML engine returned 3 results with top score: 0.07450655847787857
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=%27+OR+1%3D1--&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=%27+OR+%27a%27%3D%27a%27+--+&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=%22+OR+%22a%22%3D%22a%22+--+&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=__X__&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=__X1__&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=__X2__&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=ctrl_WjGVtxMj&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27+OR+%271%27%3D%271%27+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27+OR+%271%27%3D%272%27+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27%29+OR+%28%271%27%3D%271%27+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27%29+OR+%28%271%27%3D%272%27+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%22%29+OR+%28%221%22%3D%221%22+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%22%29+OR+%28%221%22%3D%222%22+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=1+OR+1%3D1+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=1+AND+1%3D2+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%29+OR+%281%3D1%29+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%29+AND+%281%3D2%29+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2527%2520OR%2520%25271%2527%253D%25271%2527%2520--%2520&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2527%2520OR%2520%25271%2527%253D%25272%2527%2520--%2520&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=1%2520OR%25201%253D1%2520--%2520&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=1%2520AND%25201%253D2%2520--%2520&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.6339017  0.36609828], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.019172906530923774 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained xss model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for xss, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9988043  0.00119574], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.0011797941889324607 for family xss
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained redirect model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for redirect, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.9970549e-01 2.9449913e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00029335673020026623 for family redirect
+DEBUG: Using enhanced ML engine for family sqli
+DEBUG: Enhanced ML input - endpoint: {'url': 'http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=ctrl_WjGVtxMj&source=header-repo&source_repo=juice-shop%2Fjuice-shop', 'method': 'GET', 'content_type': None}, param: {'name': '', 'value': '', 'loc': 'query'}, family: sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 1=1--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 'a'='a' -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '" OR "a"="a" -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1 OR 1=1 -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ') OR (1=1) -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' UNION SELECT NULL-- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ''; WAITFOR DELAY '0:0:3'--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1)); SELECT pg_sleep(3)--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+DEBUG: Enhanced ML rank_payloads returned: 3 results
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.98112524 0.01887475], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.016325242146313552 for family sqli
+DEBUG: Base prediction successful: 0.018874751403927803
+DEBUG: Top payload REAL ML score: 0.07450655847787857
+DEBUG: Building enhanced ML metadata with family='sqli', family_probs={'sqli': 1.0}
+DEBUG: Enhanced ML metadata built successfully: {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML engine returned 3 results with top score: 0.07450655847787857
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27+OR+1%3D1--&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%27+OR+%27a%27%3D%27a%27+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%22+OR+%22a%22%3D%22a%22+--+&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=__X__&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=__X1__&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=__X2__&source=header-repo&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=ctrl_2edn4r8N&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%271%27+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%272%27+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%29+OR+%28%271%27%3D%271%27+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%29+OR+%28%271%27%3D%272%27+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%22%29+OR+%28%221%22%3D%221%22+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%22%29+OR+%28%221%22%3D%222%22+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1+OR+1%3D1+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1+AND+1%3D2+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%29+OR+%281%3D1%29+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%29+AND+%281%3D2%29+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%2527%2520OR%2520%25271%2527%253D%25271%2527%2520--%2520&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%2527%2520OR%2520%25271%2527%253D%25272%2527%2520--%2520&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1%2520OR%25201%253D1%2520--%2520&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1%2520AND%25201%253D2%2520--%2520&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.6339017  0.36609828], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.019172906530923774 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained xss model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for xss, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9988043  0.00119574], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.0011797941889324607 for family xss
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained redirect model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for redirect, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.9970549e-01 2.9449913e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00029335673020026623 for family redirect
+DEBUG: Using enhanced ML engine for family sqli
+DEBUG: Enhanced ML input - endpoint: {'url': 'http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=ctrl_2edn4r8N&source_repo=juice-shop%2Fjuice-shop', 'method': 'GET', 'content_type': None}, param: {'name': '', 'value': '', 'loc': 'query'}, family: sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 1=1--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 'a'='a' -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '" OR "a"="a" -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1 OR 1=1 -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ') OR (1=1) -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' UNION SELECT NULL-- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ''; WAITFOR DELAY '0:0:3'--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1)); SELECT pg_sleep(3)--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+DEBUG: Enhanced ML rank_payloads returned: 3 results
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.98112524 0.01887475], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.016325242146313552 for family sqli
+DEBUG: Base prediction successful: 0.018874751403927803
+DEBUG: Top payload REAL ML score: 0.07450655847787857
+DEBUG: Building enhanced ML metadata with family='sqli', family_probs={'sqli': 1.0}
+DEBUG: Enhanced ML metadata built successfully: {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML engine returned 3 results with top score: 0.07450655847787857
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+1%3D1--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%27a%27%3D%27a%27+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%22+OR+%22a%22%3D%22a%22+--+&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%271--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%272--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%271%27--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%272%27--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%271%27+%2F%2A&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+%271%27%3D%272%27+%2F%2A&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1+OR+1%3D1--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=1+OR+1%3D2--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+OR+1%3D2--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%29%29+OR+1%3D1--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%29%29+OR+1%3D2--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27+UNION+SELECT+NULL--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27--&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=__X__&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=__X1__&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=__X2__&source_repo=juice-shop%2Fjuice-shop "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=ctrl_3qxgpejN "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%271%27+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%272%27+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%29+OR+%28%271%27%3D%271%27+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%29+OR+%28%271%27%3D%272%27+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%22%29+OR+%28%221%22%3D%221%22+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%22%29+OR+%28%221%22%3D%222%22+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1+OR+1%3D1+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1+AND+1%3D2+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%29+OR+%281%3D1%29+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%29+AND+%281%3D2%29+--+ "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%2527%2520OR%2520%25271%2527%253D%25271%2527%2520--%2520 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%2527%2520OR%2520%25271%2527%253D%25272%2527%2520--%2520 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1%2520OR%25201%253D1%2520--%2520 "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1%2520AND%25201%253D2%2520--%2520 "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.6339017  0.36609828], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.3660982847213745
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.019172906530923774 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained xss model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for xss, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9988043  0.00119574], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0011957358801737428
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.0011797941889324607 for family xss
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained redirect model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for redirect, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.9970549e-01 2.9449913e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0002944991283584386
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00029335673020026623 for family redirect
+DEBUG: Using enhanced ML engine for family sqli
+DEBUG: Enhanced ML input - endpoint: {'url': 'http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=ctrl_3qxgpejN', 'method': 'GET', 'content_type': None}, param: {'name': '', 'value': '', 'loc': 'query'}, family: sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 1=1--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' OR 'a'='a' -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '" OR "a"="a" -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1 OR 1=1 -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ') OR (1=1) -- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '' UNION SELECT NULL-- ': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload ''; WAITFOR DELAY '0:0:3'--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:Extracted 0 payload-specific features for payload '1)); SELECT pg_sleep(3)--': []...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.9254934  0.07450656], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.07450655847787857
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.04600627001586819 for family sqli
+DEBUG: Enhanced ML rank_payloads returned: 3 results
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [0.98112524 0.01887475], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.018874751403927803
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.016325242146313552 for family sqli
+DEBUG: Base prediction successful: 0.018874751403927803
+DEBUG: Top payload REAL ML score: 0.07450655847787857
+DEBUG: Building enhanced ML metadata with family='sqli', family_probs={'sqli': 1.0}
+DEBUG: Enhanced ML metadata built successfully: {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML engine returned 3 results with top score: 0.07450655847787857
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+1%3D1-- "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%27a%27%3D%27a%27+--+ "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%22+OR+%22a%22%3D%22a%22+--+ "HTTP/1.1 200 OK"
+DEBUG: ranker_meta.used_path = enhanced_ml
+DEBUG: ranker_meta.ranker_score = 0.07450655847787857
+DEBUG: ranker_meta.is_ml_prediction = None
+DEBUG: row_ranker_used = enhanced_ml
+DEBUG: p_ml (payload score) = 0.07450655847787857
+DEBUG: meta object = {'used_path': 'enhanced_ml', 'family': 'sqli', 'enhanced': True, 'confidence': 0.04600627001586819, 'uncertainty': 0.3825205330141813, 'ranker_score': 0.07450655847787857, 'family_probs': {'sqli': 1.0}, 'model_ids': {'ranker_path': 'enhanced_sqli_xgboost', 'enhanced_ml': True}, 'feature_dim_total': 48, 'family_chosen': 'sqli', 'enhanced_ml': True, 'is_ml_prediction': True, 'fallback_used': False}
+DEBUG: Enhanced ML flags: enhanced_ml=True, is_ml_prediction=True
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%271-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%272-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%271%27-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%272%27-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%271%27+%2F%2A "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+%271%27%3D%272%27+%2F%2A "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1+OR+1%3D1-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=1+OR+1%3D2-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+OR+1%3D2-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%29%29+OR+1%3D1-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%29%29+OR+1%3D2-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27+UNION+SELECT+NULL-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27-- "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27-- "HTTP/1.1 200 OK"
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=%27%3BWAITFOR+DELAY+%270%3A0%3A3%27-- "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=__X__ "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=__X1__ "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:httpx:HTTP Request: GET http://localhost:8082/signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E&source=header-repo&source_repo=__X2__ "HTTP/1.1 200 OK"
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature extraction result - count: 48, keys: ['feature_0', 'feature_1', 'feature_2', 'feature_3', 'feature_4', 'feature_5', 'feature_6', 'feature_7', 'feature_8', 'feature_9']...
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature values shape: (48,)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Feature vector shape before scaler: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:Using trained sqli model for prediction
+INFO:backend.modules.ml.enhanced_inference:DEBUG: About to apply scaler for sqli, feature vector shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler expects 48 features, got 48
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Scaler transformation successful, new shape: (1, 48)
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Classification model prediction - raw_proba: [9.991973e-01 8.026743e-04], prediction: 0
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final raw_proba after scalar conversion: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Calibrated probability: 0.0008026742725633085
+INFO:backend.modules.ml.enhanced_inference:DEBUG: Final confidence score: 0.00079512001059269 for family sqli
+INFO:     127.0.0.1:53172 - "POST /api/fuzz/by_job/62d5659f-348f-4507-83e6-5d0c74c3c31d HTTP/1.1" 200 OK

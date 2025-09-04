@@ -1,0 +1,14 @@
+{
+    "python.defaultInterpreterPath": "/Users/raphaelpang/code/elise/backend/venv_py312/bin/python",
+    "python.pythonPath": "/Users/raphaelpang/code/elise/backend/venv_py312/bin/python",
+    "python.analysis.extraPaths": [
+        "/Users/raphaelpang/code/elise/backend",
+        "/Users/raphaelpang/code/elise"
+    ],
+    "python.analysis.autoImportCompletions": true,
+    "python.analysis.typeCheckingMode": "basic",
+    "python.terminal.activateEnvironment": true,
+    "python.analysis.diagnosticMode": "workspace",
+    "python.venvPath": "/Users/raphaelpang/code/elise/backend",
+    "python.venv": "venv_py312"
+}

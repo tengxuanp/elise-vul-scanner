@@ -816,8 +816,8 @@ def _run_core_engine(job_id: str, selection: Optional[List[EndpointShape]], bear
         has_ml_fields = bool(family_probs) or isinstance(ranker_score, (int, float)) or (isinstance(model_ids, (list, tuple)) and len(model_ids) > 0)
         used_path = raw_rm.get("used_path")
         # CRITICAL: Preserve the original used_path from evidence - don't overwrite ML paths!
-        if raw_rm.get("used_path") and raw_rm.get("used_path").startswith("ml:"):
-            used_path = raw_rm.get("used_path")  # Keep "ml:redirect", "ml:sqli", etc.
+        if raw_rm.get("used_path") and (raw_rm.get("used_path").startswith("ml:") or raw_rm.get("used_path") == "enhanced_ml"):
+            used_path = raw_rm.get("used_path")  # Keep "ml:redirect", "ml:sqli", "enhanced_ml", etc.
         elif has_ml_fields and not used_path:
             used_path = "family_ranker"  # Only use fallback if no ML path exists
 
@@ -962,3 +962,32 @@ def fuzz_by_job(
 def get_fuzz_result(job_id: str):
     """Return the last in-memory fuzz results (for UI polling)."""
     return {"job_id": job_id, "results": LATEST_RESULTS.get(job_id, [])}
+
+# ========================= NEW ENHANCED ML FUZZER =========================
+
+@router.post("/fuzz-enhanced-ml")
+def fuzz_enhanced_ml_direct(
+    targets: List[FuzzTarget]
+):
+    """
+    BRAND NEW ENHANCED ML FUZZER - Direct enhanced ML integration (no heuristic fallbacks)
+    Stage A: Family prediction using enhanced ML
+    Stage B: Payload recommendation using enhanced ML
+    """
+    results = []
+    
+    try:
+        print("🚀 Enhanced ML Fuzzing: Redirecting to new CVSS-based system")
+        
+        # NOTE: Old enhanced ML system has been replaced with new CVSS-based system
+        # This is now handled by enhanced_fuzz_routes.py
+        print("✅ Using new CVSS-based Enhanced ML Fuzzer from enhanced_fuzz_routes.py")
+        
+        # Return empty results to indicate redirection
+        return {
+            "status": "redirected",
+            "message": "Enhanced ML fuzzing has been moved to /api/enhanced-fuzz",
+            "results": [],
+            "enhanced_ml": True,
+            "cvss_based": True
+        }
