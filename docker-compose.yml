@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  lab:
+    build: ./lab
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./lab:/app
+    restart: unless-stopped
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_RUN_HOST=0.0.0.0
+      - FLASK_RUN_PORT=5001

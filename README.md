@@ -156,6 +156,43 @@ elise/
 - **Vulnerability Research**: Discovery and analysis of new attack vectors
 - **Security Compliance**: Automated vulnerability assessment for audits
 
+## 🧪 Local Vulnerable Lab (Flask)
+
+For testing and development purposes, Elise includes a local vulnerable web application built with Flask.
+
+### Quick Start
+
+1. **Start the lab environment:**
+   ```bash
+   make lab
+   ```
+
+2. **Access the vulnerable app:**
+   - Visit: http://localhost:5001/
+   - The app contains intentionally vulnerable endpoints for testing
+
+3. **Stop the lab environment:**
+   ```bash
+   make lab-down
+   ```
+
+### Vulnerabilities Included
+
+- **XSS (Reflected)**: HTML, attribute, and JavaScript string contexts
+- **XSS (Stored)**: Unsanitized content in notes
+- **SQL Injection**: Error-based and boolean-based blind
+- **Open Redirect**: Unvalidated URL redirection
+- **CSRF**: State-changing operations without token protection
+
+### Test Credentials
+
+- **alice** / **alice** (balance: $100.00)
+- **bob** / **bob** (balance: $50.00)
+
+### ⚠️ Important Warning
+
+**This vulnerable lab is for local/offline testing only. Do not expose to the internet or use in production environments.**
+
 ## 🔒 Security Considerations
 
 - **Responsible Disclosure**: Only test authorized targets

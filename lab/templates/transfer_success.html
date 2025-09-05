@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Transfer Successful</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .success { background: #e8f5e8; padding: 20px; border-radius: 8px; border-left: 4px solid #4caf50; }
+        .amount { font-size: 24px; font-weight: bold; color: #4caf50; }
+    </style>
+</head>
+<body>
+    <h1>Transfer Successful</h1>
+    
+    <div class="success">
+        <p>✅ Transfer completed successfully!</p>
+        <p><strong>{{ from_user }}</strong> transferred <span class="amount">${{ "%.2f"|format(amount) }}</span> to <strong>{{ to_user }}</strong></p>
+    </div>
+    
+    <p><a href="/transfer">Make Another Transfer</a> | <a href="/">← Back to Index</a></p>
+</body>
+</html>
