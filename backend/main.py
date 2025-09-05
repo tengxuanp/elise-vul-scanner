@@ -8,9 +8,8 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional, List, Dict, Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 # Add the backend directory to the Python path for imports
