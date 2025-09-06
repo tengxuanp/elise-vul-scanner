@@ -1,0 +1,373 @@
+// frontend/src/app/api/api.js
+import axios from 'axios';
+
+// Base URL comes from env in dev/prod; hardcoded fallback is only for local.
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8000/api';
+
+export const api = axios.create({
+  baseURL: API_BASE,
+  // Don't fight long scans with client timeouts
+  timeout: 0,
+});
+
+// -------- helpers --------
+const normalizeBearer = (token) => {
+  if (!token) return null;
+  const t = String(token).trim();
+  return t.toLowerCase().startsWith('bearer ') ? t : `Bearer ${t}`;
+};
+
+// Pull bearer from several possible option keys for robustness
+const pickBearerFromOpts = (opts = {}) =>
+  normalizeBearer(
+    opts.bearerToken ??
+      opts.bearer_token ??
+      opts.bearer ??
+      opts.token ??
+      null
+  );
+
+// Global response interceptor (cleaner error logs)
+api.interceptors.response.use(
+  (res) => res,
+  (error) => {
+    const payload = error?.response?.data;
+    const msg =
+      payload?.detail ||
+      payload?.message ||
+      error.message ||
+      'Unknown API error';
+    console.error('API Error:', msg, payload);
+    return Promise.reject(error);
+  }
+);
+
+/* ===================== Jobs ===================== */
+export const startJob = async ({ target, notes = '' }) =>
+  (await api.post('/job/start', { target, notes })).data; // -> { job_id }
+
+/* ===================== Crawl ===================== */
+// Enhanced crawl with probe-enhanced ML workflow
+export const crawlTarget = async ({ target_url, max_endpoints = 20, max_depth = 3, max_pages = 12, seed_paths = null }) =>
+  (await api.post('/crawl', { 
+    target_url, 
+    max_endpoints, 
+    max_depth, 
+    max_pages,
+    seed_paths 
+  })).data;
+
+export const getCrawlStatus = async (job_id) =>
+  (await api.get(`/crawl/status/${job_id}`)).data; // -> { status }
+
+export const getCrawlResult = async (job_id) =>
+  (await api.get(`/crawl/result/${job_id}`)).data; // -> { endpoints, captured_requests }
+
+/* ========== Categorization (still target-scoped) ========== */
+export const getCategorizedEndpoints = async (target_url) =>
+  (await api.get('/categorized-endpoints', { params: { target_url } })).data;
+
+/* ===================== Fuzzing ===================== */
+/**
+ * Run fuzzing for a job.
+ * opts = {
+ *   engine: 'core' | 'ffuf' | 'hybrid' (default 'core'),
+ *   selection: [{ method, url, params? }] | null,
+ *   bearerToken | bearer_token | bearer | token: string | null,  // auto 'Bearer ' prefix if missing
+ *   topN: number (ffuf only),
+ *   threshold: number (ffuf only),
+ *   extraHeaders | extra_headers: { [k: string]: string }  // optional additional headers
+ * }
+ */
+export const fuzzByJob = async (job_id, opts = {}) => {
+  const {
+    engine = 'core',
+    selection = null,
+    topN = 3,
+    threshold = 0.2,
+    extraHeaders,
+    extra_headers,
+  } = opts;
+
+  const bearer = pickBearerFromOpts(opts);
+  const extras = extraHeaders || extra_headers || null;
+
+  const body = {
+    engine,
+    selection,
+    top_n: topN,
+    threshold,
+  };
+
+  if (bearer) body.bearer_token = bearer;
+  if (extras) body.extra_headers = extras;
+
+  return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
+};
+
+/**
+ * ENHANCED ML FUZZER - Direct enhanced ML integration (no heuristic fallbacks)
+ * Stage A: Family prediction using enhanced ML
+ * Stage B: Payload recommendation using enhanced ML
+ */
+export const fuzzByJobEnhancedML = async (job_id, opts = {}) => {
+  const {
+    selection = null,
+    topN = 3,
+    bearerToken,
+    bearer_token,
+    bearer,
+    token,
+  } = opts;
+
+  // For enhanced ML, we need to convert selection to targets format
+  if (!selection || selection.length === 0) {
+    throw new Error('Enhanced ML fuzzing requires explicit endpoint selection');
+  }
+
+  const targets = selection.map(endpoint => ({
+    url: endpoint.url,
+    param: endpoint.params?.[0] || 'q', // Default to 'q' if no params specified
+    method: endpoint.method || 'GET',
+    job_id: job_id
+  }));
+
+  console.log('Enhanced ML Fuzzer: Targets prepared:', targets);
+  console.log('Enhanced ML Fuzzer: Calling /enhanced-fuzz endpoint');
+
+  const response = await api.post('/enhanced-fuzz', { targets });
+  console.log('Enhanced ML Fuzzer: Response received:', response.data);
+  
+  return response.data;
+};
+
+// Convenience: send only chosen endpoint shapes to the backend (defaults to core engine)
+export const fuzzSelected = async (
+  job_id,
+  selection, // array of { method, url, params? }
+  opts = {} // same shape as fuzzByJob opts (you can pass bearerToken/bearer_token/engine/extraHeaders here)
+) => {
+  const {
+    engine = 'core',
+    topN = 3,
+    threshold = 0.2,
+    extraHeaders,
+    extra_headers,
+  } = opts;
+
+  const bearer = pickBearerFromOpts(opts);
+  const extras = extraHeaders || extra_headers || null;
+
+  const body = {
+    engine,
+    selection,
+    top_n: topN,
+    threshold,
+  };
+
+  if (bearer) body.bearer_token = bearer;
+  if (extras) body.extra_headers = extras;
+
+  return (await api.post(`/fuzz/by_job/${job_id}`, body)).data;
+};
+
+/**
+ * ENHANCED ML FUZZER - Direct enhanced ML integration for selected endpoints
+ * Stage A: Family prediction using enhanced ML
+ * Stage B: Payload recommendation using enhanced ML
+ */
+export const fuzzSelectedEnhancedML = async (
+  job_id,
+  selection, // array of { method, url, params? }
+  opts = {}
+) => {
+  if (!selection || selection.length === 0) {
+    throw new Error('Enhanced ML fuzzing requires explicit endpoint selection');
+  }
+
+  const targets = selection.map(endpoint => ({
+    url: endpoint.url,
+    param: endpoint.params?.[0] || 'q', // Default to 'q' if no params specified
+    method: endpoint.method || 'GET',
+    job_id: job_id
+  }));
+
+  console.log('Enhanced ML Fuzzer (Selected): Targets prepared:', targets);
+  console.log('Enhanced ML Fuzzer (Selected): Calling /enhanced-fuzz endpoint');
+
+  const response = await api.post('/enhanced-fuzz', { targets });
+  console.log('Enhanced ML Fuzzer (Selected): Response received:', response.data);
+  
+  return response.data;
+};
+
+// If you expose a pollable results route per job, keep this.
+export const getFuzzResultByJob = async (job_id) =>
+  (await api.get(`/fuzz/result/${job_id}`)).data;
+
+/* ============ Probe & Recommendations (job-scoped) ============ */
+export const startProbe = async (job_id) =>
+  (await api.post(`/probe/${job_id}`)).data;
+
+/**
+ * Backend currently exposes GET /api/recommend_probed (no job id).
+ * Try job-scoped first for forward-compat; fall back to flat route.
+ */
+export const getRecommendations = async (job_id) => {
+  try {
+    return (await api.get(`/recommend_probed/${job_id}`)).data; // if your backend supports it
+  } catch {
+    return (await api.get('/recommend_probed')).data; // current backend implementation
+  }
+};
+
+/* ============== ML Prediction with Probe-Enhanced Workflow ============== */
+/**
+ * ML prediction using the new probe-enhanced workflow
+ * Returns target-level predictions with probe evidence
+ */
+export const predictVulnerabilities = async (endpoints, top_k = 5) => {
+  return (await api.post('/ml-predict', { endpoints, top_k })).data;
+};
+
+/**
+ * Enhanced fuzzing with probe-enhanced ML workflow
+ * Returns structured findings with evidence
+ */
+export const enhancedFuzz = async (targets, top_k = 5) => {
+  return (await api.post('/enhanced-fuzz', { targets, top_k })).data;
+};
+
+/**
+ * Single target fuzzing
+ */
+export const fuzzSingleTarget = async (target, top_k = 5) => {
+  return (await api.post('/fuzz/single', { ...target, top_k })).data;
+};
+
+/**
+ * Get evidence for a job
+ */
+export const getEvidence = async (job_id) => {
+  return (await api.get(`/evidence/${job_id}`)).data;
+};
+
+/**
+ * Train ML models
+ */
+export const trainModels = async () => {
+  return (await api.post('/train-models', {})).data;
+};
+
+/**
+ * Get ML status
+ */
+export const getMLStatus = async () => {
+  return (await api.get('/ml-status')).data;
+};
+
+/* ============== Direct ML recommendation (single endpoint) ============== */
+/**
+ * Call the per-endpoint recommender. This returns ranker_meta with
+ * {used_path, source, strategy, model_ids, expected_total_dim, ...}.
+ */
+export const recommendPayloads = async ({
+  url,
+  param,
+  method = 'GET',
+  family = undefined,     // 'sqli' | 'xss' | 'redirect' (optional)
+  topN = 3,
+  threshold = 0.2,
+  pool = undefined,       // optional list of candidate payloads
+  seed_payload = "' OR 1=1 --",
+}) => {
+  const body = {
+    url,
+    param,
+    method,
+    family,
+    top_n: topN,
+    threshold,
+    pool,
+    seed_payload,
+  };
+  return (await api.post('/recommend_payloads', body)).data;
+};
+
+/* ===================== Exploitation ===================== */
+// If your backend isn’t job-scoped for exploit, change to POST /exploit with body.
+export const exploitTarget = async (job_id, tool, endpoint_url, options = {}) =>
+  (await api.post(`/exploit/${job_id}`, { tool, endpoint_url, options })).data;
+
+/* ===================== Reporting ===================== */
+// JSON report
+export const getReport = async (job_id) =>
+  (await api.get(`/report/${job_id}`)).data;
+
+// Markdown report (string)
+export const getReportMarkdown = async (job_id) =>
+  (await api.get(`/report/${job_id}/md`, { responseType: 'text' })).data;
+
+/* ===================== Utilities ===================== */
+export const setAuthHeader = (key, value) => {
+  if (!value) delete api.defaults.headers.common[key];
+  else api.defaults.headers.common[key] = value;
+};
+
+// Convenience for UI: normalize a raw token into a proper Authorization header
+export const setBearerAuth = (token) => {
+  const val = normalizeBearer(token);
+  if (!val) return setAuthHeader('Authorization', undefined);
+  setAuthHeader('Authorization', val);
+};
+
+/* ===================== Diagnostics ===================== */
+export const getLTRDiagnostics = async (params = {}) =>
+  (await api.get('/diagnostics/ltr', { params })).data;
+
+/* ===================== Ranker Meta Helpers ===================== */
+export const isMLRanker = (respOrMeta) => {
+  const meta = respOrMeta?.ranker_meta ?? respOrMeta ?? {};
+  const used = String(meta.used_path || '');
+  const strat = String(meta.strategy || '');
+  return used.startsWith('ml:') || strat === 'ml';
+};
+
+export const rankerBadge = (respOrMeta) => {
+  const meta = respOrMeta?.ranker_meta ?? respOrMeta ?? {};
+  const used = String(meta.used_path || '');
+  const strat = String(meta.strategy || '');
+  if (used.startsWith('ml:') || strat === 'ml') return 'ML';
+  if (strat === 'plugin') return 'Plugin';
+  if (strat?.startsWith('generic')) return 'Generic';
+  return 'Heuristic';
+};
+
+export default {
+  api,
+  startJob,
+  crawlTarget,
+  getCrawlStatus,
+  getCrawlResult,
+  getCategorizedEndpoints,
+  fuzzByJob,
+  fuzzSelected,
+  getFuzzResultByJob,
+  startProbe,
+  getRecommendations,
+  recommendPayloads,
+  predictVulnerabilities,
+  enhancedFuzz,
+  fuzzSingleTarget,
+  getEvidence,
+  trainModels,
+  getMLStatus,
+  exploitTarget,
+  getReport,
+  getReportMarkdown,
+  setAuthHeader,
+  setBearerAuth,
+  getLTRDiagnostics,
+  isMLRanker,
+  rankerBadge,
+};

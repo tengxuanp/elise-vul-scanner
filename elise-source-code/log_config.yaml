@@ -1,0 +1,26 @@
+version: 1
+disable_existing_loggers: false
+formatters:
+  default:
+    fmt: "%(levelname)s:     %(asctime)s - %(name)s - %(message)s"
+    datefmt: "%Y-%m-%d %H:%M:%S"
+handlers:
+  file:
+    class: "logging.handlers.RotatingFileHandler"
+    formatter: "default"
+    filename: "app_config.log" # The log file name
+    maxBytes: 1024 * 1024 * 5  # 5 MB
+    backupCount: 5             # Keep 5 backup logs
+loggers:
+  uvicorn.error:
+    level: "INFO"
+    handlers: ["file"]
+    propagate: no
+  uvicorn.access:
+    level: "INFO"
+    handlers: ["file"]
+    propagate: no
+  app: # Your application's logger
+    level: "DEBUG"
+    handlers: ["file"]
+    propagate: no

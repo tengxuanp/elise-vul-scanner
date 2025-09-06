@@ -1,0 +1,11 @@
+{
+  "family": "redirect",
+  "validation_log_loss": 0.11706664612775992,
+  "validation_accuracy": 0.935,
+  "precision": 1.0,
+  "recall": 0.805,
+  "f1_score": 0.8919667590027701,
+  "support": 200.0,
+  "n_samples": 3000,
+  "n_features": 45
+}

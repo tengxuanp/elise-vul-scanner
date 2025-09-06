@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>User Profile</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .profile { background: #f5f5f5; padding: 20px; border-radius: 8px; }
+        .name { font-size: 24px; font-weight: bold; color: #1976d2; }
+    </style>
+</head>
+<body>
+    <h1>User Profile</h1>
+    <div class="profile">
+        <p class="name">Welcome, <span id="username" data-name="{{ name|safe }}">{{ name|safe }}</span>!</p>
+        <p>This is your profile page.</p>
+    </div>
+    <p><a href="/">← Back to Index</a></p>
+</body>
+</html>

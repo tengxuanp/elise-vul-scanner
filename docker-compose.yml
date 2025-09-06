@@ -1,0 +1,74 @@
+services:
+  # Vulnerable lab application for testing
+  lab:
+    build: ./lab
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./lab:/app
+    restart: unless-stopped
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_RUN_HOST=0.0.0.0
+      - FLASK_RUN_PORT=5001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # Elise Backend API
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=INFO
+      - MODEL_DIR=/app/models
+      - DATA_DIR=/app/data
+      - ELISE_ML_MODEL_DIR=/app/models
+      - PYTHONPATH=/app
+    volumes:
+      # Mount local models directory (read-only)
+      - ./backend/modules/ml/models:/app/models:ro
+      # Shared data volume
+      - elise_data:/app/data
+    depends_on:
+      lab:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # Elise Frontend (Next.js)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_BASE=http://localhost:8000/api
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# Shared volumes
+volumes:
+  elise_data:
+    driver: local

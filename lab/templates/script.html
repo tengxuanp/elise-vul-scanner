@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Script Page</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .message { background: #e3f2fd; padding: 15px; border-radius: 4px; margin: 20px 0; }
+    </style>
+</head>
+<body>
+    <h1>Script Page</h1>
+    <div class="message">
+        <p>This page demonstrates JavaScript string injection.</p>
+    </div>
+    
+    <script>
+        var m = "{{ message|safe }}";
+        document.body.innerHTML += '<div class="message"><p>Message from server: ' + m + '</p></div>';
+    </script>
+    
+    <p><a href="/">← Back to Index</a></p>
+</body>
+</html>

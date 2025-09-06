@@ -1,0 +1,21 @@
+{
+    "include": [
+        "."
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__",
+        "**/venv",
+        "**/.venv"
+    ],
+    "pythonPath": "/Users/raphaelpang/code/elise/backend/venv_py312/bin/python",
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "extraPaths": [
+        "/Users/raphaelpang/code/elise/backend",
+        "/Users/raphaelpang/code/elise"
+    ],
+    "venvPath": "/Users/raphaelpang/code/elise/backend",
+    "venv": "venv_py312"
+}
