@@ -23,11 +23,43 @@ MANIFEST
 
 # Virtual environments
 venv/
-venv_py312/
+venv_*/
 env/
 ENV/
 env.bak/
 venv.bak/
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Next.js
+.next/
+out/
+build/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+server.log
+
+# Runtime data
+data/results/
+data/jobs/
+data/evidence/
+data/ml/synth/
+backend/data/results/
+backend/data/evidence/
 
 # IDE
 .vscode/
@@ -45,30 +77,18 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Logs
-*.log
-logs/
-server.log
-backend.log
-*.log.md
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
 
-# Database
-*.db
-*.db-shm
-*.db-wal
-evidence.db*
+# Test files
+debug_*.py
+*_debug.py
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# Next.js
-.next/
-out/
-build/
+# Model files (keep the main ones)
+# *.joblib
 
 # Environment variables
 .env
@@ -77,33 +97,8 @@ build/
 .env.test.local
 .env.production.local
 
-# Temporary files
-*.tmp
-*.temp
-temp/
-tmp/
-
-# ML Models (large files)
-*.joblib
-*.pkl
-*.h5
-*.model
-
-# Results and data
-data/results/
-data/jobs/
-data/ml/synth/
-results/
-jobs/
-
-# Test files
-test_*.py
-*_test.py
-test_*.html
-test_*.json
-
-# Documentation build
-docs/_build/
+# Docker
+.dockerignore
 
 # Coverage reports
 htmlcov/
@@ -113,40 +108,3 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# PEP 582
-__pypackages__/
-
-# Celery
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/

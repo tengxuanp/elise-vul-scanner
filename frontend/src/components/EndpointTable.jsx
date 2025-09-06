@@ -2,18 +2,32 @@
 import { useMemo, useState } from "react";
 import useDebouncedValue from "../hooks/useDebouncedValue";
 
-export default function EndpointTable({ endpoints }) {
+export default function EndpointTable({ endpoints, meta }) {
   const [q, setQ] = useState("");
   const [hasParams, setHasParams] = useState(false);
   const debouncedQ = useDebouncedValue(q, 100);
   
+  // Map rows from API shape directly
+  const rows = useMemo(() => {
+    return (endpoints || []).map(e => ({
+      path: e.path || new URL(e.url).pathname,
+      method: e.method,
+      params: e.params,               // array of strings
+      status: e.status ?? "",
+      type: e.content_type ?? "",
+      source: e.source ?? "",
+      seen: e.seen ?? 1,
+      url: e.url
+    }));
+  }, [endpoints]);
+  
   const filtered = useMemo(() => {
-    return (endpoints || []).filter(e => {
-      const hit = (e.path||"").includes(debouncedQ) || (e.param_names||[]).join(",").includes(debouncedQ);
-      const hp = !hasParams || (Array.isArray(e.param_names) && e.param_names.length>0);
+    return rows.filter(e => {
+      const hit = (e.path||"").includes(debouncedQ) || (e.params||[]).join(",").includes(debouncedQ);
+      const hp = !hasParams || (e.params && e.params.length > 0);
       return hit && hp;
     });
-  }, [endpoints, debouncedQ, hasParams]);
+  }, [rows, debouncedQ, hasParams]);
   
   // Cap rendering to 300 items for performance
   const shown = filtered.slice(0, 300);
@@ -29,6 +43,23 @@ export default function EndpointTable({ endpoints }) {
           </label>
         </div>
       </div>
+      
+      {/* Meta badges */}
+      {meta && (
+        <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center gap-4 text-sm">
+            <span className="font-medium">Visited: {meta.pagesVisited}</span>
+            <span className="font-medium">XHR: {meta.xhrCount}</span>
+            <span className="font-medium">Endpoints: {meta.emitted}</span>
+            <span className="font-medium">With params: {meta.withParams}</span>
+            <span className={`px-2 py-1 rounded text-xs font-medium ${
+              meta.engine === 'playwright-strict' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`}>
+              Engine: {meta.engine}
+            </span>
+          </div>
+        </div>
+      )}
       {filtered.length === 0 ? (
         <div className="text-sm text-gray-600">
           No observed endpoints. We only show **capture-only** network results. Increase depth, add seed paths, or ensure the app is interactive.
@@ -45,13 +76,13 @@ export default function EndpointTable({ endpoints }) {
             <tbody>
               {shown.map((e,i)=>(
                 <tr key={i} className="border-t">
-                  <td className="py-1">{e.path || "/"}</td>
+                  <td className="py-1">{e.path}</td>
                   <td>{e.method}</td>
-                  <td>{(e.param_names||[]).join(", ")}</td>
-                  <td>{e.status ?? ""}</td>
-                  <td>{e.content_type?.split(";")[0] || ""}</td>
+                  <td>{e.params.length ? e.params.join(", ") : ""}</td>
+                  <td>{e.status || ""}</td>
+                  <td>{e.type}</td>
                   <td>{e.source}</td>
-                  <td><span className="px-2 py-0.5 rounded bg-gray-100">{(e.prov_event_ids||[]).length||0}</span></td>
+                  <td><span className="px-2 py-0.5 rounded bg-gray-100">{e.seen}</span></td>
                 </tr>
               ))}
             </tbody>

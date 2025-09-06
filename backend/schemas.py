@@ -132,6 +132,26 @@ class ParamLocs(BaseModel):
 
 # ----------------------------- endpoint shape -------------------------------
 
+class EnrichedEndpoint(BaseModel):
+    """
+    Enriched endpoint object with additional metadata for UI display.
+    This is the format returned by the crawler API.
+    
+    Frontend TypeScript equivalent: frontend/src/types/api.ts#EnrichedEndpoint
+    """
+    url: str = Field(..., description="Full URL of the endpoint")
+    path: str = Field(..., description="URL path component (e.g., '/api/users')")
+    method: HTTPMethod = Field(..., description="HTTP method")
+    params: List[str] = Field(default_factory=list, description="All parameter names across all locations")
+    param_locs: Dict[str, List[str]] = Field(
+        default_factory=lambda: {"query": [], "form": [], "json": []},
+        description="Parameter names grouped by location"
+    )
+    status: Optional[int] = Field(default=None, description="HTTP response status code")
+    source: Optional[Literal["xhr", "nav", "other"]] = Field(default=None, description="Request source type")
+    content_type: Optional[str] = Field(default=None, description="Response content type")
+    seen: int = Field(default=1, description="Number of times this endpoint was observed")
+
 class EndpointOut(BaseModel):
     """
     Normalized, dedup-friendly endpoint emitted by the crawler/target builder.

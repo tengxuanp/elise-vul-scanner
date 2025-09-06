@@ -1,32 +1,16 @@
 "use client";
 import { useState } from "react";
-import { postFuzz } from "../lib/api";
+import { fuzz } from "../lib/api";
 
-export default function FuzzPanel({ endpoints, mlReady, onStarted }) {
+export default function FuzzPanel({ predictions, mlReady, onFuzz }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
 
   async function run() {
     setBusy(true); setMsg(null);
     try {
-      // Convert endpoints to targets format for enhanced-fuzz
-      const targets = (endpoints || []).map(endpoint => {
-        // Extract parameters from param_locs
-        const params = [];
-        if (endpoint.param_locs?.query) params.push(...endpoint.param_locs.query);
-        if (endpoint.param_locs?.form) params.push(...endpoint.param_locs.form);
-        if (endpoint.param_locs?.json) params.push(...endpoint.param_locs.json);
-        
-        // Create targets for each parameter
-        return params.map(param => ({
-          url: endpoint.url,
-          param: param,
-          method: endpoint.method || 'GET'
-        }));
-      }).flat();
-      
-      const res = await postFuzz(targets);
-      if (res?.job_id) onStarted && onStarted(res.job_id);
+      const res = await fuzz(predictions || []);
+      onFuzz && onFuzz(res);
       setMsg(null);
     } catch (e) {
       if (e.type === "ML_UNAVAILABLE") {
@@ -39,7 +23,7 @@ export default function FuzzPanel({ endpoints, mlReady, onStarted }) {
     } finally { setBusy(false); }
   }
 
-  const canRun = endpoints?.length > 0 && mlReady;
+  const canRun = predictions?.length > 0 && mlReady;
 
   return (
     <div className="bg-white rounded-xl shadow p-4 space-y-2">
@@ -53,8 +37,8 @@ export default function FuzzPanel({ endpoints, mlReady, onStarted }) {
         disabled={!canRun || busy}
         onClick={run}
         title={
-          !endpoints?.length 
-            ? "No endpoints to fuzz" 
+          !predictions?.length 
+            ? "No predictions to fuzz" 
             : !mlReady 
             ? "ML models not ready - train models first" 
             : undefined
@@ -62,7 +46,7 @@ export default function FuzzPanel({ endpoints, mlReady, onStarted }) {
       >
         {busy ? "Starting…" : "Run Fuzz"}
       </button>
-      {!mlReady && endpoints?.length > 0 && (
+      {!mlReady && predictions?.length > 0 && (
         <div className="text-xs text-amber-600">
           ⚠️ ML models required for fuzzing
         </div>

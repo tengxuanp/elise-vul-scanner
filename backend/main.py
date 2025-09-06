@@ -161,6 +161,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 # Permissive CORS for dev; tighten before shipping to prod
 app.add_middleware(
     CORSMiddleware,
@@ -170,58 +171,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------- mount routers -------------------------
-# Mount exactly these routers at /api as specified
+# ------------------------- mount canonical routers -------------------------
+# Mount ONLY the canonical API endpoints as specified
 
-# Enhanced routers (preferred over basic ones)
-_include_optional_router(app, "enhanced_crawl_routes", "Capture")  # Enhanced crawl (capture-mode)
-_include_optional_router(app, "crawl_routes", "Crawl")  # Legacy job-mode crawl
-_include_optional_router(app, "ml_routes", "ML")  # ML routes for target granularity
-_include_optional_router(app, "enhanced_fuzz_routes", "Fuzzing")  # Enhanced fuzz
-_include_optional_router(app, "report_routes", "Report")  # Report routes
-_include_optional_router(app, "evidence_routes", "Evidence")  # Evidence routes
-
-# Additional optional routers
-_include_optional_router(app, "category_routes", "Categorization")
-_include_optional_router(app, "probe_routes", "Probe")
-_include_optional_router(app, "recommend_routes", "Recommender")
-_include_optional_router(app, "job_routes", "Job")
-_include_optional_router(app, "verify_routes", "Verify")
-_include_optional_router(app, "ml_fuzzing_routes", "ML Fuzzing")
-_include_optional_router(app, "exploitation_routes", "Exploitation")
-
-# Health endpoint
-@app.get("/api/healthz")
-async def health_check():
-    """Health check endpoint that returns system status and mounted routers"""
-    from app_state import ml_state, browser_state, MODEL_DIR, DATA_DIR
-    
-    # Get all mounted routes
-    routers = []
-    for route in app.routes:
-        if hasattr(route, 'path') and route.path.startswith('/api/'):
-            prefix = route.path.split('/')[2] if len(route.path.split('/')) > 2 else 'root'
-            if prefix not in routers:
-                routers.append(prefix)
-    
-    response = {
-        "status": "ok",
-        "routers": sorted(routers),
-        "browser_ready": browser_state.ready,
-        "browser_error": browser_state.error,
-        "ml_ready": ml_state.ready,
-        "ml_error": ml_state.error,
-        "model_dir": MODEL_DIR,
-        "data_dir": DATA_DIR
-    }
-    
-    return response
+# Canonical API endpoints
+_include_optional_router(app, "canonical_crawl_routes", "Crawl")
+_include_optional_router(app, "canonical_ml_predict_routes", "ML Predict")
+_include_optional_router(app, "canonical_fuzz_routes", "Fuzz")
+_include_optional_router(app, "canonical_exploit_routes", "Exploit")
+_include_optional_router(app, "canonical_healthz_routes", "Health")
 
 # Log startup summary of mounted routes
 def _log_startup_summary():
     """Log a summary of all mounted routes at startup"""
     print("\n" + "="*60)
-    print("🚀 ELISE API STARTUP SUMMARY")
+    print("🚀 ELISE CANONICAL API STARTUP SUMMARY")
     print("="*60)
     
     # Get all routes from the app
@@ -234,34 +198,39 @@ def _log_startup_summary():
                 'name': getattr(route, 'name', 'unnamed')
             })
     
-    # Group routes by prefix
-    route_groups = {}
-    for route in routes:
-        if route['path'].startswith('/api/'):
-            prefix = route['path'].split('/')[2] if len(route['path'].split('/')) > 2 else 'root'
-            if prefix not in route_groups:
-                route_groups[prefix] = []
-            route_groups[prefix].append(route)
+    # Log canonical API endpoints
+    print("\n📋 CANONICAL API ENDPOINTS:")
+    canonical_endpoints = [
+        ("POST", "/api/crawl", "Endpoint discovery via crawling"),
+        ("POST", "/api/ml-predict", "ML vulnerability family prediction"),
+        ("POST", "/api/fuzz", "Vulnerability fuzzing with payloads"),
+        ("POST", "/api/exploit", "Vulnerability exploitation confirmation"),
+        ("GET", "/api/healthz", "System health and dependency status")
+    ]
     
-    # Log grouped routes
-    for group, group_routes in sorted(route_groups.items()):
-        print(f"\n📁 /api/{group}/")
-        for route in sorted(group_routes, key=lambda x: x['path']):
-            methods_str = ', '.join(sorted(route['methods']))
-            print(f"  {methods_str:15} {route['path']}")
+    for method, path, description in canonical_endpoints:
+        print(f"  {method:4} {path:20} - {description}")
     
-    # Log health endpoint separately
-    print(f"\n🏥 Health Check:")
-    print(f"  GET            /api/healthz")
+    # Log all mounted routes for debugging
+    print(f"\n🔍 ALL MOUNTED ROUTES ({len(routes)} total):")
+    for route in sorted(routes, key=lambda x: x['path']):
+        methods_str = ', '.join(sorted(route['methods']))
+        print(f"  {methods_str:15} {route['path']}")
     
-    print(f"\n✅ Total routes mounted: {len(routes)}")
-    print("="*60)
-    print("🎯 Enhanced routers active: crawl, fuzz")
-    print("🔧 Duplicate routes eliminated")
+    print(f"\n✅ Canonical API ready with {len(canonical_endpoints)} endpoints")
+    print("🔧 All variants and compat routes removed")
     print("="*60 + "\n")
 
 # Call startup summary after all routers are mounted
 _log_startup_summary()
+
+# Print detailed route information
+from fastapi.routing import APIRoute
+routes = []
+for r in app.routes:
+    if isinstance(r, APIRoute):
+        routes.append({"path": r.path, "methods": list(r.methods)})
+print("[ROUTES]", routes)
 
 if __name__ == "__main__":
     import uvicorn

@@ -1,13 +1,14 @@
 "use client";
 import { useState } from "react";
-import { postCrawl } from "../lib/api";
+import { crawl } from "../lib/api";
 
-export default function CrawlForm({ onCrawled }) {
+export default function CrawlForm({ onCrawled, onMeta }) {
   const [url, setUrl] = useState("http://localhost:5001/");
   const [maxDepth, setMaxDepth] = useState(3);
   const [maxPages, setMaxPages] = useState(12);
   const [maxLinksPerPage, setMaxLinks] = useState(20);
   const [submitGetForms, setSubmitGetForms] = useState(true);
+  const [submitPostForms, setSubmitPostForms] = useState(true);
   const [seedPaths, setSeedPaths] = useState("");
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState(null);
@@ -18,15 +19,15 @@ export default function CrawlForm({ onCrawled }) {
     try {
       const payload = {
         target_url: url,
-        max_depth: Number(maxDepth), 
-        max_pages: Number(maxPages),
-        max_endpoints: Number(maxLinksPerPage),
-        submit_get_forms: !!submitGetForms,
-        seed_paths: seedPaths ? seedPaths.split(",").map(s => s.trim()).filter(Boolean) : null
+        max_depth: Number(maxDepth) || 2,
+        max_endpoints: Number(maxLinksPerPage) || 30,
+        submit_get_forms: submitGetForms,
+        submit_post_forms: submitPostForms,
+        seeds: seedPaths ? seedPaths.split(",").map(s => s.trim()).filter(Boolean) : []
       };
-      const res = await postCrawl(payload);
-      if (res.capture_only !== true) setNote("Warning: pattern candidates present; they won't be fuzzed until proven.");
+      const res = await crawl(payload);
       onCrawled(res.endpoints || []);
+      if (onMeta) onMeta(res.meta || {});
       
       // Show helper message for empty results
       if (res.endpoints && res.endpoints.length === 0) {
@@ -51,6 +52,10 @@ export default function CrawlForm({ onCrawled }) {
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={submitGetForms} onChange={e=>setSubmitGetForms(e.target.checked)} />
           Submit GET forms
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={submitPostForms} onChange={e=>setSubmitPostForms(e.target.checked)} />
+          Submit POST forms
         </label>
       </div>
       <input className="w-full border rounded p-2" value={seedPaths} onChange={e=>setSeedPaths(e.target.value)} placeholder="seed paths (comma separated)" />

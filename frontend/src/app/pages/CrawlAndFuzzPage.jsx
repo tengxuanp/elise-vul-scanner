@@ -1,33 +1,38 @@
 "use client";
 import { useState, useCallback } from "react";
 import { 
-  crawlTarget, 
-  predictVulnerabilities, 
-  enhancedFuzz, 
-  trainModels, 
-  getMLStatus,
-  getEvidence 
-} from "../api/api";
+  crawl, 
+  mlPredict, 
+  fuzz
+} from "../../lib/api";
+import EndpointTable from "../../components/EndpointTable";
 
 // Hook for enhanced crawling
 const useEnhancedCrawler = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [discoveredEndpoints, setDiscoveredEndpoints] = useState([]);
+  const [crawlMeta, setCrawlMeta] = useState(null);
   const [error, setError] = useState(null);
 
-  const crawlTargetUrl = useCallback(async (targetUrl, maxEndpoints = 20) => {
+  const crawlTargetUrl = useCallback(async (targetUrl, maxEndpoints = 20, maxDepth = 2, submitGetForms = true, submitPostForms = true, clickButtons = true, auth = null) => {
     setIsLoading(true);
     setError(null);
     
     try {
-      const data = await crawlTarget({ 
+      const data = await crawl({ 
         target_url: targetUrl, 
         max_endpoints: maxEndpoints,
-        max_depth: 3,
-        max_pages: 12
+        max_depth: maxDepth,
+        submit_get_forms: submitGetForms,
+        submit_post_forms: submitPostForms,
+        click_buttons: clickButtons,
+        seeds: [],
+        auth: auth
       });
       setDiscoveredEndpoints(data.endpoints || []);
+      setCrawlMeta(data.meta || null);
       console.log(`Discovered ${data.endpoints?.length || 0} endpoints from ${targetUrl}`);
+      console.log(`Crawl meta:`, data.meta);
       return data;
     } catch (err) {
       setError(err.message);
@@ -40,6 +45,7 @@ const useEnhancedCrawler = () => {
 
   const clearEndpoints = useCallback(() => {
     setDiscoveredEndpoints([]);
+    setCrawlMeta(null);
     setError(null);
   }, []);
 
@@ -48,6 +54,7 @@ const useEnhancedCrawler = () => {
     clearEndpoints,
     isLoading,
     discoveredEndpoints,
+    crawlMeta,
     error
   };
 };
@@ -63,9 +70,9 @@ const useMLPrediction = () => {
     setError(null);
     
     try {
-      const data = await predictVulnerabilities(endpoints, 5);
-      setPredictions(data.findings || []);
-      console.log(`ML predictions completed: ${data.findings?.length || 0} findings`);
+      const data = await mlPredict(endpoints);
+      setPredictions(data || []);
+      console.log(`ML predictions completed: ${data?.length || 0} predictions`);
       return data;
     } catch (err) {
       setError(err.message);
@@ -96,14 +103,14 @@ const useEnhancedFuzzer = () => {
   const [results, setResults] = useState([]);
   const [error, setError] = useState(null);
 
-  const fuzzTargets = useCallback(async (targets) => {
+  const fuzzTargets = useCallback(async (predictions) => {
     setIsLoading(true);
     setError(null);
     
     try {
-      const data = await enhancedFuzz(targets, 5);
-      setResults(data.results || []);
-      console.log(`Enhanced fuzzing completed: ${data.results?.length || 0} results`);
+      const data = await fuzz(predictions);
+      setResults(data || []);
+      console.log(`Enhanced fuzzing completed: ${data?.length || 0} results`);
       return data;
     } catch (err) {
       setError(err.message);
@@ -128,49 +135,7 @@ const useEnhancedFuzzer = () => {
   };
 };
 
-// Hook for ML model management
-const useMLModels = () => {
-  const [isTraining, setIsTraining] = useState(false);
-  const [mlStatus, setMLStatus] = useState(null);
-  const [error, setError] = useState(null);
-
-  const trainMLModels = useCallback(async () => {
-    setIsTraining(true);
-    setError(null);
-    
-    try {
-      const data = await trainModels();
-      console.log("ML models trained:", data.message);
-      return data;
-    } catch (err) {
-      setError(err.message);
-      console.error(`ML training failed: ${err.message}`);
-      throw err;
-    } finally {
-      setIsTraining(false);
-    }
-  }, []);
-
-  const checkMLStatus = useCallback(async () => {
-    try {
-      const data = await getMLStatus();
-      setMLStatus(data);
-      return data;
-    } catch (err) {
-      setError(err.message);
-      console.error(`ML status check failed: ${err.message}`);
-      throw err;
-    }
-  }, []);
-
-  return {
-    trainMLModels,
-    checkMLStatus,
-    isTraining,
-    mlStatus,
-    error
-  };
-};
+// ML model management removed - not part of canonical API
 
 export default function CrawlAndFuzzPage() {
   // Hooks for different stages
@@ -179,6 +144,7 @@ export default function CrawlAndFuzzPage() {
     clearEndpoints,
     isLoading: crawlingLoading,
     discoveredEndpoints,
+    crawlMeta,
     error: crawlingError
   } = useEnhancedCrawler();
 
@@ -198,17 +164,17 @@ export default function CrawlAndFuzzPage() {
     error: fuzzingError
   } = useEnhancedFuzzer();
 
-  const {
-    trainMLModels,
-    checkMLStatus,
-    isTraining,
-    mlStatus,
-    error: mlError
-  } = useMLModels();
+  // ML model management removed - not part of canonical API
 
   // State management
   const [targetUrl, setTargetUrl] = useState("http://localhost:5001/");
   const [maxEndpoints, setMaxEndpoints] = useState(20);
+  const [maxDepth, setMaxDepth] = useState(2);
+  const [submitGetForms, setSubmitGetForms] = useState(true);
+  const [submitPostForms, setSubmitPostForms] = useState(true);
+  const [clickButtons, setClickButtons] = useState(true);
+  const [authJson, setAuthJson] = useState("");
+  const [showAuth, setShowAuth] = useState(false);
   const [currentStep, setCurrentStep] = useState(1); // 1: Crawl, 2: Predict, 3: Fuzz
   const [selectedTargets, setSelectedTargets] = useState(new Set());
   const [jobId, setJobId] = useState(null);
@@ -220,14 +186,25 @@ export default function CrawlAndFuzzPage() {
       return;
     }
     
+    // Parse auth JSON if provided
+    let auth = null;
+    if (authJson.trim()) {
+      try {
+        auth = JSON.parse(authJson);
+      } catch (err) {
+        alert("Invalid auth JSON: " + err.message);
+        return;
+      }
+    }
+    
     try {
-      const data = await crawlTargetUrl(targetUrl, maxEndpoints);
+      const data = await crawlTargetUrl(targetUrl, maxEndpoints, maxDepth, submitGetForms, submitPostForms, clickButtons, auth);
       setJobId(data.job_id || `crawl-${Date.now()}`);
       setCurrentStep(2);
     } catch (err) {
       console.error("Crawling failed:", err);
     }
-  }, [targetUrl, maxEndpoints, crawlTargetUrl]);
+  }, [targetUrl, maxEndpoints, maxDepth, submitGetForms, submitPostForms, clickButtons, authJson, crawlTargetUrl]);
 
   // Step 2: ML Prediction
   const handleMLPredict = useCallback(async () => {
@@ -237,17 +214,13 @@ export default function CrawlAndFuzzPage() {
     }
     
     try {
-      // First, ensure ML models are trained
-      console.log("🧠 Ensuring ML models are trained...");
-      await trainMLModels();
-      
-      // Now run ML prediction
+      // Run ML prediction
       await predictVulns(discoveredEndpoints);
       setCurrentStep(3);
     } catch (err) {
       console.error("ML prediction failed:", err);
     }
-  }, [discoveredEndpoints, predictVulns, trainMLModels]);
+  }, [discoveredEndpoints, predictVulns]);
 
   // Step 3: Enhanced Fuzzing
   const handleFuzzSelected = useCallback(async () => {
@@ -256,17 +229,10 @@ export default function CrawlAndFuzzPage() {
       return;
     }
 
-    const targets = Array.from(selectedTargets).map(index => {
-      const prediction = predictions[index];
-      return {
-        url: prediction.target?.url || prediction.url,
-        param: prediction.target?.param || prediction.param,
-        method: prediction.target?.method || prediction.method || 'GET'
-      };
-    });
+    const selectedPredictions = Array.from(selectedTargets).map(index => predictions[index]);
 
     try {
-      await fuzzTargets(targets);
+      await fuzzTargets(selectedPredictions);
     } catch (err) {
       console.error("Fuzzing failed:", err);
     }
@@ -278,14 +244,8 @@ export default function CrawlAndFuzzPage() {
       return;
     }
 
-    const targets = predictions.map(prediction => ({
-      url: prediction.target?.url || prediction.url,
-      param: prediction.target?.param || prediction.param,
-      method: prediction.target?.method || prediction.method || 'GET'
-    }));
-
     try {
-      await fuzzTargets(targets);
+      await fuzzTargets(predictions);
     } catch (err) {
       console.error("Fuzzing failed:", err);
     }
@@ -407,15 +367,100 @@ export default function CrawlAndFuzzPage() {
                 max="100"
               />
             </div>
-            <div className="flex items-end">
-              <button
-                onClick={handleCrawl}
-                disabled={crawlingLoading}
-                className="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
-              >
-                {crawlingLoading ? 'Crawling...' : 'Start Crawling'}
-              </button>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Max Depth</label>
+              <input
+                type="number"
+                value={maxDepth}
+                onChange={(e) => setMaxDepth(parseInt(e.target.value))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                min="1"
+                max="5"
+              />
             </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="submitGetForms"
+                checked={submitGetForms}
+                onChange={(e) => setSubmitGetForms(e.target.checked)}
+                className="mr-2"
+              />
+              <label htmlFor="submitGetForms" className="text-sm font-medium text-gray-700">
+                Submit GET forms
+              </label>
+            </div>
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="submitPostForms"
+                checked={submitPostForms}
+                onChange={(e) => setSubmitPostForms(e.target.checked)}
+                className="mr-2"
+              />
+              <label htmlFor="submitPostForms" className="text-sm font-medium text-gray-700">
+                Submit POST forms
+              </label>
+            </div>
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="clickButtons"
+                checked={clickButtons}
+                onChange={(e) => setClickButtons(e.target.checked)}
+                className="mr-2"
+              />
+              <label htmlFor="clickButtons" className="text-sm font-medium text-gray-700">
+                Click buttons (may trigger XHR)
+              </label>
+            </div>
+          </div>
+
+          {/* Auth Section */}
+          <div className="mb-4">
+            <button
+              onClick={() => setShowAuth(!showAuth)}
+              className="text-sm text-blue-600 hover:text-blue-800 underline"
+            >
+              {showAuth ? 'Hide' : 'Show'} Authentication (Optional)
+            </button>
+            {showAuth && (
+              <div className="mt-2">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Auth JSON (form-based login)
+                </label>
+                <textarea
+                  value={authJson}
+                  onChange={(e) => setAuthJson(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  rows="6"
+                  placeholder={`{
+  "type": "form",
+  "login_url": "http://localhost:5001/login",
+  "username_field": "username",
+  "password_field": "password",
+  "username": "admin",
+  "password": "admin"
+}`}
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Leave empty for public sites. JSON format for form-based authentication.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <div className="mb-4">
+            <button
+              onClick={handleCrawl}
+              disabled={crawlingLoading}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-50"
+            >
+              {crawlingLoading ? 'Crawling...' : 'Start Crawling'}
+            </button>
           </div>
 
           {crawlingError && (
@@ -451,53 +496,7 @@ export default function CrawlAndFuzzPage() {
               </div>
               
               {/* Display discovered endpoints */}
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <h3 className="text-lg font-medium text-gray-900 mb-3">Discovered Endpoints</h3>
-                {discoveredEndpoints.length > 300 && (
-                  <div className="text-xs text-gray-500 mb-2">
-                    Showing 300 of {discoveredEndpoints.length} endpoints
-                  </div>
-                )}
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {discoveredEndpoints.slice(0, 300).map((endpoint, index) => (
-                    <div key={index} className="flex items-center justify-between bg-white p-3 rounded border">
-                      <div className="flex-1">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-mono text-sm text-blue-600">{endpoint.url}</span>
-                          <span className={`px-2 py-1 rounded text-xs font-medium ${
-                            endpoint.method === 'GET' ? 'bg-green-100 text-green-800' : 
-                            endpoint.method === 'POST' ? 'bg-orange-100 text-orange-800' : 
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {endpoint.method}
-                          </span>
-                        </div>
-                        <div className="text-sm text-gray-600 mt-1">
-                          {endpoint.param_locs && (
-                            <>
-                              Query: {endpoint.param_locs.query?.join(', ') || 'none'} | 
-                              Form: {endpoint.param_locs.form?.join(', ') || 'none'} | 
-                              JSON: {endpoint.param_locs.json?.join(', ') || 'none'}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        {endpoint.status && (
-                          <span className={`text-xs px-2 py-1 rounded ${
-                            endpoint.status === 200 ? 'bg-green-100 text-green-800' :
-                            endpoint.status === 401 ? 'bg-yellow-100 text-yellow-800' :
-                            endpoint.status === 403 ? 'bg-red-100 text-red-800' :
-                            'bg-gray-100 text-gray-800'
-                          }`}>
-                            {endpoint.status}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              <EndpointTable endpoints={discoveredEndpoints} meta={crawlMeta} />
               
               {/* Continue button */}
               <div className="text-center">
@@ -520,10 +519,10 @@ export default function CrawlAndFuzzPage() {
             <div className="mb-4">
               <button
                 onClick={handleMLPredict}
-                disabled={predictionLoading || isTraining}
+                disabled={predictionLoading}
                 className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700 disabled:opacity-50"
               >
-                {isTraining ? 'Training ML Models...' : predictionLoading ? 'ML Predicting...' : 'Run ML Prediction'}
+                {predictionLoading ? 'ML Predicting...' : 'Run ML Prediction'}
               </button>
             </div>
 
@@ -545,63 +544,30 @@ export default function CrawlAndFuzzPage() {
                   <div key={index} className="border border-gray-200 rounded-lg p-4">
                     <div className="flex items-center justify-between mb-2">
                       <h3 className="font-medium text-gray-900">
-                        {prediction.target?.url || prediction.url || 'Unknown URL'}
+                        {prediction.endpoint?.url || 'Unknown URL'}
                       </h3>
                       <div className="flex items-center space-x-2">
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getVulnerabilityColor(prediction.vulnerability_type)}`}>
-                          {prediction.vulnerability_type?.toUpperCase() || 'UNKNOWN'}
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${getVulnerabilityColor(prediction.family)}`}>
+                          {prediction.family?.toUpperCase() || 'NONE'}
                         </span>
-                        {prediction.ml_confidence && (
-                          <span className={`text-sm font-medium ${getConfidenceColor(prediction.ml_confidence)}`}>
-                            {Math.round(prediction.ml_confidence * 100)}% confidence
+                        {prediction.confidence && (
+                          <span className={`text-sm font-medium ${getConfidenceColor(prediction.confidence)}`}>
+                            {Math.round(prediction.confidence * 100)}% confidence
                           </span>
                         )}
-                        {prediction.cvss_base_score && (
-                          <span className={`text-sm font-medium ${getCVSSColor(prediction.cvss_base_score)}`}>
-                            CVSS: {prediction.cvss_base_score}
-                          </span>
-                        )}
+                        <span className="text-sm text-gray-500">
+                          Features: {prediction.features_used || 48}
+                        </span>
                       </div>
                     </div>
                     
                     <p className="text-sm text-gray-600 mb-3">
-                      Parameter: {prediction.target?.param || prediction.param || 'Unknown'} | 
-                      Method: {prediction.target?.method || prediction.method || 'Unknown'} |
-                      Location: {prediction.target?.param_in || prediction.param_in || 'Unknown'}
+                      Method: {prediction.endpoint?.method || 'Unknown'} | 
+                      Params: {prediction.endpoint?.params?.join(', ') || 'None'} |
+                      Calibrated: {prediction.calibrated ? 'Yes' : 'No'}
                     </p>
 
-                    {/* Probe Results */}
-                    {prediction.probe_results && (
-                      <div className="mb-3 p-3 bg-blue-50 rounded">
-                        <h4 className="text-sm font-medium text-blue-800 mb-2">🔍 Probe Evidence:</h4>
-                        <div className="text-xs text-blue-700 space-y-1">
-                          {prediction.probe_results.xss_context && (
-                            <div>XSS Context: <span className="font-mono">{prediction.probe_results.xss_context}</span></div>
-                          )}
-                          {prediction.probe_results.redirect_influence !== undefined && (
-                            <div>Redirect Influence: <span className="font-mono">{prediction.probe_results.redirect_influence ? 'Yes' : 'No'}</span></div>
-                          )}
-                          {prediction.probe_results.sqli_error_based !== undefined && (
-                            <div>SQLi Error: <span className="font-mono">{prediction.probe_results.sqli_error_based ? 'Yes' : 'No'}</span></div>
-                          )}
-                          {prediction.probe_results.sqli_boolean_delta && (
-                            <div>SQLi Boolean Delta: <span className="font-mono">{prediction.probe_results.sqli_boolean_delta.toFixed(3)}</span></div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Evidence */}
-                    {prediction.evidence && prediction.evidence.length > 0 && (
-                      <div className="mb-3">
-                        <h4 className="text-sm font-medium text-gray-700 mb-1">Evidence:</h4>
-                        <ul className="text-sm text-gray-600 list-disc list-inside">
-                          {prediction.evidence.map((evidence, i) => (
-                            <li key={i}>{evidence}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                    {/* Canonical ML prediction doesn't include probe results or evidence */}
 
                     {/* Selection checkbox */}
                     <div className="flex items-center">
@@ -672,20 +638,20 @@ export default function CrawlAndFuzzPage() {
               <div className="space-y-4">
                 <div className="bg-green-50 border border-green-200 rounded-md p-3">
                   <p className="text-green-800">
-                    🔥 Enhanced fuzzing completed: {results.filter(r => r.vulnerability_type).length} vulnerabilities found
+                    🔥 Enhanced fuzzing completed: {results.filter(r => r.family && r.family !== 'none').length} vulnerabilities found
                   </p>
                 </div>
 
                 {results.map((result, index) => (
-                  <div key={index} className={`border rounded-lg p-4 ${result.vulnerability_type ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-gray-50'}`}>
+                  <div key={index} className={`border rounded-lg p-4 ${result.family && result.family !== 'none' ? 'border-red-200 bg-red-50' : 'border-gray-200 bg-gray-50'}`}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex-1">
                         <h3 className="font-medium text-gray-900 mb-1">
-                          {result.url}
+                          {result.endpoint?.url || 'Unknown URL'}
                         </h3>
                         <div className="flex items-center space-x-2">
                           <a 
-                            href={result.url}
+                            href={result.endpoint?.url}
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="text-blue-600 hover:text-blue-800 text-sm underline"
@@ -694,24 +660,19 @@ export default function CrawlAndFuzzPage() {
                           </a>
                           <span className="text-gray-400">|</span>
                           <span className="text-sm text-gray-600">
-                            {result.method} | {result.param} ({result.param_in})
+                            {result.endpoint?.method} | {result.endpoint?.params?.join(', ') || 'No params'}
                           </span>
                         </div>
                       </div>
                       <div className="flex items-center space-x-2">
-                        {result.vulnerability_type && (
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getVulnerabilityColor(result.vulnerability_type)}`}>
-                            {result.vulnerability_type.toUpperCase()}
+                        {result.family && result.family !== 'none' && (
+                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${getVulnerabilityColor(result.family)}`}>
+                            {result.family.toUpperCase()}
                           </span>
                         )}
-                        {result.cvss_base_score && (
-                          <span className={`text-sm font-medium ${getCVSSColor(result.cvss_base_score)}`}>
-                            CVSS: {result.cvss_base_score}
-                          </span>
-                        )}
-                        {result.ml_confidence && (
-                          <span className={`text-sm font-medium ${getConfidenceColor(result.ml_confidence)}`}>
-                            {Math.round(result.ml_confidence * 100)}%
+                        {result.cvss?.base && (
+                          <span className={`text-sm font-medium ${getCVSSColor(result.cvss.base)}`}>
+                            CVSS: {result.cvss.base} ({result.cvss.severity})
                           </span>
                         )}
                       </div>
@@ -723,26 +684,30 @@ export default function CrawlAndFuzzPage() {
                         <p className="text-sm font-medium text-red-800">Evidence:</p>
                         <ul className="text-sm text-red-700 list-disc list-inside">
                           {result.evidence.map((evidence, i) => (
-                            <li key={i}>{evidence}</li>
+                            <li key={i}>{evidence.detail || evidence}</li>
                           ))}
                         </ul>
                       </div>
                     )}
 
-                    {/* Probe Results */}
-                    {result.probe_results && (
+                    {/* Signals */}
+                    {result.signals && (
                       <div className="mb-2 p-2 bg-blue-50 rounded text-xs">
                         <div className="text-blue-700">
-                          <strong>🔍 Probe Evidence:</strong>
-                          {result.probe_results.xss_context && (
-                            <span className="ml-2">XSS: {result.probe_results.xss_context}</span>
-                          )}
-                          {result.probe_results.redirect_influence !== undefined && (
-                            <span className="ml-2">Redirect: {result.probe_results.redirect_influence ? 'Yes' : 'No'}</span>
-                          )}
-                          {result.probe_results.sqli_error_based !== undefined && (
-                            <span className="ml-2">SQLi: {result.probe_results.sqli_error_based ? 'Yes' : 'No'}</span>
-                          )}
+                          <strong>🔍 Signals:</strong>
+                          {result.signals.sql_error && <span className="ml-2">SQL Error: Yes</span>}
+                          {result.signals.xss_raw && <span className="ml-2">XSS Raw: Yes</span>}
+                          {result.signals.xss_js && <span className="ml-2">XSS JS: Yes</span>}
+                          {result.signals.open_redirect && <span className="ml-2">Open Redirect: Yes</span>}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Rationale */}
+                    {result.rationale && (
+                      <div className="mb-2 p-2 bg-gray-50 rounded text-xs">
+                        <div className="text-gray-700">
+                          <strong>💭 Rationale:</strong> {result.rationale}
                         </div>
                       </div>
                     )}

@@ -129,3 +129,20 @@ def build_cvss_vector(vuln_type: str, context: Dict[str, Any]) -> Dict[str, Any]
         "score": score,
         "assumptions": assumptions
     }
+
+def calculate_cvss_score(vuln_type: str, context: Dict[str, Any] = None) -> float:
+    """
+    Calculate CVSS score for a vulnerability type.
+    
+    Args:
+        vuln_type: Vulnerability type (xss, sqli, redirect, etc.)
+        context: Additional context for scoring
+        
+    Returns:
+        CVSS base score
+    """
+    if context is None:
+        context = {}
+    
+    result = build_cvss_vector(vuln_type, context)
+    return result["score"]
