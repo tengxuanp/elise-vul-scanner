@@ -8,5 +8,36 @@ node_modules
 .pytest_cache
 .venv
 
-# Data
-backend/data
+# Data - exclude runtime artifacts but keep migrations
+backend/data/jobs/*
+backend/data/evidence/*
+backend/data/*.db
+backend/data/*.db-*
+backend/data/*.json
+!backend/data/migrations/
+
+# Models - exclude runtime models but keep manifest
+backend/modules/ml/models/*.joblib
+backend/modules/ml/models/*.cal.json
+!backend/modules/ml/models/RANKER_MANIFEST.json
+
+# Logs
+*.log
+log_config.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary
+*.tmp
+*.temp
+
+# Lab database
+lab.db

@@ -39,6 +39,24 @@
 - Docker & Docker Compose
 - Modern web browser
 
+### Environment Variables
+
+Configure Elise behavior with these environment variables:
+
+```bash
+# Target URL for testing (default: http://localhost:5001)
+export LAB_TARGET_URL="http://localhost:5001"
+
+# ML Configuration
+export ELISE_USE_ML="1"              # Enable ML features (default: 1)
+export ELISE_REQUIRE_RANKER="0"      # Require ML models (default: 0)
+
+# Performance Settings
+export ELISE_JOB_BUDGET_MS="300000"  # Job time budget in ms (default: 5 minutes)
+export ELISE_DATA_DIR="backend/data" # Data directory (default: backend/data)
+export ELISE_ML_MODEL_DIR="backend/modules/ml/models" # Model directory
+```
+
 ### Option 1: Docker (Recommended)
 
 **One-command demo with full stack:**
@@ -321,5 +339,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For support, email support@elise-scanner.com or create an issue in the repository.
 
 ---
-
-**Elise** - Advanced ML-Powered Web Vulnerability Scanner by Rafael Pang
