@@ -1,21 +1,14 @@
 from typing import Any, Dict, List, Optional
 from backend.modules.targets import enumerate_targets, Target
-from backend.modules.probes.engine import run_probes
-from backend.modules.gates import gate_not_applicable, gate_candidate_xss, gate_candidate_sqli, gate_candidate_redirect
-from backend.modules.ml.infer_ranker import rank_payloads
-from backend.modules.injector import inject_once
-from backend.modules.evidence import EvidenceRow, write_evidence
-from backend.modules.cvss_rules import cvss_for
-
-DECISION = dict(NA="not_applicable", POS="confirmed", SUS="suspected", NEG="tested_negative", ABS="abstain")
-
-def _confirmed_family(p)->Optional[str]:
-    if p.redirect.influence: return "redirect"
-    if p.xss.reflected and p.xss.context in {"html","attr","js_string"}: return "xss"
-    if p.sqli.error_based or p.sqli.time_based or p.sqli.boolean_delta>0.6: return "sqli"
-    return None
+from backend.modules.fuzzer_core import _process_target, DECISION
 
 def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->Dict[str,Any]:
+    """
+    Assess endpoints using the same primitives as fuzzer_core.run_job.
+    This is a simplified version without parallelization for direct endpoint assessment.
+    """
+    from threading import Lock
+    
     # Count endpoints and handle zero-parameter endpoints
     endpoints_crawled = len(endpoints)
     endpoints_without_params = 0
@@ -44,40 +37,15 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
             })
             continue
         
-        # Process targets for this endpoint
-        for t in targets:
-            if gate_not_applicable(t):
-                results.append({"target": t.to_dict(), "decision": DECISION["NA"], "why":["gate_not_applicable"]}); continue
-            probe = run_probes(t)
-            fam = _confirmed_family(probe)
-            if fam:
-                ev = EvidenceRow.from_probe_confirm(t, fam, probe)
-                ev.cvss = cvss_for(fam, ev)
-                path = write_evidence(job_id, ev)
-                findings.append(ev.to_dict(path))
-                results.append({"target": t.to_dict(), "family": fam, "decision": DECISION["POS"], "why":["probe_proof"]})
-                continue
-            candidates = []
-            if gate_candidate_xss(t): candidates.append("xss")
-            if gate_candidate_sqli(t): candidates.append("sqli")
-            if gate_candidate_redirect(t): candidates.append("redirect")
-            if not candidates:
-                results.append({"target": t.to_dict(), "decision": DECISION["ABS"], "why":["no_candidates"]}); continue
-            confirmed = False
-            for fam in candidates:
-                payloads = rank_payloads(fam, endpoint_meta=t.to_features(), top_k=top_k)
-                for rec in payloads:
-                    inj = inject_once(t, fam, rec["payload"])
-                    if inj.confirmed:
-                        ev = EvidenceRow.from_injection(t, fam, probe, rec, inj)
-                        ev.cvss = cvss_for(fam, ev)
-                        path = write_evidence(job_id, ev)
-                        findings.append(ev.to_dict(path))
-                        results.append({"target": t.to_dict(), "family": fam, "decision": DECISION["POS"], "why":["ml_ranked","inject_confirmed"], "p": rec.get("p_cal")})
-                        confirmed = True; break
-                if confirmed: break
-            if not confirmed:
-                results.append({"target": t.to_dict(), "decision": DECISION["NEG"], "why":["no_confirm_after_topk"]})
+        # Process targets for this endpoint using the same primitives as fuzzer_core
+        for target in targets:
+            # Use the same _process_target function from fuzzer_core
+            result = _process_target(target, job_id, top_k, Lock(), Lock())
+            results.append(result)
+            
+            # Extract evidence if present
+            if "evidence" in result:
+                findings.append(result["evidence"])
     
     # Calculate targets_enumerated (total targets that were actually tested)
     targets_enumerated = len(results) - endpoints_without_params

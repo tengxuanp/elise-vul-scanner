@@ -7,7 +7,6 @@ import EvidenceModal from "../components/EvidenceModal";
 
 export default function AssessPage() {
   const [loading, setLoading] = useState(false);
-  const [crawlResult, setCrawlResult] = useState(null);
   const [assessmentResult, setAssessmentResult] = useState(null);
   const [view, setView] = useState(null);
   const [tab, setTab] = useState("confirmed");
@@ -15,23 +14,22 @@ export default function AssessPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
+  const targetUrl = searchParams.get("targetUrl");
 
   useEffect(() => {
-    if (jobId) {
-      const stored = sessionStorage.getItem(`crawl_${jobId}`);
-      if (stored) {
-        setCrawlResult(JSON.parse(stored));
-      }
+    // Auto-run assessment when page loads with valid params
+    if (jobId && targetUrl && !assessmentResult) {
+      onAssess();
     }
-  }, [jobId]);
+  }, [jobId, targetUrl]);
 
   async function onAssess() {
-    if (!crawlResult || !jobId) return;
+    if (!jobId || !targetUrl) return;
     
     setLoading(true);
     try {
       const result = await assess({
-        endpoints: crawlResult.endpoints,
+        target_url: targetUrl,
         job_id: jobId,
         top_k: topK
       });
@@ -61,19 +59,6 @@ export default function AssessPage() {
     }
   }
 
-  // Calculate target count from endpoints
-  const calculateTargetCount = (endpoints) => {
-    return endpoints?.reduce((total, ep) => {
-      const paramLocs = ep.param_locs || {};
-      const queryCount = paramLocs.query?.length || 0;
-      const formCount = paramLocs.form?.length || 0;
-      const jsonCount = paramLocs.json?.length || 0;
-      const legacyCount = ep.params ? Object.keys(ep.params).length : 0;
-      return total + queryCount + formCount + jsonCount + legacyCount;
-    }, 0) || 0;
-  };
-
-  const targetCount = calculateTargetCount(crawlResult?.endpoints);
   const findings = assessmentResult?.findings || [];
   const negatives = (assessmentResult?.results || []).filter(r => r.decision === "tested_negative");
   
@@ -88,11 +73,12 @@ export default function AssessPage() {
     r.why?.includes("inject_confirmed")
   ).length;
 
-  if (!crawlResult) {
+  if (!jobId || !targetUrl) {
     return (
       <div className="mx-auto max-w-4xl p-6">
         <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">No Crawl Data Found</h1>
+          <h1 className="text-2xl font-bold mb-4">Missing Parameters</h1>
+          <p className="text-gray-600 mb-4">Job ID and target URL are required.</p>
           <button
             onClick={() => router.push("/scan")}
             className="px-4 py-2 rounded bg-blue-600 text-white"
@@ -145,10 +131,10 @@ export default function AssessPage() {
               </div>
               <button
                 onClick={onAssess}
-                disabled={targetCount === 0 || loading}
+                disabled={loading}
                 className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
               >
-                Assess {targetCount > 0 && `(${targetCount})`}
+                {loading ? "Assessing..." : "Re-assess"}
               </button>
               <button
                 onClick={onExport}
@@ -160,16 +146,16 @@ export default function AssessPage() {
             </div>
           </div>
 
-          {crawlResult.endpoints.length > 0 && (
+          {assessmentResult?.meta && (
             <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
               <div className="text-sm font-medium text-green-800 mb-2">
-                Crawled Endpoints ({crawlResult.endpoints.length})
+                Target: {targetUrl}
               </div>
-              {crawlResult.endpoints.map((ep, i) => (
-                <div key={i} className="text-xs text-green-700 mb-1">
-                  {ep.method} {ep.url} - {Object.keys(ep.param_locs || {}).reduce((acc, loc) => acc + (ep.param_locs[loc]?.length || 0), 0)} params
-                </div>
-              ))}
+              <div className="text-xs text-green-700">
+                Endpoints crawled: {assessmentResult.meta.endpoints_crawled} | 
+                Targets enumerated: {assessmentResult.meta.targets_enumerated} |
+                Processing time: {assessmentResult.meta.processing_time_ms}ms
+              </div>
             </div>
           )}
 
@@ -250,8 +236,8 @@ export default function AssessPage() {
         <aside className="card p-6">
           <h3 className="font-semibold mb-4">Summary</h3>
           <ul className="text-sm space-y-2">
-            <li>Endpoints: {assessmentResult?.meta?.endpoints_crawled ?? crawlResult.endpoints.length}</li>
-            <li>Targets: {assessmentResult?.meta?.targets_enumerated ?? targetCount}</li>
+            <li>Endpoints: {assessmentResult?.meta?.endpoints_crawled ?? 0}</li>
+            <li>Targets: {assessmentResult?.meta?.targets_enumerated ?? 0}</li>
             <li>Total (incl. NA): {assessmentResult?.summary?.total ?? 0}</li>
             <li>Confirmed (Probe): {confirmedProbe}</li>
             <li>Confirmed (ML+Inject): {confirmedMLInject}</li>

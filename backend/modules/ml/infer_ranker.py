@@ -65,6 +65,20 @@ def rank_payloads(family: str, endpoint_meta: Dict[str,Any], candidates=None, to
     """Rank payloads using ML models with calibration, fallback to defaults."""
     fam = family.lower()
     
+    # Get default payloads from manifest first
+    default_payloads = _get_default_payloads(fam)
+    if not default_payloads:
+        # Hardcoded fallback
+        default_payloads = {
+            "xss": ['"><svg onload=alert(1)>', "<img src=x onerror=alert(1)>", "'\"><script>alert(1)</script>"],
+            "sqli": ["'", "' OR '1'='1' -- ", "1 AND SLEEP(2) -- "],
+            "redirect": ["https://example.com/", "//example.com/", "/\\example.com"],
+        }.get(fam, [])
+    
+    # If REQUIRE_RANKER is true and no defaults available, fail
+    if REQUIRE_RANKER and not default_payloads:
+        raise RuntimeError(f"Ranker required but no model or defaults found for family: {fam}")
+    
     # Try to use ML model if available and USE_ML is enabled
     if USE_ML:
         model = _load_model(fam)
@@ -75,16 +89,6 @@ def rank_payloads(family: str, endpoint_meta: Dict[str,Any], candidates=None, to
             # This is a simplified implementation - in practice you'd extract features
             # from endpoint_meta and use the model to predict payload scores
             try:
-                # For now, use default payloads with calibrated probabilities
-                default_payloads = _get_default_payloads(fam)
-                if not default_payloads:
-                    # Fallback to hardcoded defaults
-                    default_payloads = {
-                        "xss": ['"><svg onload=alert(1)>', "<img src=x onerror=alert(1)>", "'\"><script>alert(1)</script>"],
-                        "sqli": ["'", "' OR '1'='1' -- ", "1 AND SLEEP(2) -- "],
-                        "redirect": ["https://example.com/", "//example.com/", "/\\example.com"],
-                    }.get(fam, [])
-                
                 results = []
                 for i, payload in enumerate(default_payloads[:top_k]):
                     # Apply calibration if available
@@ -105,17 +109,5 @@ def rank_payloads(family: str, endpoint_meta: Dict[str,Any], candidates=None, to
                 # If ML model fails, fall back to defaults
                 pass
     
-    # Fallback to default payloads
-    default_payloads = _get_default_payloads(fam)
-    if not default_payloads:
-        # Hardcoded fallback
-        default_payloads = {
-            "xss": ['"><svg onload=alert(1)>', "<img src=x onerror=alert(1)>", "'\"><script>alert(1)</script>"],
-            "sqli": ["'", "' OR '1'='1' -- ", "1 AND SLEEP(2) -- "],
-            "redirect": ["https://example.com/", "//example.com/", "/\\example.com"],
-        }.get(fam, [])
-    
-    if REQUIRE_RANKER and not default_payloads:
-        raise RuntimeError(f"Ranker required but no model or defaults found for family: {fam}")
-    
+    # Fallback to default payloads without ML
     return [{"payload": p, "p_cal": 0.7 - i*0.1, "score": 1.0 - i*0.1} for i,p in enumerate(default_payloads[:top_k])]

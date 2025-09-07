@@ -1,5 +1,5 @@
-from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi import APIRouter, Request
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 from starlette.concurrency import run_in_threadpool
 from backend.modules.fuzzer_core import run_job
@@ -7,10 +7,10 @@ from backend.modules.fuzzer_core import run_job
 router = APIRouter()
 
 class AssessReq(BaseModel):
-    endpoints: Optional[List[Dict[str,Any]]] = None
     job_id: str
     top_k: Optional[int] = 3
-    target_url: Optional[str] = None
+    endpoints: Optional[List[Dict[str,Any]]] = Field(None, description="List of endpoints to assess directly")
+    target_url: Optional[str] = Field(None, description="Target URL for full crawl and assessment")
 
 @router.post("/assess")
 async def assess(req: AssessReq):

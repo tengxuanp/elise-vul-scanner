@@ -16,11 +16,8 @@ export default function ScanPage() {
       const result = await crawl({ target_url: targetUrl });
       const jobId = Date.now().toString();
       
-      // Store crawl result in sessionStorage for next step
-      sessionStorage.setItem(`crawl_${jobId}`, JSON.stringify(result));
-      
-      // Navigate to assess page with jobId
-      router.push(`/assess?jobId=${jobId}`);
+      // Navigate to assess page with jobId and targetUrl
+      router.push(`/assess?jobId=${jobId}&targetUrl=${encodeURIComponent(targetUrl)}`);
     } catch (error) {
       console.error("Crawl error:", error);
       alert("Crawl failed: " + error.message);

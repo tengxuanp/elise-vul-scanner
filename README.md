@@ -57,6 +57,21 @@ export ELISE_DATA_DIR="backend/data" # Data directory (default: backend/data)
 export ELISE_ML_MODEL_DIR="backend/modules/ml/models" # Model directory
 ```
 
+### ML Modes
+
+Elise supports different operational modes based on ML configuration:
+
+| Mode | USE_ML | REQUIRE_RANKER | Behavior |
+|------|--------|----------------|----------|
+| **Defaults Only** | `0` | `0` | Uses hardcoded payloads, no ML models required |
+| **ML Optional** | `1` | `0` | Uses ML models if available, falls back to defaults |
+| **ML Required** | `1` | `1` | Requires ML models, fails if models missing |
+
+**Mode Examples:**
+- **Development**: `USE_ML=0` - Quick testing with basic payloads
+- **Production**: `USE_ML=1, REQUIRE_RANKER=0` - Enhanced with ML when available
+- **Strict ML**: `USE_ML=1, REQUIRE_RANKER=1` - Full ML pipeline required
+
 ### Option 1: Docker (Recommended)
 
 **One-command demo with full stack:**

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict
-import json, time
+import json, time, re
 from backend.app_state import DATA_DIR
 
 @dataclass
@@ -46,12 +46,20 @@ class EvidenceRow:
     def to_dict(self, path:str)->Dict[str,Any]:
         d = asdict(self); d["artifact_path"]=path; return d
 
+def _sanitize_filename_component(component: str) -> str:
+    """Sanitize a filename component by replacing unsafe characters with underscores."""
+    return re.sub(r'[^a-zA-Z0-9_.-]+', '_', component)
+
 def write_evidence(job_id:str, ev:EvidenceRow)->str:
     jid = f"{job_id}".replace("/","_")
     outdir = DATA_DIR / "jobs" / jid
     outdir.mkdir(parents=True, exist_ok=True)
     ts = int(time.time()*1000)
-    path = outdir / f"{ts}_{ev.family}_{ev.param}.json"
+    
+    # Sanitize the param name for safe filename usage
+    safe_param = _sanitize_filename_component(ev.param)
+    path = outdir / f"{ts}_{ev.family}_{safe_param}.json"
+    
     with open(path,"w",encoding="utf-8") as f:
         json.dump(asdict(ev), f, ensure_ascii=False, indent=2)
     return str(path)

@@ -37,11 +37,17 @@ def healthz():
                     for model_key, model_info in models.items():
                         model_path = MODEL_DIR / model_info["model_file"]
                         if not model_path.exists():
-                            fails.append(f"Model file missing: {model_info['model_file']}")
+                            if REQUIRE_RANKER:
+                                fails.append(f"Model file missing (required): {model_info['model_file']}")
+                            else:
+                                fails.append(f"Model file missing (optional): {model_info['model_file']}")
                         
                         cal_path = MODEL_DIR / model_info["calibration_file"]
                         if not cal_path.exists():
-                            fails.append(f"Calibration file missing: {model_info['calibration_file']}")
+                            if REQUIRE_RANKER:
+                                fails.append(f"Calibration file missing (required): {model_info['calibration_file']}")
+                            else:
+                                fails.append(f"Calibration file missing (optional): {model_info['calibration_file']}")
                             
                 except Exception as e:
                     fails.append(f"Error reading RANKER_MANIFEST.json: {e}")
