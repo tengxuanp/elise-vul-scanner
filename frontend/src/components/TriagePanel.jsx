@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { mlPredict } from "../lib/api";
+import { assess } from "../lib/api";
 
 export default function TriagePanel({ endpoints, mlReady, onTriage }) {
   const [busy, setBusy] = useState(false);
@@ -9,7 +9,7 @@ export default function TriagePanel({ endpoints, mlReady, onTriage }) {
   async function run() {
     setBusy(true); setErr(null);
     try {
-      const res = await mlPredict(endpoints || []);
+      const res = await assess({ endpoints: endpoints || [], job_id: `triage-${Date.now()}`, top_k: 3 });
       onTriage && onTriage(res);
     } catch (e) {
       if (e.type === "ML_UNAVAILABLE") {

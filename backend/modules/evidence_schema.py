@@ -13,6 +13,10 @@ from datetime import datetime
 from .targets import Target
 from .probes.engine import ProbeResult
 from .cvss import CVSSVector
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .injector import InjectionResult
 
 class CVSSInfo(BaseModel):
     """CVSS scoring information"""
@@ -42,6 +46,67 @@ class EvidenceRow(BaseModel):
     cvss: CVSSInfo
     why: List[str] = Field(default_factory=list)
     timestamp: str
+    
+    @classmethod
+    def from_probe_confirm(cls, target: Target, family: str, probe: ProbeResult) -> 'EvidenceRow':
+        """Create evidence row from probe confirmation"""
+        # Extract probe-specific evidence
+        reflection_context = None
+        sql_error_excerpt = None
+        
+        if hasattr(probe, 'xss_context'):
+            reflection_context = probe.xss_context
+        if hasattr(probe, 'sql_error_excerpt'):
+            sql_error_excerpt = probe.sql_error_excerpt
+        
+        return cls(
+            id=str(uuid.uuid4()),
+            job_id="",  # Will be set by caller
+            url=target.url,
+            method=target.method,
+            **{'in': target.param_in},  # Use the alias
+            param=target.param,
+            payload=None,
+            family=family,
+            result_type="confirmed",
+            status_code=target.status,
+            reflection_context=reflection_context,
+            sql_error_excerpt=sql_error_excerpt,
+            req_headers=None,
+            req_body=None,
+            resp_headers=None,
+            resp_body_snippet=None,
+            dom_snapshot_path=None,
+            cvss=CVSSInfo(vector="", score=0.0, assumptions=[]),  # Will be set by caller
+            why=["probe_confirmed"],
+            timestamp=datetime.utcnow().isoformat()
+        )
+    
+    @classmethod
+    def from_injection(cls, target: Target, family: str, probe: ProbeResult, rec: Dict[str, Any], inj: 'InjectionResult') -> 'EvidenceRow':
+        """Create evidence row from injection result"""
+        return cls(
+            id=str(uuid.uuid4()),
+            job_id="",  # Will be set by caller
+            url=target.url,
+            method=target.method,
+            **{'in': target.param_in},  # Use the alias
+            param=target.param,
+            payload=rec.get("payload", ""),
+            family=family,
+            result_type="confirmed",
+            status_code=inj.status,
+            reflection_context=None,
+            sql_error_excerpt=None,
+            req_headers=None,  # Could be extracted from target if needed
+            req_body=None,
+            resp_headers={"location": inj.redirect_location} if inj.redirect_location else None,
+            resp_body_snippet=inj.response_snippet,
+            dom_snapshot_path=None,
+            cvss=CVSSInfo(vector="", score=0.0, assumptions=[]),  # Will be set by caller
+            why=inj.why + ["ml_ranked", "inject_confirmed"],
+            timestamp=datetime.utcnow().isoformat()
+        )
     
     @classmethod
     def from_confirmed(cls, target: Target, family: str, probe: ProbeResult, cvss_data: Dict[str, Any], job_id: str, payload: Optional[str] = None) -> 'EvidenceRow':
@@ -88,6 +153,33 @@ class EvidenceRow(BaseModel):
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization"""
         return self.dict(by_alias=True)
+
+def write_evidence(job_id: str, evidence_row: EvidenceRow) -> str:
+    """
+    Write evidence row and return the file path.
+    
+    Args:
+        job_id: Job ID for the evidence
+        evidence_row: Evidence row to write
+        
+    Returns:
+        Path to the evidence file
+    """
+    # Set the job_id on the evidence row
+    evidence_row.job_id = job_id
+    
+    # Create evidence directory if it doesn't exist
+    evidence_dir = os.path.join("data", "evidence")
+    os.makedirs(evidence_dir, exist_ok=True)
+    
+    # Write to job-specific file
+    evidence_file = os.path.join(evidence_dir, f"{job_id}.jsonl")
+    
+    with open(evidence_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(evidence_row.to_dict()) + "\n")
+    
+    print(f"📝 Evidence written: {evidence_file}")
+    return evidence_file
 
 def write_evidence_row(row: EvidenceRow, data_dir: str = "data") -> None:
     """

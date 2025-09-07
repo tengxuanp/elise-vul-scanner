@@ -1,25 +1,28 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
-import { getHealth, API_BASE } from "../lib/api";
+import { health, API_BASE } from "../lib/api";
 
 export default function HealthBadge() {
-  const { data, isLoading, error } = useQuery({ queryKey: ["health"], queryFn: getHealth });
-  if (isLoading) return <div className="text-sm">Health: loading…</div>;
-  if (error) return <div className="text-sm text-red-600">Health error</div>;
+  const { data, isLoading, error } = useQuery({ queryKey: ["health"], queryFn: health });
+  if (isLoading) return <div className="text-sm text-gray-500">Loading system status...</div>;
+  if (error) return <div className="text-sm text-red-600">System error</div>;
   
   // Use canonical healthz response format
   const browserReady = data?.browser_pool_ready === true;
   const mlReady = data?.ml_ready === true;
   
   return (
-    <div className="flex items-center gap-3 text-sm">
-      <span className={`px-2 py-1 rounded ${browserReady ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
-        Browser: {browserReady ? "ready" : "not ready"}
-      </span>
-      <span className={`px-2 py-1 rounded ${mlReady ? "bg-emerald-100 text-emerald-800" : "bg-gray-200 text-gray-700"}`}>
-        ML: {mlReady ? "ready" : "not ready"}
-      </span>
-      <span className="text-gray-500">API: {API_BASE}</span>
+    <div className="flex items-center gap-2 text-sm">
+      <div className="flex items-center gap-1">
+        <div className={`w-2 h-2 rounded-full ${browserReady ? "bg-green-500" : "bg-red-500"}`}></div>
+        <span className="text-gray-600">Browser</span>
+      </div>
+      <div className="flex items-center gap-1">
+        <div className={`w-2 h-2 rounded-full ${mlReady ? "bg-green-500" : "bg-gray-400"}`}></div>
+        <span className="text-gray-600">ML</span>
+      </div>
+      <span className="text-gray-400 text-xs">•</span>
+      <span className="text-gray-500 text-xs">API: {API_BASE}</span>
     </div>
   );
 }

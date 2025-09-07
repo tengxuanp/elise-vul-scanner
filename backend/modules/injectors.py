@@ -54,9 +54,12 @@ Notes
 
 from dataclasses import dataclass
 from html import escape as html_escape
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse, quote as url_quote
 import copy
+
+if TYPE_CHECKING:
+    from .targets import Target
 
 
 # ----------------------------- public API ------------------------------------
@@ -349,6 +352,34 @@ def build_injection_plans(
         )
     return out
 
+
+# ----------------------------- injection wrapper ----------------------------
+
+@dataclass
+class InjectionResult:
+    """Result of a single injection attempt"""
+    confirmed: bool
+    signals: Dict[str, Any]
+    request_meta: Dict[str, Any]
+    response_meta: Dict[str, Any]
+    payload: str
+
+def inject_once(target: 'Target', family: str, payload: str) -> InjectionResult:
+    """
+    Perform a single injection attempt and return results.
+    
+    This is a simplified wrapper that will be enhanced in Prompt 3.
+    For now, it returns a mock result indicating no confirmation.
+    """
+    # TODO: Implement actual injection logic in Prompt 3
+    # This is a placeholder that returns a negative result
+    return InjectionResult(
+        confirmed=False,
+        signals={},
+        request_meta={"method": target.method, "url": target.url},
+        response_meta={"status": 200, "headers": {}},
+        payload=payload
+    )
 
 # ----------------------------- tiny demo (manual) ----------------------------
 

@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { fuzz } from "../lib/api";
+import { assess } from "../lib/api";
 
 export default function FuzzPanel({ predictions, mlReady, onFuzz }) {
   const [busy, setBusy] = useState(false);
@@ -9,7 +9,9 @@ export default function FuzzPanel({ predictions, mlReady, onFuzz }) {
   async function run() {
     setBusy(true); setMsg(null);
     try {
-      const res = await fuzz(predictions || []);
+      // Convert predictions to endpoints format for assess
+      const endpoints = (predictions || []).map(p => p.endpoint);
+      const res = await assess({ endpoints, job_id: `fuzz-${Date.now()}`, top_k: 3 });
       onFuzz && onFuzz(res);
       setMsg(null);
     } catch (e) {

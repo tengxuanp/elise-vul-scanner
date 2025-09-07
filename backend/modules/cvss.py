@@ -130,6 +130,27 @@ def build_cvss_vector(vuln_type: str, context: Dict[str, Any]) -> Dict[str, Any]
         "assumptions": assumptions
     }
 
+def cvss_for(family: str, evidence_row: 'EvidenceRow') -> Dict[str, Any]:
+    """
+    Generate CVSS information for an evidence row.
+    
+    Args:
+        family: Vulnerability family (xss, sqli, redirect)
+        evidence_row: Evidence row containing context
+        
+    Returns:
+        Dictionary with vector, score, and assumptions
+    """
+    context = {}
+    
+    # Extract context from evidence row
+    if hasattr(evidence_row, 'reflection_context') and evidence_row.reflection_context:
+        context['xss_context'] = evidence_row.reflection_context
+    if hasattr(evidence_row, 'sql_error_excerpt') and evidence_row.sql_error_excerpt:
+        context['sql_error_type'] = 'error_based'
+    
+    return build_cvss_vector(family, context)
+
 def calculate_cvss_score(vuln_type: str, context: Dict[str, Any] = None) -> float:
     """
     Calculate CVSS score for a vulnerability type.
