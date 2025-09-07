@@ -90,6 +90,36 @@ def _env_true(name: str, default: bool = False) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Initialize browser pool
+    try:
+        from infrastructure.browser_pool import browser_pool
+        await browser_pool.init()
+        from app_state import browser_state
+        browser_state.ready = True
+        browser_state.error = None
+        logging.info("✅ Browser pool initialized successfully")
+    except Exception as e:
+        from app_state import browser_state
+        browser_state.ready = False
+        browser_state.error = str(e)
+        logging.error(f"❌ Failed to initialize browser pool: {e}")
+    
+    # Initialize ML engine
+    try:
+        from app_state import ml_state, MODEL_DIR
+        from modules.ml.enhanced_inference_engine import EnhancedInferenceEngineStrict
+        
+        # Construct strict engine from MODEL_DIR
+        ml_state.engine = EnhancedInferenceEngineStrict(MODEL_DIR)
+        ml_state.ready = True
+        ml_state.error = None
+        logging.info("✅ ML engine initialized successfully")
+    except Exception as e:
+        from app_state import ml_state
+        ml_state.ready = False
+        ml_state.error = str(e)
+        logging.error(f"❌ Failed to initialize ML engine: {e}")
+    
     # Optional dev-time auto-create of DB tables
     if os.getenv("DEV_CREATE_ALL") == "1":
         if Base is not None and engine is not None:
@@ -100,7 +130,18 @@ async def lifespan(app: FastAPI):
                 logging.exception("DB init failed.")
         else:
             logging.info("DB not configured; skipping create_all (DEV_CREATE_ALL=1).")
+    
     yield
+    
+    # Shutdown browser pool
+    try:
+        from infrastructure.browser_pool import browser_pool
+        await browser_pool.shutdown()
+        from app_state import browser_state
+        browser_state.ready = False
+        logging.info("✅ Browser pool shutdown complete")
+    except Exception as e:
+        logging.error(f"❌ Error during browser pool shutdown: {e}")
 
 # ----------------------------- app -----------------------------
 
@@ -120,6 +161,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
 # Permissive CORS for dev; tighten before shipping to prod
 app.add_middleware(
     CORSMiddleware,
@@ -129,36 +171,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------- mount routers -------------------------
-# Each is optional; absence won't crash the app.
-_include_optional_router(app, "crawl_routes", "Crawl")
-_include_optional_router(app, "category_routes", "Categorization")
-_include_optional_router(app, "probe_routes", "Probe")
-_include_optional_router(app, "recommend_routes", "Recommender")  # exposes /api/recommend_payloads and /api/diagnostics/ltr
-_include_optional_router(app, "job_routes", "Job")
-_include_optional_router(app, "fuzz_routes", "Fuzzing")
-_include_optional_router(app, "evidence_routes", "Evidence")
-_include_optional_router(app, "verify_routes", "Verify")
-_include_optional_router(app, "report_routes", "Report")
-_include_optional_router(app, "ml_routes", "ML")
+# ------------------------- mount canonical routers -------------------------
+# Mount ONLY the canonical API endpoints as specified
 
-# Mount the enhanced ML fuzzer router
-_include_optional_router(app, "enhanced_fuzz_routes", "Enhanced ML Fuzzing")
+# Canonical API endpoints
+_include_optional_router(app, "canonical_crawl_routes", "Crawl")
+_include_optional_router(app, "canonical_ml_predict_routes", "ML Predict")
+_include_optional_router(app, "canonical_fuzz_routes", "Fuzz")
+_include_optional_router(app, "canonical_exploit_routes", "Exploit")
+_include_optional_router(app, "canonical_healthz_routes", "Health")
 
-# Mount the enhanced crawl router
-_include_optional_router(app, "enhanced_crawl_routes", "Enhanced Crawl")
+# Log startup summary of mounted routes
+def _log_startup_summary():
+    """Log a summary of all mounted routes at startup"""
+    print("\n" + "="*60)
+    print("🚀 ELISE CANONICAL API STARTUP SUMMARY")
+    print("="*60)
+    
+    # Get all routes from the app
+    routes = []
+    for route in app.routes:
+        if hasattr(route, 'path') and hasattr(route, 'methods'):
+            routes.append({
+                'path': route.path,
+                'methods': list(route.methods),
+                'name': getattr(route, 'name', 'unnamed')
+            })
+    
+    # Log canonical API endpoints
+    print("\n📋 CANONICAL API ENDPOINTS:")
+    canonical_endpoints = [
+        ("POST", "/api/crawl", "Endpoint discovery via crawling"),
+        ("POST", "/api/ml-predict", "ML vulnerability family prediction"),
+        ("POST", "/api/fuzz", "Vulnerability fuzzing with payloads"),
+        ("POST", "/api/exploit", "Vulnerability exploitation confirmation"),
+        ("GET", "/api/healthz", "System health and dependency status")
+    ]
+    
+    for method, path, description in canonical_endpoints:
+        print(f"  {method:4} {path:20} - {description}")
+    
+    # Log all mounted routes for debugging
+    print(f"\n🔍 ALL MOUNTED ROUTES ({len(routes)} total):")
+    for route in sorted(routes, key=lambda x: x['path']):
+        methods_str = ', '.join(sorted(route['methods']))
+        print(f"  {methods_str:15} {route['path']}")
+    
+    print(f"\n✅ Canonical API ready with {len(canonical_endpoints)} endpoints")
+    print("🔧 All variants and compat routes removed")
+    print("="*60 + "\n")
 
-# Mount the ML fuzzing router
-_include_optional_router(app, "ml_fuzzing_routes", "ML Fuzzing")
+# Call startup summary after all routers are mounted
+_log_startup_summary()
 
-# Mount the exploitation router
-_include_optional_router(app, "exploitation_routes", "Exploitation")
-
-# Note: Enhanced ML fuzzing is now handled by the enhanced_fuzz_routes router
-# The direct endpoints have been removed to avoid conflicts with the new CVSS-based system
-
-# REMOVED: Duplicate endpoint that was overriding the enhanced crawler router
-# The enhanced crawler is now handled by the enhanced_crawl_routes router
+# Print detailed route information
+from fastapi.routing import APIRoute
+routes = []
+for r in app.routes:
+    if isinstance(r, APIRoute):
+        routes.append({"path": r.path, "methods": list(r.methods)})
+print("[ROUTES]", routes)
 
 if __name__ == "__main__":
     import uvicorn
