@@ -189,7 +189,7 @@ export default function FindingsTable({ results=[], onView }) {
         <span className="uppercase text-xs">{result.family}</span>
       </td>
       <td className="p-2 break-all">
-        <div>{result.method} {result.url}</div>
+        <div>{result.target?.method || result.method} {result.target?.url || result.url}</div>
         <Microcopy why={result.why} />
         {result.error_message && (
           <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
@@ -200,8 +200,14 @@ export default function FindingsTable({ results=[], onView }) {
       <td className="p-2">
         {(() => {
           // Fallback order: param_in:param -> header:location for redirect -> none:none
-          if (result.param_in && result.param) {
-            return `${result.param_in}:${result.param}`;
+          const paramIn = result.target?.param_in || result.param_in;
+          const param = result.target?.param || result.param;
+          const hasValidParams = paramIn && param && 
+                                 paramIn !== 'none' && param !== 'none' &&
+                                 paramIn !== '' && param !== '';
+          
+          if (hasValidParams) {
+            return `${paramIn}:${param}`;
           } else if (result.family === 'redirect') {
             return 'header:location';
           } else {

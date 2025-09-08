@@ -156,7 +156,12 @@ def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: st
     if attr_match:
         in_attr = True
         attr_name = attr_match.group(1)
-        attr_quote = attr_match.group(0)[attr_match.start(2) - 1]
+        # Safely extract quote character
+        start_pos = attr_match.start(2) - 1
+        if start_pos >= 0 and start_pos < len(attr_match.group(0)):
+            attr_quote = attr_match.group(0)[start_pos]
+        else:
+            attr_quote = ""
     
     # Get raw reflection
     raw_reflection = text[canary_pos:canary_pos + len(CANARY)]
@@ -273,7 +278,12 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
         if attr_match:
             in_attr = True
             attr_name = attr_match.group(1)
-            attr_quote = attr_match.group(0)[attr_match.start(2) - 1]
+            # Safely extract quote character
+            start_pos = attr_match.start(2) - 1
+            if start_pos >= 0 and start_pos < len(attr_match.group(0)):
+                attr_quote = attr_match.group(0)[start_pos]
+            else:
+                attr_quote = ""
         
         # Get content type from headers
         content_type = headers.get("content-type", "") if headers else ""

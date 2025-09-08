@@ -13,10 +13,10 @@ TAU_SQLI = float(os.getenv("ELISE_TAU_SQLI", "0.50"))
 def confirm_xss(signals: dict) -> tuple[bool, str | None]:
     """
     True when reflection is in a script-executable context.
-    signals.xss_context ∈ {html, js, attr}
+    signals.xss_context ∈ {html, js, attr, js_string, html_body, url, css}
     """
     ctx = (signals or {}).get("xss_context")
-    ok = ctx in {"html", "js", "attr"}
+    ok = ctx in {"html", "js", "attr", "js_string", "html_body", "url", "css"}
     return ok, ("xss_reflection" if ok else None)
 
 

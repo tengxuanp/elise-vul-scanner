@@ -110,11 +110,12 @@ export default function AssessPage() {
   const positiveResults = results.filter(r => r.decision === "positive");
   const suspectedResults = results.filter(r => r.decision === "suspected");
   const abstainResults = results.filter(r => r.decision === "abstain");
+  const cleanResults = results.filter(r => r.decision === "clean");
   const naResults = results.filter(r => r.decision === "not_applicable");
   const errorResults = results.filter(r => r.decision === "error");
   
   // Consistency check: total should equal sum of all categories
-  const categorySum = positiveResults.length + suspectedResults.length + abstainResults.length + naResults.length + errorResults.length;
+  const categorySum = positiveResults.length + suspectedResults.length + abstainResults.length + cleanResults.length + naResults.length + errorResults.length;
   const countsConsistent = totalResults === categorySum;
   
   // Log inconsistency in dev mode
@@ -317,6 +318,9 @@ export default function AssessPage() {
                     <span className="px-2 py-1 bg-gray-100 text-gray-800 rounded text-xs font-medium">
                       Abstain: {abstainResults.length}
                     </span>
+                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                      Clean: {cleanResults.length}
+                    </span>
                     <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-xs font-medium">
                       NA: {naResults.length}
                     </span>
@@ -354,6 +358,12 @@ export default function AssessPage() {
                         Abstain ({abstainResults.length})
                       </button>
                       <button
+                        onClick={() => setTab("clean")}
+                        className={`pb-2 -mb-px border-b-2 ${tab === "clean" ? "border-zinc-900" : "border-transparent"}`}
+                      >
+                        Clean ({cleanResults.length})
+                      </button>
+                      <button
                         onClick={() => setTab("na")}
                         className={`pb-2 -mb-px border-b-2 ${tab === "na" ? "border-zinc-900" : "border-transparent"}`}
                       >
@@ -375,6 +385,7 @@ export default function AssessPage() {
                       <div className="overflow-x-auto">
                         {(() => {
                           const currentResults = tab === "abstain" ? abstainResults : 
+                                               tab === "clean" ? cleanResults :
                                                tab === "na" ? naResults : 
                                                tab === "error" ? errorResults : [];
                           
@@ -391,11 +402,12 @@ export default function AssessPage() {
                               <tbody>
                                 {currentResults.map((item, i) => (
                                   <tr key={i} className="border-t">
-                                    <td className="p-2 break-all">{item.method} {item.url}</td>
-                                    <td className="p-2">{item.param_in}:{item.param}</td>
+                                    <td className="p-2 break-all">{item.target?.method || item.method} {item.target?.url || item.url}</td>
+                                    <td className="p-2">{item.target?.param_in || item.param_in}:{item.target?.param || item.param}</td>
                                     <td className="p-2">
                                       <span className={`px-2 py-1 rounded text-xs ${
                                         item.decision === "abstain" ? "bg-gray-100 text-gray-800" :
+                                        item.decision === "clean" ? "bg-blue-100 text-blue-800" :
                                         item.decision === "not_applicable" ? "bg-slate-100 text-slate-800" :
                                         item.decision === "error" ? "bg-red-100 text-red-800" :
                                         "bg-yellow-100 text-yellow-800"
