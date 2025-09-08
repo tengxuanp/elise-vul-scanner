@@ -1,9 +1,31 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import MLScoreDisplay from "./MLScoreDisplay";
 
-export default function EvidenceModal({ open, onClose, evidence, results = [] }) {
+export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
+  const [evidence, setEvidence] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  
   useEffect(()=>{ document.body.style.overflow = open ? "hidden" : ""; }, [open]);
+  
+  // Fetch evidence when modal opens
+  useEffect(() => {
+    if (open && evidenceId && jobId) {
+      setLoading(true);
+      fetch(`/api/evidence/${jobId}/${evidenceId}`)
+        .then(res => res.json())
+        .then(data => {
+          setEvidence(data);
+          setLoading(false);
+        })
+        .catch(err => {
+          console.error('Failed to fetch evidence:', err);
+          setLoading(false);
+        });
+    }
+  }, [open, evidenceId, jobId]);
+  
   if (!open) return null;
 
   // Build real cURL command
@@ -134,61 +156,104 @@ export default function EvidenceModal({ open, onClose, evidence, results = [] })
           <h3 className="text-lg font-semibold">Evidence</h3>
           <button onClick={onClose} className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200">Close</button>
         </div>
-        <div className="mb-2">
-          <div className="text-xs text-zinc-500 mb-1">Reproduce</div>
-          <div className="flex gap-2">
-            <code className="flex-1 bg-zinc-50 border rounded p-2 overflow-x-auto text-xs">{curl}</code>
-            <button className="px-2 py-1 rounded bg-zinc-900 text-white text-xs" onClick={()=>navigator.clipboard.writeText(curl)}>Copy</button>
-            <button className="px-2 py-1 rounded bg-blue-600 text-white text-xs" onClick={downloadHttp}>Download .http</button>
-            <button className="px-2 py-1 rounded bg-gray-600 text-white text-xs" onClick={copyHeaders}>Copy headers</button>
-          </div>
-        </div>
-
-        {/* Evidence Details */}
-        <div className="my-4 space-y-3">
-          {/* CVSS and Model Confidence */}
-          <div className="flex items-center gap-4">
-            <div>
-              <div className="text-xs text-zinc-500">CVSS</div>
-              <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
-            </div>
-            {evidence?.p_cal != null && (
-              <div>
-                <div className="text-xs text-zinc-500">Model confidence (p_cal)</div>
-                <div className="font-semibold">{evidence.p_cal.toFixed(2)}</div>
-              </div>
-            )}
-          </div>
-
-          {/* Provenance */}
-          <div>
-            <div className="text-xs text-zinc-500 mb-1">Provenance</div>
-            <EvidenceProvenanceChips why={evidence?.why} />
-          </div>
-
-          {/* Probe Signals */}
-          <div>
-            <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
-            <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
-          </div>
-        </div>
         
-        {/* ML Scores */}
-        {(evidence?.score !== undefined || evidence?.p_cal !== undefined) && (
-          <div className="my-4">
-            <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
-            <MLScoreDisplay 
-              score={evidence?.score}
-              p_cal={evidence?.p_cal}
-              family={evidence?.family}
-            />
+        {loading && (
+          <div className="text-center py-8">
+            <div className="text-sm text-gray-500">Loading evidence...</div>
           </div>
         )}
         
-        <div className="text-xs text-zinc-500 my-2">Response snippet</div>
-        <pre className="bg-zinc-50 border rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">
-{evidence?.response_snippet || ""}
-        </pre>
+        {!loading && !evidence && (
+          <div className="text-center py-8">
+            <div className="text-sm text-red-500">Failed to load evidence</div>
+          </div>
+        )}
+        
+        {!loading && evidence && (
+          <>
+            <div className="mb-2">
+              <div className="text-xs text-zinc-500 mb-1">Reproduce</div>
+              <div className="flex gap-2">
+                <code className="flex-1 bg-zinc-50 border rounded p-2 overflow-x-auto text-xs">{curl}</code>
+                <button className="px-2 py-1 rounded bg-zinc-900 text-white text-xs" onClick={()=>navigator.clipboard.writeText(curl)}>Copy</button>
+                <button className="px-2 py-1 rounded bg-blue-600 text-white text-xs" onClick={downloadHttp}>Download .http</button>
+                <button className="px-2 py-1 rounded bg-gray-600 text-white text-xs" onClick={copyHeaders}>Copy headers</button>
+              </div>
+            </div>
+
+            {/* Evidence Details */}
+            <div className="my-4 space-y-3">
+              {/* CVSS and Model Confidence */}
+              <div className="flex items-center gap-4">
+                <div>
+                  <div className="text-xs text-zinc-500">CVSS</div>
+                  <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
+                </div>
+                {evidence?.p_cal != null && (
+                  <div>
+                    <div className="text-xs text-zinc-500">Model confidence (p_cal)</div>
+                    <div className="font-semibold">{evidence.p_cal.toFixed(2)}</div>
+                  </div>
+                )}
+              </div>
+
+              {/* Provenance */}
+              <div>
+                <div className="text-xs text-zinc-500 mb-1">Provenance</div>
+                <EvidenceProvenanceChips why={evidence?.why} />
+              </div>
+
+              {/* Probe Signals */}
+              <div>
+                <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
+                <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
+              </div>
+            </div>
+            
+            {/* ML Scores */}
+            {(evidence?.score !== undefined || evidence?.p_cal !== undefined) && (
+              <div className="my-4">
+                <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+                <MLScoreDisplay 
+                  score={evidence?.score}
+                  p_cal={evidence?.p_cal}
+                  family={evidence?.family}
+                />
+              </div>
+            )}
+            
+            <div className="text-xs text-zinc-500 my-2 flex items-center justify-between">
+              <span>Response snippet</span>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setShowRaw(!showRaw)}
+                  className="px-2 py-1 rounded bg-gray-600 text-white text-xs"
+                >
+                  {showRaw ? "View Safe" : "View Raw"}
+                </button>
+                {showRaw && evidence?.response_snippet_raw && (
+                  <button 
+                    onClick={() => {
+                      const blob = new Blob([atob(evidence.response_snippet_raw)], { type: "text/plain" });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `evidence-${evidence?.family || 'unknown'}-raw.txt`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }}
+                    className="px-2 py-1 rounded bg-blue-600 text-white text-xs"
+                  >
+                    Download Raw
+                  </button>
+                )}
+              </div>
+            </div>
+            <pre className="bg-zinc-50 border rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">
+{showRaw && evidence?.response_snippet_raw ? atob(evidence.response_snippet_raw) : (evidence?.response_snippet_text || evidence?.response_snippet || "")}
+            </pre>
+          </>
+        )}
       </div>
     </div>
   );

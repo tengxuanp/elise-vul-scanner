@@ -9,8 +9,10 @@ from backend.routes.canonical_crawl_routes import router as crawl_router
 from backend.routes.canonical_assess_routes import router as assess_router
 from backend.routes.canonical_report_routes import router as report_router
 from backend.routes.canonical_healthz_routes import router as health_router
+from backend.routes.canonical_evidence_routes import router as evidence_router
 
 app.include_router(crawl_router, prefix="/api")
 app.include_router(assess_router, prefix="/api")
 app.include_router(report_router, prefix="/api")
 app.include_router(health_router, prefix="/api")
+app.include_router(evidence_router, prefix="/api")

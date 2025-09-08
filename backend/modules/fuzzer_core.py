@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import time
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -21,7 +22,18 @@ from .playwright_crawler import crawl_site
 from .confirmers import confirm_xss, confirm_sqli, confirm_redirect, oracle_from_signals
 from backend.app_state import DATA_DIR
 
-DECISION = dict(NA="not_applicable", POS="confirmed", SUS="suspected", NEG="tested_negative", ABS="abstain")
+# Environment flags
+REQUIRE_RANKER = os.getenv("ELISE_REQUIRE_RANKER", "0") == "1"
+
+# Unified decision taxonomy
+DECISION = dict(
+    NA="not_applicable", 
+    POS="positive",  # Changed from "confirmed" to "positive"
+    SUS="suspected", 
+    NEG="clean",  # Changed from "tested_negative" to "clean"
+    ABS="abstain",
+    ERR="error"  # New error state for network/infra failures
+)
 
 def unique_merge(existing_why, new_reasons):
     """Merge new reasons with existing ones, avoiding duplicates."""
@@ -57,23 +69,67 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         if probe_result:
             fam, reason_code = probe_result
-            # Probe confirmed vulnerability
+            # Probe confirmed vulnerability - but still run ML for telemetry
             ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
             ev.cvss = cvss_for(fam, ev)
             ev.why = unique_merge(ev.why, [reason_code])
-            path = write_evidence(job_id, ev)
             
-            with findings_lock:
-                # This would need to be handled differently in a real implementation
-                # For now, we'll return the evidence data
-                pass
+            # Run ML ranking for telemetry even for probe-confirmed vulnerabilities
+            ctx = {
+                "family": fam,
+                "param_in": target.param_in,
+                "param": target.param,
+                "payload": "",
+                "probe_sql_error": probe_bundle.sqli.error_based,
+                "probe_timing_delta_gt2s": probe_bundle.sqli.time_based,
+                "probe_reflection_html": probe_bundle.xss.reflected and probe_bundle.xss.context == "html",
+                "probe_reflection_js": probe_bundle.xss.reflected and probe_bundle.xss.context == "js_string",
+                "probe_redirect_location_reflects": probe_bundle.redirect.influence,
+                "status_class": target.status // 100 if target.status else 0,
+                "content_type_html": "text/html" in (target.content_type or ""),
+                "content_type_json": "application/json" in (target.content_type or ""),
+                "ctx_html": probe_bundle.xss.context == "html",
+                "ctx_attr": probe_bundle.xss.context == "attr",
+                "ctx_js": probe_bundle.xss.context == "js_string"
+            }
+            
+            features = build_features(ctx)
+            ranked = rank_payloads(fam, features, top_k=1)  # Just get ML telemetry
+            
+            # Extract ML telemetry
+            rank_source = ranked[0].get("rank_source", "defaults") if ranked else "defaults"
+            model_tag = ranked[0].get("model_tag") if ranked else None
+            ml_proba = ranked[0].get("p_cal") if ranked else None
+            threshold = {"xss": float(os.getenv("ELISE_TAU_XSS", "0.75")), 
+                        "sqli": float(os.getenv("ELISE_TAU_SQLI", "0.70")), 
+                        "redirect": float(os.getenv("ELISE_TAU_REDIRECT", "0.60"))}.get(fam, 0.5)
+            
+            # Log ML ranker usage
+            if rank_source == "ml" and ranked:
+                top_payload = ranked[0].get("payload", "")
+                logging.info("ranker_used", extra={
+                    "family": fam,
+                    "model_tag": model_tag,
+                    "threshold": threshold,
+                    "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
+                    "proba": ml_proba
+                })
+            
+            evidence_id = write_evidence(job_id, ev)
             
             return {
                 "target": target.to_dict(), 
                 "family": fam, 
                 "decision": DECISION["POS"], 
                 "why": ["probe_proof", reason_code],
-                "evidence": ev.to_dict(path)
+                "evidence_id": evidence_id,
+                "cvss": ev.cvss,  # Pass through the CVSS from evidence
+                "rank_source": rank_source,  # Use ML rank_source if available
+                "ml_family": fam,
+                "ml_proba": ml_proba,
+                "ml_threshold": threshold,
+                "model_tag": model_tag,
+                "timing_ms": 0  # Probe-only results have no injection timing
             }
         
         # ML payload ranking and injection
@@ -132,59 +188,103 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         attempted_by_family = {}
         
         for fam in candidates:
-            ranked = rank_payloads(fam, features, top_k=top_k or 3)
-            attempted_by_family[fam] = len(ranked)
-            
-            for cand in ranked:
-                payload = cand.get("payload")
-                score = cand.get("score")
-                p_cal = cand.get("p_cal")
-                tried.append(payload)
+            try:
+                ranked = rank_payloads(fam, features, top_k=top_k or 3)
+                attempted_by_family[fam] = len(ranked)
                 
-                # Optional thresholds via env ELISE_TAU_*; if set and p_cal < tau, skip unless budget is abundant
-                if below_threshold(fam, p_cal) and budget_tight():
-                    continue
+                # Get ML telemetry from first ranked item
+                rank_source = ranked[0].get("rank_source", "defaults") if ranked else "defaults"
+                model_tag = ranked[0].get("model_tag") if ranked else None
                 
-                inj = inject_once(target, fam, payload)
+                # Get threshold for this family
+                threshold = {"xss": tau_xss, "sqli": tau_sqli, "redirect": tau_redirect}.get(fam, 0.5)
                 
-                # Build comprehensive signals from probes + injection outcome
-                signals = {
-                    "xss_context": getattr(probe_bundle.xss, "context", None) if probe_bundle else None,
-                    "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle else None,
-                    "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
-                    "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
-                }
+                # Log ML ranker usage (once per family)
+                if rank_source == "ml" and ranked:
+                    top_payload = ranked[0].get("payload", "")
+                    top_proba = ranked[0].get("p_cal", 0.0)
+                    logging.info("ranker_used", extra={
+                        "family": fam,
+                        "model_tag": model_tag,
+                        "threshold": threshold,
+                        "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
+                        "proba": top_proba
+                    })
                 
-                # Determine which oracle actually fired (if any)
-                fired_family, reason_code = oracle_from_signals(signals)
-                
-                if fired_family:
-                    # If a different family fired (e.g., SQLi while testing XSS), switch classification.
-                    result = {
-                        "target": target.to_dict(), 
-                        "family": fired_family, 
-                        "decision": DECISION["POS"], 
-                        "why": unique_merge([], ["ml_ranked", reason_code]),
-                        "score": score,
-                        "p_cal": p_cal
+                for cand in ranked:
+                    payload = cand.get("payload")
+                    score = cand.get("score")
+                    p_cal = cand.get("p_cal")
+                    tried.append(payload)
+                    
+                    # Optional thresholds via env ELISE_TAU_*; if set and p_cal < tau, skip unless budget is abundant
+                    if below_threshold(fam, p_cal) and budget_tight():
+                        continue
+                    
+                    # Measure injection timing
+                    inj_start = time.time()
+                    inj = inject_once(target, fam, payload)
+                    inj_timing_ms = int((time.time() - inj_start) * 1000)
+                    
+                    # Build comprehensive signals from probes + injection outcome
+                    signals = {
+                        "xss_context": getattr(probe_bundle.xss, "context", None) if probe_bundle else None,
+                        "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle else None,
+                        "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
+                        "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
                     }
                     
-                    # Create evidence with ML scores and correct family
-                    ev = EvidenceRow.from_injection(target, fired_family, probe_bundle, cand, inj)
-                    ev.cvss = cvss_for(fired_family, ev)
-                    ev.score = score
-                    ev.p_cal = p_cal
-                    ev.why = unique_merge(ev.why, ["ml_ranked", reason_code])
-                    path = write_evidence(job_id, ev)
+                    # Determine which oracle actually fired (if any)
+                    fired_family, reason_code = oracle_from_signals(signals)
                     
-                    result["evidence"] = ev.to_dict(path)
-                    return result
+                    if fired_family:
+                        # Create evidence with ML scores and correct family
+                        ev = EvidenceRow.from_injection(
+                            target, fired_family, probe_bundle, cand, inj,
+                            rank_source=rank_source,
+                            ml_family=fam,
+                            ml_proba=p_cal,
+                            ml_threshold=threshold,
+                            model_tag=model_tag
+                        )
+                        ev.cvss = cvss_for(fired_family, ev)
+                        ev.score = score
+                        ev.p_cal = p_cal
+                        ev.why = unique_merge(ev.why, ["ml_ranked", reason_code])
+                        evidence_id = write_evidence(job_id, ev)
+                        
+                        return {
+                            "target": target.to_dict(), 
+                            "family": fired_family, 
+                            "decision": DECISION["POS"], 
+                            "why": unique_merge([], ["ml_ranked", reason_code]),
+                            "evidence_id": evidence_id,
+                            "cvss": ev.cvss,  # Pass through the CVSS from evidence
+                            "rank_source": rank_source,
+                            "ml_family": fam,
+                            "ml_proba": p_cal,
+                            "ml_threshold": threshold,
+                            "model_tag": model_tag,
+                            "timing_ms": inj_timing_ms
+                        }
+                        
+            except RuntimeError as e:
+                # If ranker fails and REQUIRE_RANKER is set, propagate the error
+                if "ranker" in str(e).lower() and REQUIRE_RANKER:
+                    raise e
+                # Otherwise continue with next family
+                continue
         
         # If none confirmed, mark auditable negative
         return {
             "target": target.to_dict(), 
             "decision": DECISION["NEG"], 
             "why": unique_merge([], ["ml_attempted", f"tried:{sum(attempted_by_family.values())}", "no_confirm_after_topk"]),
+            "rank_source": "defaults",  # Default for negative results
+            "ml_family": None,
+            "ml_proba": None,
+            "ml_threshold": None,
+            "model_tag": None,
             "meta": {
                 "ml_attempted_payloads": tried[:3],  # trim for payload privacy
                 "attempted_by_family": attempted_by_family
@@ -216,6 +316,12 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     endpoints_crawled = len(endpoints)
     endpoints_without_params = 0
     results, findings = [], []
+    
+    # Meta telemetry counters
+    injections_attempted = 0
+    injections_succeeded = 0
+    errors_by_kind = {}
+    rank_source_counts = {"probe_only": 0, "ml": 0, "defaults": 0}
     
     # Collect all targets for parallel processing
     all_targets = []
@@ -262,42 +368,112 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                 
                 try:
                     result = future.result()
-                    results.append(result)
                     
-                    # Extract evidence if present
-                    if "evidence" in result:
-                        findings.append(result["evidence"])
+                    # Track telemetry
+                    if "meta" in result and "ml_attempted_payloads" in result["meta"]:
+                        injections_attempted += len(result["meta"]["ml_attempted_payloads"])
+                    if result.get("decision") == DECISION["POS"]:
+                        injections_succeeded += 1
+                    
+                    # Track rank source counts
+                    rank_source = result.get("rank_source")
+                    if rank_source in rank_source_counts:
+                        rank_source_counts[rank_source] += 1
+                    
+                    # Extract path from URL
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(result["target"]["url"])
+                    path = parsed_url.path or "/"
+                    
+                    # Create slim result row
+                    slim_result = {
+                        "evidence_id": result.get("evidence_id"),
+                        "url": result["target"]["url"],
+                        "path": path,
+                        "method": result["target"]["method"],
+                        "param_in": result["target"]["param_in"],
+                        "param": result["target"]["param"],
+                        "family": result.get("family"),
+                        "decision": result["decision"],
+                        "why": result["why"],
+                        "cvss": result.get("cvss", {"base": 0.0}),
+                        "rank_source": result.get("rank_source"),
+                        "ml_family": result.get("ml_family"),
+                        "ml_proba": result.get("ml_proba"),
+                        "ml_threshold": result.get("ml_threshold"),
+                        "model_tag": result.get("model_tag"),
+                        "timing_ms": result.get("timing_ms", 0),
+                        "status": result["target"].get("status", 0)
+                    }
+                    results.append(slim_result)
+                    
+                    # Add to findings if positive
+                    if result.get("decision") == DECISION["POS"] and result.get("evidence_id"):
+                        findings.append(result["evidence_id"])
                         
                 except Exception as e:
                     target = future_to_target[future]
+                    error_type = "processing_error"
+                    errors_by_kind[error_type] = errors_by_kind.get(error_type, 0) + 1
+                    
                     results.append({
-                        "target": target.to_dict(), 
-                        "decision": DECISION["ABS"], 
-                        "why": [f"processing_error: {str(e)}"]
+                        "evidence_id": None,
+                        "url": target.url,
+                        "path": "",
+                        "method": target.method,
+                        "param_in": target.param_in,
+                        "param": target.param,
+                        "family": None,
+                        "decision": DECISION["ERR"],
+                        "why": [f"processing_error: {str(e)}"],
+                        "cvss": {"base": 0.0},
+                        "rank_source": None,
+                        "ml_family": None,
+                        "ml_proba": None,
+                        "ml_threshold": None,
+                        "model_tag": None,
+                        "timing_ms": 0,
+                        "status": 0
                     })
     
     # Calculate targets_enumerated (total targets that were actually tested)
     targets_enumerated = len(results) - endpoints_without_params
     
-    summary = {
-        "total": len(results),
-        "positive": sum(r["decision"] == DECISION["POS"] for r in results),
-        "suspected": sum(r["decision"] == DECISION["SUS"] for r in results),
-        "abstain": sum(r["decision"] == DECISION["ABS"] for r in results),
-        "na": sum(r["decision"] == DECISION["NA"] for r in results),
-    }
+    # Create findings aggregates by family
+    findings_by_family = {}
+    for result in results:
+        if result.get("decision") == DECISION["POS"] and result.get("family"):
+            family = result["family"]
+            if family not in findings_by_family:
+                findings_by_family[family] = {
+                    "family": family,
+                    "total": 0,
+                    "positives": 0,
+                    "suspected": 0,
+                    "examples": []
+                }
+            findings_by_family[family]["total"] += 1
+            findings_by_family[family]["positives"] += 1
+            if result.get("evidence_id") and len(findings_by_family[family]["examples"]) < 3:
+                findings_by_family[family]["examples"].append(result["evidence_id"])
+    
+    # Convert to list
+    findings_aggregates = list(findings_by_family.values())
     
     meta = {
-        "endpoints_crawled": endpoints_crawled,
+        "endpoints_supplied": endpoints_crawled,
         "targets_enumerated": targets_enumerated,
-        "endpoints_without_params": endpoints_without_params,
-        "processing_time_ms": int((time.time() - start_time) * 1000)
+        "injections_attempted": injections_attempted,
+        "injections_succeeded": injections_succeeded,
+        "budget_ms_used": int((time.time() - start_time) * 1000),
+        "errors_by_kind": errors_by_kind,
+        "top_k_used": top_k,
+        "rank_source_counts": rank_source_counts
     }
     
     return {
-        "summary": summary, 
         "results": results, 
-        "findings": findings, 
+        "findings": findings_aggregates, 
         "job_id": job_id, 
         "meta": meta
     }

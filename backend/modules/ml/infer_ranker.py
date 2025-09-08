@@ -107,7 +107,7 @@ def _apply_platt_calibration(raw_score: float, a: float, b: float) -> float:
 
 def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List[Dict[str, Any]]:
     """
-    Return sorted list: [{"payload": str, "score": float|None, "p_cal": float|None}]
+    Return sorted list: [{"payload": str, "score": float|None, "p_cal": float|None, "rank_source": str, "model_tag": str|None}]
     If models present & ELISE_USE_ML=1: use model + calibration.
     Else: fall back to manifest defaults ordering with score=None, p_cal=0.50.
     Never raise for unknown family—fallback gracefully.
@@ -136,6 +136,7 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
         if model is not None:
             try:
                 results = []
+                model_tag = f"family_{fam}.joblib"
                 
                 for i, payload in enumerate(default_payloads[:top_k]):
                     # Create payload-specific features
@@ -204,7 +205,9 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
                     results.append({
                         "payload": payload,
                         "score": base_score,
-                        "p_cal": p_cal
+                        "p_cal": p_cal,
+                        "rank_source": "ml",
+                        "model_tag": model_tag
                     })
 
                 # Sort by p_cal descending
@@ -212,11 +215,14 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
                 return results
 
             except Exception as e:
-                # If ML model fails, fall back to defaults
+                # If ML model fails and REQUIRE_RANKER is set, fail the request
+                if REQUIRE_RANKER:
+                    raise RuntimeError(f"ML ranker failed for family {fam}: {str(e)}")
+                # Otherwise fall back to defaults
                 pass
 
     # Fallback to default payloads without ML - use score=None, p_cal=0.50 as specified
-    return [{"payload": p, "score": None, "p_cal": 0.50} for p in default_payloads[:top_k]]
+    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "defaults", "model_tag": None} for p in default_payloads[:top_k]]
 
 
 def available_models() -> Dict[str, Any]:

@@ -10,7 +10,7 @@ export default function AssessPage() {
   const [loading, setLoading] = useState(false);
   const [assessmentResult, setAssessmentResult] = useState(null);
   const [view, setView] = useState(null);
-  const [tab, setTab] = useState("confirmed");
+  const [tab, setTab] = useState("positive");
   const [topK, setTopK] = useState(3);
   const [mlMode, setMlMode] = useState("Off");
   const router = useRouter();
@@ -81,17 +81,24 @@ export default function AssessPage() {
   }
 
   const findings = assessmentResult?.findings || [];
-  const negatives = (assessmentResult?.results || []).filter(r => r.decision === "tested_negative");
+  const results = assessmentResult?.results || [];
+  const negatives = results.filter(r => r.decision === "clean");
   
-  // Calculate detailed breakdown for summary
-  const confirmedProbe = (assessmentResult?.results || []).filter(r => 
-    r.decision === "confirmed" && r.why?.includes("probe_proof")
+  // Calculate detailed breakdown for summary using new decision taxonomy
+  const totalResults = results.length;
+  const positiveResults = results.filter(r => r.decision === "positive");
+  const suspectedResults = results.filter(r => r.decision === "suspected");
+  const cleanResults = results.filter(r => r.decision === "clean");
+  const naResults = results.filter(r => r.decision === "not_applicable");
+  const errorResults = results.filter(r => r.decision === "error");
+  
+  // Calculate ML vs Probe confirmation
+  const confirmedProbe = results.filter(r => 
+    r.decision === "positive" && r.rank_source === "probe_only"
   ).length;
   
-  const confirmedMLInject = (assessmentResult?.results || []).filter(r => 
-    r.decision === "confirmed" && 
-    r.why?.includes("ml_ranked") && 
-    r.why?.includes("inject_confirmed")
+  const confirmedML = results.filter(r => 
+    r.decision === "positive" && r.rank_source === "ml"
   ).length;
 
   if (!jobId || !targetUrl) {
@@ -184,32 +191,49 @@ export default function AssessPage() {
                 Target: {targetUrl}
               </div>
               <div className="text-xs text-green-700">
-                Endpoints crawled: {assessmentResult.meta.endpoints_crawled} | 
+                Endpoints supplied: {assessmentResult.meta.endpoints_supplied} | 
                 Targets enumerated: {assessmentResult.meta.targets_enumerated} |
-                Processing time: {assessmentResult.meta.processing_time_ms}ms
+                Injections attempted: {assessmentResult.meta.injections_attempted} |
+                Injections succeeded: {assessmentResult.meta.injections_succeeded} |
+                Budget used: {assessmentResult.meta.budget_ms_used}ms
               </div>
             </div>
           )}
 
-          {assessmentResult?.summary?.na > 0 && (
-            <div className="mb-4 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
-              {assessmentResult.summary.na} endpoints had no parameters and were marked NA.
-            </div>
-          )}
+          {(() => {
+            const naCount = results.filter(r => r.decision === "not_applicable").length;
+            return naCount > 0 && (
+              <div className="mb-4 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800">
+                {naCount} endpoints had no parameters and were marked NA.
+              </div>
+            );
+          })()}
 
           {assessmentResult && (
             <div className="mb-4 flex flex-wrap gap-2">
               <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
-                Total: {assessmentResult.summary.total}
+                Total: {totalResults}
               </span>
               <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium">
-                Probe: {confirmedProbe}
+                Positive: {positiveResults.length}
               </span>
-              <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-medium">
-                ML: {confirmedMLInject}
+              <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-medium">
+                Suspected: {suspectedResults.length}
               </span>
               <span className="px-2 py-1 bg-gray-100 text-gray-800 rounded text-xs font-medium">
-                Clean: {negatives.length}
+                Clean: {cleanResults.length}
+              </span>
+              <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-xs font-medium">
+                NA: {naResults.length}
+              </span>
+              <span className="px-2 py-1 bg-red-100 text-red-800 rounded text-xs font-medium">
+                Error: {errorResults.length}
+              </span>
+              <span className="px-2 py-1 bg-indigo-100 text-indigo-800 rounded text-xs font-medium">
+                Confirmed (Probe): {confirmedProbe}
+              </span>
+              <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-medium">
+                Confirmed (ML): {confirmedML}
               </span>
             </div>
           )}
@@ -218,47 +242,86 @@ export default function AssessPage() {
             <>
               <div className="border-b mb-4 flex gap-4">
                 <button
-                  onClick={() => setTab("confirmed")}
-                  className={`pb-2 -mb-px border-b-2 ${tab === "confirmed" ? "border-zinc-900" : "border-transparent"}`}
+                  onClick={() => setTab("positive")}
+                  className={`pb-2 -mb-px border-b-2 ${tab === "positive" ? "border-zinc-900" : "border-transparent"}`}
                 >
-                  Confirmed ({findings.length})
+                  Positive ({positiveResults.length})
+                </button>
+                <button
+                  onClick={() => setTab("suspected")}
+                  className={`pb-2 -mb-px border-b-2 ${tab === "suspected" ? "border-zinc-900" : "border-transparent"}`}
+                >
+                  Suspected ({suspectedResults.length})
                 </button>
                 <button
                   onClick={() => setTab("clean")}
                   className={`pb-2 -mb-px border-b-2 ${tab === "clean" ? "border-zinc-900" : "border-transparent"}`}
                 >
-                  Clean ({negatives.length})
+                  Clean ({cleanResults.length})
+                </button>
+                <button
+                  onClick={() => setTab("na")}
+                  className={`pb-2 -mb-px border-b-2 ${tab === "na" ? "border-zinc-900" : "border-transparent"}`}
+                >
+                  NA ({naResults.length})
+                </button>
+                <button
+                  onClick={() => setTab("error")}
+                  className={`pb-2 -mb-px border-b-2 ${tab === "error" ? "border-zinc-900" : "border-transparent"}`}
+                >
+                  Error ({errorResults.length})
                 </button>
               </div>
 
-              {tab === "confirmed" ? (
-                <FindingsTable results={assessmentResult.results || []} onView={setView} />
+              {tab === "positive" ? (
+                <FindingsTable results={positiveResults} onView={setView} />
+              ) : tab === "suspected" ? (
+                <FindingsTable results={suspectedResults} onView={setView} />
               ) : (
                 <div className="overflow-x-auto">
-                  {negatives.length > 0 ? (
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="text-left text-zinc-500">
-                          <th className="p-2">Target</th>
-                          <th className="p-2">Param</th>
-                          <th className="p-2">Notes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {negatives.map((item, i) => (
-                          <tr key={i} className="border-t">
-                            <td className="p-2 break-all">{item.target.method} {item.target.url}</td>
-                            <td className="p-2">{item.target.param_in}:{item.target.param}</td>
-                            <td className="p-2 text-zinc-600">
-                              {item.p ? `Tried ML Top-K` : `Tested`}
-                            </td>
+                  {(() => {
+                    const currentResults = tab === "clean" ? cleanResults : 
+                                         tab === "na" ? naResults : 
+                                         tab === "error" ? errorResults : [];
+                    
+                    return currentResults.length > 0 ? (
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="text-left text-zinc-500">
+                            <th className="p-2">Target</th>
+                            <th className="p-2">Param</th>
+                            <th className="p-2">Decision</th>
+                            <th className="p-2">Notes</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <div className="text-sm text-zinc-500 p-4">No clean targets to display.</div>
-                  )}
+                        </thead>
+                        <tbody>
+                          {currentResults.map((item, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="p-2 break-all">{item.method} {item.url}</td>
+                              <td className="p-2">{item.param_in}:{item.param}</td>
+                              <td className="p-2">
+                                <span className={`px-2 py-1 rounded text-xs ${
+                                  item.decision === "clean" ? "bg-gray-100 text-gray-800" :
+                                  item.decision === "not_applicable" ? "bg-slate-100 text-slate-800" :
+                                  item.decision === "error" ? "bg-red-100 text-red-800" :
+                                  "bg-yellow-100 text-yellow-800"
+                                }`}>
+                                  {item.decision}
+                                </span>
+                              </td>
+                              <td className="p-2 text-zinc-600">
+                                {item.rank_source === "ml" ? `ML proba: ${item.ml_proba?.toFixed(2) || 'N/A'}` : 
+                                 item.rank_source === "probe_only" ? `Probe confirmed` :
+                                 `Tested`}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    ) : (
+                      <div className="text-sm text-zinc-500 p-4">No {tab} targets to display.</div>
+                    );
+                  })()}
                 </div>
               )}
             </>
@@ -280,8 +343,8 @@ export default function AssessPage() {
       <EvidenceModal
         open={!!view}
         onClose={() => setView(null)}
-        evidence={view}
-        results={assessmentResult?.results || []}
+        evidenceId={view}
+        jobId={jobId}
       />
     </div>
   );

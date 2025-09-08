@@ -4,7 +4,7 @@ import { TriangleAlert, ShieldCheck, Database, Link as LinkIcon, ChevronDown, Ch
 
 const famIcon = (f) => f==="xss" ? <TriangleAlert className="icon" /> : f==="sqli" ? <Database className="icon" /> : <LinkIcon className="icon" />;
 
-const badge = (t) => <span className={`px-2 py-0.5 rounded text-xs ${t==="confirmed"?"bg-green-100 text-green-700":t==="suspected"?"bg-amber-100 text-amber-700":"bg-zinc-100 text-zinc-700"}`}>{t}</span>;
+const badge = (t) => <span className={`px-2 py-0.5 rounded text-xs ${t==="positive"?"bg-green-100 text-green-700":t==="suspected"?"bg-amber-100 text-amber-700":t==="error"?"bg-red-100 text-red-700":"bg-zinc-100 text-zinc-700"}`}>{t}</span>;
 
 // Human-readable microcopy mapping
 const microcopyMap = {
@@ -43,6 +43,21 @@ const PCalBadge = ({ p_cal }) => {
   );
 };
 
+// Rank Source badge
+const RankSourceBadge = ({ rank_source }) => {
+  if (!rank_source) return null;
+  const colors = {
+    "ml": "bg-purple-100 text-purple-700",
+    "probe_only": "bg-blue-100 text-blue-700", 
+    "defaults": "bg-gray-100 text-gray-700"
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded text-xs ${colors[rank_source] || "bg-gray-100 text-gray-700"}`}>
+      {rank_source}
+    </span>
+  );
+};
+
 // Microcopy display
 const Microcopy = ({ why }) => {
   const messages = why?.map(code => microcopyMap[code]).filter(Boolean) || [];
@@ -66,7 +81,7 @@ export default function FindingsTable({ results=[], onView }) {
   }, {});
 
   const [expandedSections, setExpandedSections] = useState({
-    confirmed: true,
+    positive: true,
     clean: true,
     na: false
   });
@@ -85,14 +100,11 @@ export default function FindingsTable({ results=[], onView }) {
         <span className="uppercase text-xs">{result.family}</span>
       </td>
       <td className="p-2 break-all">
-        <div>{result.target?.method} {result.target?.url}</div>
+        <div>{result.method} {result.url}</div>
         <Microcopy why={result.why} />
       </td>
       <td className="p-2">
-        {result.target?.param_in}:{result.target?.param}
-      </td>
-      <td className="p-2 font-semibold">
-        {result.evidence?.cvss?.base ?? "-"}
+        {result.param_in}:{result.param}
       </td>
       <td className="p-2">
         <div className="space-y-1">
@@ -100,16 +112,22 @@ export default function FindingsTable({ results=[], onView }) {
           <ProvenanceChips why={result.why} />
         </div>
       </td>
+      <td className="p-2">
+        <RankSourceBadge rank_source={result.rank_source} />
+      </td>
+      <td className="p-2">
+        <PCalBadge p_cal={result.ml_proba} />
+      </td>
+      <td className="p-2 font-semibold">
+        {result.cvss?.base ?? "-"}
+      </td>
       <td className="p-2 text-right">
-        <div className="flex items-center gap-2">
-          <PCalBadge p_cal={result.p_cal} />
-          <button 
-            onClick={()=>onView?.(result.evidence)} 
-            className="px-3 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800"
-          >
-            Evidence
-          </button>
-        </div>
+        <button 
+          onClick={()=>onView?.(result.evidence_id)} 
+          className="px-3 py-1 rounded bg-zinc-900 text-white hover:bg-zinc-800"
+        >
+          Evidence
+        </button>
       </td>
     </tr>
   );
@@ -136,8 +154,10 @@ export default function FindingsTable({ results=[], onView }) {
                   <th className="p-2">Family</th>
                   <th className="p-2">Target</th>
                   <th className="p-2">Param</th>
+                  <th className="p-2">Decision</th>
+                  <th className="p-2">Rank Source</th>
+                  <th className="p-2">ML Proba</th>
                   <th className="p-2">CVSS</th>
-                  <th className="p-2">Status</th>
                   <th className="p-2"></th>
                 </tr>
               </thead>
@@ -153,9 +173,10 @@ export default function FindingsTable({ results=[], onView }) {
 
   return (
     <div>
-      {grouped.confirmed && renderSection("Confirmed", grouped.confirmed, "confirmed")}
+      {grouped.positive && renderSection("Positive", grouped.positive, "positive")}
       {grouped.tested_negative && renderSection("Clean", grouped.tested_negative, "clean")}
       {grouped.not_applicable && renderSection("No parameters (NA)", grouped.not_applicable, "na", false)}
+      {grouped.error && renderSection("Errors", grouped.error, "error", false)}
     </div>
   );
 }
