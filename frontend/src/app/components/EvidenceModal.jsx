@@ -1,5 +1,6 @@
 "use client";
 import { useEffect } from "react";
+import MLScoreDisplay from "./MLScoreDisplay";
 
 export default function EvidenceModal({ open, onClose, evidence, results = [] }) {
   useEffect(()=>{ document.body.style.overflow = open ? "hidden" : ""; }, [open]);
@@ -83,6 +84,49 @@ export default function EvidenceModal({ open, onClose, evidence, results = [] })
     URL.revokeObjectURL(url);
   };
 
+  const copyHeaders = () => {
+    if (!evidence?.request_headers) return;
+    const headersText = Object.entries(evidence.request_headers)
+      .map(([key, value]) => `${key}: ${value}`)
+      .join('\n');
+    navigator.clipboard.writeText(headersText);
+  };
+
+  // Provenance chips for evidence
+  const EvidenceProvenanceChips = ({ why }) => {
+    const chips = [];
+    if (why?.includes("probe_proof")) {
+      chips.push(
+        <span key="probe" className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700">
+          Probe
+        </span>
+      );
+    }
+    if (why?.includes("ml_ranked")) {
+      chips.push(
+        <span key="ml" className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700">
+          ML+Inject
+        </span>
+      );
+    }
+    return <div className="flex gap-1">{chips}</div>;
+  };
+
+  // Probe signals as pills
+  const ProbeSignalsPills = ({ probe_signals }) => {
+    if (!probe_signals || Object.keys(probe_signals).length === 0) return null;
+    
+    return (
+      <div className="flex flex-wrap gap-1">
+        {Object.entries(probe_signals).map(([key, value]) => (
+          <span key={key} className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
+            {key}={String(value)}
+          </span>
+        ))}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow p-4">
@@ -96,8 +140,51 @@ export default function EvidenceModal({ open, onClose, evidence, results = [] })
             <code className="flex-1 bg-zinc-50 border rounded p-2 overflow-x-auto text-xs">{curl}</code>
             <button className="px-2 py-1 rounded bg-zinc-900 text-white text-xs" onClick={()=>navigator.clipboard.writeText(curl)}>Copy</button>
             <button className="px-2 py-1 rounded bg-blue-600 text-white text-xs" onClick={downloadHttp}>Download .http</button>
+            <button className="px-2 py-1 rounded bg-gray-600 text-white text-xs" onClick={copyHeaders}>Copy headers</button>
           </div>
         </div>
+
+        {/* Evidence Details */}
+        <div className="my-4 space-y-3">
+          {/* CVSS and Model Confidence */}
+          <div className="flex items-center gap-4">
+            <div>
+              <div className="text-xs text-zinc-500">CVSS</div>
+              <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
+            </div>
+            {evidence?.p_cal != null && (
+              <div>
+                <div className="text-xs text-zinc-500">Model confidence (p_cal)</div>
+                <div className="font-semibold">{evidence.p_cal.toFixed(2)}</div>
+              </div>
+            )}
+          </div>
+
+          {/* Provenance */}
+          <div>
+            <div className="text-xs text-zinc-500 mb-1">Provenance</div>
+            <EvidenceProvenanceChips why={evidence?.why} />
+          </div>
+
+          {/* Probe Signals */}
+          <div>
+            <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
+            <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
+          </div>
+        </div>
+        
+        {/* ML Scores */}
+        {(evidence?.score !== undefined || evidence?.p_cal !== undefined) && (
+          <div className="my-4">
+            <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+            <MLScoreDisplay 
+              score={evidence?.score}
+              p_cal={evidence?.p_cal}
+              family={evidence?.family}
+            />
+          </div>
+        )}
+        
         <div className="text-xs text-zinc-500 my-2">Response snippet</div>
         <pre className="bg-zinc-50 border rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">
 {evidence?.response_snippet || ""}

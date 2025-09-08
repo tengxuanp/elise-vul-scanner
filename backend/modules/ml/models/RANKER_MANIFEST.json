@@ -1,21 +1,4 @@
 {
-  "models": {
-    "family_xss": {
-      "model_file": "family_xss.joblib",
-      "calibration_file": "family_xss.cal.json",
-      "family": "xss"
-    },
-    "family_sqli": {
-      "model_file": "family_sqli.joblib", 
-      "calibration_file": "family_sqli.cal.json",
-      "family": "sqli"
-    },
-    "family_redirect": {
-      "model_file": "family_redirect.joblib",
-      "calibration_file": "family_redirect.cal.json", 
-      "family": "redirect"
-    }
-  },
   "default_payloads": {
     "xss": [
       "\"><svg onload=alert(1)>",
@@ -32,5 +15,10 @@
       "//example.com/",
       "/\\example.com"
     ]
+  },
+  "models": {
+    "family_xss":      { "model_file": "family_xss.joblib",      "calibration_file": "family_xss.cal.json" },
+    "family_sqli":     { "model_file": "family_sqli.joblib",     "calibration_file": "family_sqli.cal.json" },
+    "family_redirect": { "model_file": "family_redirect.joblib", "calibration_file": "family_redirect.cal.json" }
   }
 }

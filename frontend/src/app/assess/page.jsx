@@ -1,9 +1,10 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { assess, getReport } from "../../lib/api";
+import { assess, getReport, health } from "../../lib/api";
 import FindingsTable from "../components/FindingsTable";
 import EvidenceModal from "../components/EvidenceModal";
+import SummaryPanel from "../components/SummaryPanel";
 
 export default function AssessPage() {
   const [loading, setLoading] = useState(false);
@@ -11,17 +12,37 @@ export default function AssessPage() {
   const [view, setView] = useState(null);
   const [tab, setTab] = useState("confirmed");
   const [topK, setTopK] = useState(3);
+  const [mlMode, setMlMode] = useState("Off");
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
   const targetUrl = searchParams.get("targetUrl");
 
   useEffect(() => {
-    // Auto-run assessment when page loads with valid params
-    if (jobId && targetUrl && !assessmentResult) {
-      onAssess();
-    }
-  }, [jobId, targetUrl]);
+    // Fetch ML mode from healthz
+    const fetchMLMode = async () => {
+      try {
+        const healthResponse = await health();
+        // Healthz returns [data, status_code], we need the data part
+        const healthData = Array.isArray(healthResponse) ? healthResponse[0] : healthResponse;
+        const ml_active = healthData.use_ml;
+        const using_defaults = healthData.defaults_in_use;
+        
+        if (ml_active) {
+          setMlMode(using_defaults ? "Defaults only" : "Calibrated models");
+        } else {
+          setMlMode("Off");
+        }
+      } catch (error) {
+        console.error("Failed to fetch ML mode:", error);
+        setMlMode("Off");
+      }
+    };
+
+    fetchMLMode();
+  }, []);
+
+  // Removed auto-assessment - user must click "Assess" button manually
 
   async function onAssess() {
     if (!jobId || !targetUrl) return;
@@ -134,7 +155,7 @@ export default function AssessPage() {
                 disabled={loading}
                 className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
               >
-                {loading ? "Assessing..." : "Re-assess"}
+                {loading ? "Assessing..." : (assessmentResult ? "Re-assess" : "Assess")}
               </button>
               <button
                 onClick={onExport}
@@ -144,6 +165,17 @@ export default function AssessPage() {
                 Export Report
               </button>
             </div>
+          </div>
+
+          {/* ML Mode Badge */}
+          <div className="mb-4">
+            <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+              mlMode === "Calibrated models" ? "bg-green-100 text-green-700" :
+              mlMode === "Defaults only" ? "bg-amber-100 text-amber-700" :
+              "bg-gray-100 text-gray-700"
+            }`}>
+              ML: {mlMode}
+            </span>
           </div>
 
           {assessmentResult?.meta && (
@@ -182,7 +214,7 @@ export default function AssessPage() {
             </div>
           )}
 
-          {assessmentResult && (
+          {assessmentResult ? (
             <>
               <div className="border-b mb-4 flex gap-4">
                 <button
@@ -200,7 +232,7 @@ export default function AssessPage() {
               </div>
 
               {tab === "confirmed" ? (
-                <FindingsTable findings={findings} results={assessmentResult.results || []} onView={setView} />
+                <FindingsTable results={assessmentResult.results || []} onView={setView} />
               ) : (
                 <div className="overflow-x-auto">
                   {negatives.length > 0 ? (
@@ -230,22 +262,19 @@ export default function AssessPage() {
                 </div>
               )}
             </>
+          ) : (
+            <div className="text-center py-8 text-zinc-600">
+              <p className="mb-4">Ready to assess {targetUrl}</p>
+              <p className="text-sm">Click the "Assess" button above to start vulnerability assessment.</p>
+            </div>
           )}
         </div>
 
-        <aside className="card p-6">
-          <h3 className="font-semibold mb-4">Summary</h3>
-          <ul className="text-sm space-y-2">
-            <li>Endpoints: {assessmentResult?.meta?.endpoints_crawled ?? 0}</li>
-            <li>Targets: {assessmentResult?.meta?.targets_enumerated ?? 0}</li>
-            <li>Total (incl. NA): {assessmentResult?.summary?.total ?? 0}</li>
-            <li>Confirmed (Probe): {confirmedProbe}</li>
-            <li>Confirmed (ML+Inject): {confirmedMLInject}</li>
-            <li>Clean: {negatives.length}</li>
-            <li>NA (no params): {assessmentResult?.summary?.na ?? 0}</li>
-            <li>Job ID: {jobId || "-"}</li>
-          </ul>
-        </aside>
+        <SummaryPanel 
+          assessmentResult={assessmentResult}
+          mlMode={mlMode}
+          jobId={jobId}
+        />
       </div>
 
       <EvidenceModal

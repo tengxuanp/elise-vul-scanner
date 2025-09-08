@@ -55,6 +55,11 @@ export ELISE_REQUIRE_RANKER="0"      # Require ML models (default: 0)
 export ELISE_JOB_BUDGET_MS="300000"  # Job time budget in ms (default: 5 minutes)
 export ELISE_DATA_DIR="backend/data" # Data directory (default: backend/data)
 export ELISE_ML_MODEL_DIR="backend/modules/ml/models" # Model directory
+
+# ML Ranking Thresholds (Step 2: Assessment)
+export ELISE_TAU_XSS="0.75"          # XSS confidence threshold (default: 0.75)
+export ELISE_TAU_SQLI="0.70"         # SQLi confidence threshold (default: 0.70)
+export ELISE_TAU_REDIRECT="0.60"     # Redirect confidence threshold (default: 0.60)
 ```
 
 ### ML Modes
@@ -71,6 +76,13 @@ Elise supports different operational modes based on ML configuration:
 - **Development**: `USE_ML=0` - Quick testing with basic payloads
 - **Production**: `USE_ML=1, REQUIRE_RANKER=0` - Enhanced with ML when available
 - **Strict ML**: `USE_ML=1, REQUIRE_RANKER=1` - Full ML pipeline required
+
+**ML Ranking Execution:**
+ML ranking occurs in **Step 2: Assessment** after probes complete and before injection attempts. The system:
+1. Builds feature vectors from target context and probe results
+2. Ranks payloads using ML models (if available) or manifest defaults
+3. Applies confidence thresholds to filter low-probability payloads
+4. Attempts injections in ranked order until confirmation or budget exhaustion
 
 ### Option 1: Docker (Recommended)
 

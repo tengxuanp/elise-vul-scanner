@@ -6,14 +6,29 @@ const MLScoreDisplay = ({
   used_path, 
   ranker_score,
   ml, // This is the key field from the backend
+  score, // New ML ranking score
+  p_cal, // New ML ranking calibrated probability
   family = 'sqli'
 }) => {
   // Debug logging
-  console.log('MLScoreDisplay props:', { ranker_meta, family_probs, used_path, ranker_score, ml, family });
+  console.log('MLScoreDisplay props:', { ranker_meta, family_probs, used_path, ranker_score, ml, score, p_cal, family });
 
   // Extract ML scores from ANY available source - be very aggressive
   const getMLScores = () => {
-    // Priority 1: Direct ml field from backend (enhanced ML)
+    // Priority 1: New ML ranking fields (score and p_cal)
+    if (score !== undefined && p_cal !== undefined) {
+      return {
+        calibrated_probability: p_cal,
+        confidence: p_cal,
+        raw_probability: score,
+        uncertainty: 1 - p_cal,
+        model_type: 'ml_ranker',
+        is_enhanced: true,
+        source: 'ml_ranking'
+      };
+    }
+    
+    // Priority 2: Direct ml field from backend (enhanced ML)
     if (ml && typeof ml === 'object') {
       if (ml.p !== undefined) {
         return {
@@ -28,7 +43,7 @@ const MLScoreDisplay = ({
       }
     }
 
-    // Priority 2: ranker_meta field
+    // Priority 3: ranker_meta field
     if (ranker_meta && typeof ranker_meta === 'object') {
       if (ranker_meta.calibrated_probability !== undefined) {
         return {
@@ -55,7 +70,7 @@ const MLScoreDisplay = ({
       }
     }
 
-    // Priority 3: family_probs
+    // Priority 4: family_probs
     if (family_probs && typeof family_probs === 'object') {
       const familyKey = family.toLowerCase();
       if (family_probs[familyKey] !== undefined) {
@@ -71,7 +86,7 @@ const MLScoreDisplay = ({
       }
     }
 
-    // Priority 4: ranker_score
+    // Priority 5: ranker_score
     if (ranker_score !== undefined && ranker_score !== null) {
       return {
         calibrated_probability: ranker_score,
@@ -84,7 +99,7 @@ const MLScoreDisplay = ({
       };
     }
 
-    // Priority 5: Check if used_path indicates ML was used
+    // Priority 6: Check if used_path indicates ML was used
     if (used_path && (used_path.includes('ml') || used_path.includes('enhanced'))) {
       return {
         calibrated_probability: 0.0, // Default fallback

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, status
 from backend.app_state import DATA_DIR, MODEL_DIR, USE_ML, REQUIRE_RANKER
-import json
+import json, os
 from pathlib import Path
 
 router = APIRouter()
@@ -58,11 +58,48 @@ def healthz():
     except Exception as e:
         fails.append(f"Playwright import failed: {e}")
     
+    # Get ML model availability information
+    ml_status = "disabled"
+    available_models_info = {}
+    defaults_in_use = False
+    
+    if USE_ML:
+        try:
+            from backend.modules.ml.infer_ranker import available_models, using_defaults
+            available_models_info = available_models()
+            
+            # Check if we're using defaults
+            has_any_models = any(info["has_model"] for info in available_models_info.values())
+            has_any_defaults = any(info["has_defaults"] for info in available_models_info.values())
+            
+            if has_any_models:
+                ml_status = "models_available"
+            elif has_any_defaults:
+                ml_status = "defaults_only"
+                defaults_in_use = True
+            else:
+                ml_status = "no_models_or_defaults"
+                
+        except Exception as e:
+            ml_status = "error"
+            fails.append(f"ML status check failed: {e}")
+    
     return {
         "ok": not bool(fails), 
         "data_dir": str(DATA_DIR), 
         "model_dir": str(MODEL_DIR),
         "use_ml": USE_ML,
         "require_ranker": REQUIRE_RANKER,
+        "ml_active": USE_ML,  # New field as specified
+        "models_available": available_models_info,  # New field as specified
+        "using_defaults": using_defaults() if USE_ML else True,  # New field as specified
+        "ml_status": ml_status,
+        "available_models": available_models_info,
+        "defaults_in_use": defaults_in_use,
+        "thresholds": {
+            "sqli_tau": float(os.getenv("ELISE_TAU_SQLI", "0.50")),
+            "xss_tau": float(os.getenv("ELISE_TAU_XSS", "0.75")),
+            "redirect_tau": float(os.getenv("ELISE_TAU_REDIRECT", "0.60")),
+        },
         "failed_checks": fails
     }, (status.HTTP_200_OK if not fails else status.HTTP_500_INTERNAL_SERVER_ERROR)
