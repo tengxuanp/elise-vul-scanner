@@ -1,43 +1,79 @@
-# Elise - Advanced ML-Powered Web Vulnerability Scanner
+# Elise - Rule-Based Web Vulnerability Scanner
 
 [![Python](https://img.shields.io/badge/Python-3.12+-blue.svg)](https://python.org)
-[![Next.js](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org)
+[![Next.js](https://img.shields.io/badge/Next.js-13.5.6-black.svg)](https://nextjs.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-green.svg)](https://fastapi.tiangolo.com)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Elise** is a sophisticated, full-stack web vulnerability scanning system that combines dynamic crawling, machine learning-based vulnerability prediction, and intelligent payload recommendation to automatically discover and test web application security flaws.
+**Elise** is a clean, rule-based web vulnerability scanning system that combines dynamic crawling, intelligent probe detection, and honest UX to automatically discover and test web application security flaws with transparent operation modes.
 
 ## 🎯 Key Features
 
-- **🧠 Advanced ML System**: 48-feature enhanced vulnerability prediction with confidence calibration
+- **🔍 Rule-Based Detection**: Lightweight heuristics for XSS context/escaping and SQLi dialect detection
 - **🕷️ Dynamic Crawling**: Playwright-based web crawling with smart endpoint discovery
-- **🎯 Intelligent Fuzzing**: ML-driven payload recommendation and real-time testing
-- **📊 CVSS Scoring**: Industry-standard vulnerability severity assessment
+- **📊 Honest UX**: Three-page flow with transparent mode indicators and diagnostics
+- **🎯 Probe-First Methodology**: Micro-probes for efficient vulnerability confirmation
+- **📈 CVSS Scoring**: Industry-standard vulnerability severity assessment
 - **🔍 XSS & SQLi Focus**: Specialized detection for Cross-Site Scripting and SQL Injection
-- **⚡ Real-time UI**: Modern Next.js interface with live progress tracking
-- **🛡️ Exploitation Testing**: Automated payload refinement and verification
+- **⚡ Real-time UI**: Modern Next.js 13.5.6 interface with live progress tracking
+- **🛡️ Evidence Collection**: Safe HTML escaping and raw download capabilities
 
 ## 🏗️ Architecture
 
-### Frontend (Next.js 15)
-- Modern React 19 with App Router
+### Frontend (Next.js 13.5.6)
+- Modern React 18 with App Router
 - Tailwind CSS for responsive design
-- Real-time progress tracking
-- Interactive result visualization
+- Three-page flow: Crawl → Assess → Report
+- Real-time diagnostics and mode indicators
 
 ### Backend (FastAPI)
 - Python 3.12 with async/await
-- SQLite database with SQLAlchemy
-- Advanced ML models (XGBoost, LightGBM)
-- RESTful API with OpenAPI docs
+- Rule-based probe detection
+- Job persistence with evidence collection
+- RESTful API with clear contract separation
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.12+
 - Node.js 18+
-- Docker & Docker Compose
 - Modern web browser
+
+## 📋 Modes & Semantics
+
+### API Modes
+Elise operates in distinct modes with clear semantics:
+
+| Mode | Description | Use Case |
+|------|-------------|----------|
+| `crawl_only` | Crawl and persist endpoints | Initial discovery phase |
+| `direct` | Assess with explicit endpoints | UI endpoint selection |
+| `from_persisted` | Load from saved endpoints | Resume previous crawl |
+| `crawl_then_assess` | Crawl and assess in one call | Direct assessment |
+
+### Job Persistence
+All crawl artifacts are stored under `DATA_DIR/jobs/<job_id>/`:
+- `endpoints.json` - Discovered endpoints and parameters
+- `<evidence_id>.json` - Individual vulnerability evidence files
+
+### Telemetry Fields
+Every assessment result includes:
+- `attempt_idx` - Injection attempt number
+- `top_k_used` - Number of payloads attempted
+- `rank_source` - How payloads were selected (`ml`, `probe_only`, `defaults`)
+
+### Diagnostics
+The system provides transparent diagnostics:
+- `use_ml` - Whether ML features are enabled
+- `ml_active` - Whether ML models are loaded
+- `models_available` - List of available ML models
+- `thresholds` - Decision thresholds for each family
+
+### UX Flow
+**Route-based navigation**: Crawl → Assess → Report
+- **Crawl Page**: Discover endpoints with optional persistence
+- **Assess Page**: Run vulnerability assessment with mode banner
+- **Report Page**: View results and download evidence
 
 ### Environment Variables
 
@@ -114,7 +150,7 @@ make docker-down     # Stop all services
 make docker-logs     # View logs
 ```
 
-### Option 2: Manual Setup
+### Manual Setup
 
 1. **Clone the repository**
    ```bash
@@ -126,7 +162,7 @@ make docker-logs     # View logs
    ```bash
    cd backend
    pip install -r requirements.txt
-   python main.py
+   uvicorn backend.main:app --reload
    ```
 
 3. **Setup Frontend**
@@ -141,24 +177,40 @@ make docker-logs     # View logs
    - Backend API: http://localhost:8000
    - API Docs: http://localhost:8000/docs
 
+### Running Tests
+
+**Backend Tests:**
+```bash
+cd backend
+pytest -q
+```
+
+**Frontend Tests:**
+```bash
+cd frontend
+npm test
+```
+
 ## 🔄 Workflow
 
-### Step 1: Dynamic Crawling
-- Enter target URL (e.g., `http://localhost:8082/`)
-- System crawls and discovers endpoints
-- Smart categorization of API endpoints, forms, and admin areas
+### Step 1: Crawl (Page 1)
+- Enter target URL and crawl configuration
+- System crawls and discovers endpoints with parameters
+- Endpoints are persisted to `jobs/<job_id>/endpoints.json`
+- Select specific endpoints for assessment
 
-### Step 2: ML Vulnerability Prediction
-- Advanced feature extraction from endpoints
-- ML models predict vulnerability types (XSS, SQLi)
-- Confidence scoring with uncertainty quantification
-- Context-aware payload recommendation
+### Step 2: Assess (Page 2)
+- Run vulnerability assessment on selected endpoints
+- Probe-first methodology with micro-probes
+- Rule-based XSS context/escaping detection
+- Rule-based SQLi dialect detection
+- Evidence collection with safe HTML escaping
 
-### Step 3: Intelligent Fuzzing
-- Real-time payload testing with evidence collection
-- ML-driven payload evolution for better success rates
-- CVSS-based severity assessment
-- Automated exploitation testing
+### Step 3: Report (Page 3)
+- View generated Markdown report
+- Access individual evidence files
+- Download raw evidence data
+- Review assessment telemetry and diagnostics
 
 ## 🧠 Machine Learning System
 
@@ -243,7 +295,13 @@ The training pipeline generates 1000 synthetic samples per family and trains Log
 
 ## 🔧 API Endpoints
 
-- `POST /api/crawl` - Enhanced dynamic crawling
+### Core Assessment API
+- `POST /api/crawl` - Crawl target and persist endpoints
+- `POST /api/assess` - Run vulnerability assessment with clear mode semantics
+- `GET /api/healthz` - System diagnostics and ML status
+- `GET /api/evidence/{job_id}/{evidence_id}` - Fetch individual evidence files
+
+### Legacy Endpoints (Maintained for Compatibility)
 - `POST /api/ml-predict` - ML vulnerability prediction
 - `POST /api/ml-fuzz` - Real-time ML fuzzing
 - `POST /api/enhanced-fuzz` - CVSS-based enhanced fuzzing

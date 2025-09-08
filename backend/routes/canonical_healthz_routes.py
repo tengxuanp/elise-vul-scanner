@@ -5,8 +5,8 @@ from pathlib import Path
 
 router = APIRouter()
 
-@router.get("/healthz")
-def healthz():
+def get_healthz_data():
+    """Get healthz data as a dictionary (without status code)."""
     fails = []
     
     # Check DATA_DIR is writable
@@ -54,7 +54,7 @@ def healthz():
     
     # Check playwright import
     try:
-        from backend.modules.playwright_crawler import crawl_site
+        from modules.playwright_crawler import crawl_site
     except Exception as e:
         fails.append(f"Playwright import failed: {e}")
     
@@ -90,9 +90,9 @@ def healthz():
         "model_dir": str(MODEL_DIR),
         "use_ml": USE_ML,
         "require_ranker": REQUIRE_RANKER,
-        "ml_active": USE_ML,  # New field as specified
-        "models_available": available_models_info,  # New field as specified
-        "using_defaults": using_defaults() if USE_ML else True,  # New field as specified
+        "ml_active": USE_ML,
+        "models_available": available_models_info,
+        "using_defaults": using_defaults() if USE_ML else True,
         "ml_status": ml_status,
         "available_models": available_models_info,
         "defaults_in_use": defaults_in_use,
@@ -102,4 +102,11 @@ def healthz():
             "redirect_tau": float(os.getenv("ELISE_TAU_REDIRECT", "0.60")),
         },
         "failed_checks": fails
-    }, (status.HTTP_200_OK if not fails else status.HTTP_500_INTERNAL_SERVER_ERROR)
+    }
+
+@router.get("/healthz")
+def healthz():
+    """Health check endpoint with status code."""
+    data = get_healthz_data()
+    status_code = status.HTTP_200_OK if data["ok"] else status.HTTP_500_INTERNAL_SERVER_ERROR
+    return data, status_code

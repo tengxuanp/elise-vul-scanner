@@ -71,6 +71,62 @@ const MLChip = ({ rank_source, ml_proba }) => {
   );
 };
 
+// XSS Context/Escaping chips
+const XSSContextChips = ({ family, xss_context, xss_escaping }) => {
+  if (family !== "xss" || !xss_context || !xss_escaping) return null;
+  
+  const contextMap = {
+    "html_body": "html",
+    "attr": "attr", 
+    "js_string": "js",
+    "url": "url",
+    "css": "css",
+    "unknown": "?"
+  };
+  
+  const escapingMap = {
+    "raw": "raw",
+    "html": "html",
+    "url": "url", 
+    "js": "js",
+    "unknown": "?"
+  };
+  
+  return (
+    <span 
+      className="px-2 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-mono"
+      title={`XSS Context: ${xss_context}, Escaping: ${xss_escaping}`}
+    >
+      {contextMap[xss_context] || "?"}/{escapingMap[xss_escaping] || "?"}
+    </span>
+  );
+};
+
+// SQLi Dialect chip
+const SQLiDialectChip = ({ family, dialect, dialect_confident }) => {
+  if (family !== "sqli" || !dialect || dialect === "unknown") return null;
+  
+  const dialectMap = {
+    "mysql": "MySQL",
+    "postgresql": "PostgreSQL", 
+    "mssql": "SQL Server",
+    "sqlite": "SQLite"
+  };
+  
+  return (
+    <span 
+      className={`px-2 py-0.5 rounded text-xs font-mono ${
+        dialect_confident 
+          ? "bg-green-100 text-green-700" 
+          : "bg-yellow-100 text-yellow-700"
+      }`}
+      title={`Detected Dialect: ${dialect}${dialect_confident ? " (confident)" : " (weak signal)"}`}
+    >
+      {dialectMap[dialect] || dialect}
+    </span>
+  );
+};
+
 // Microcopy display
 const Microcopy = ({ why }) => {
   const messages = why?.map(code => microcopyMap[code]).filter(Boolean) || [];
@@ -124,6 +180,16 @@ export default function FindingsTable({ results=[], onView }) {
           {badge(result.decision)}
           <ProvenanceChips why={result.why} />
           <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} />
+          <XSSContextChips 
+            family={result.family} 
+            xss_context={result.xss_context} 
+            xss_escaping={result.xss_escaping} 
+          />
+          <SQLiDialectChip 
+            family={result.family} 
+            dialect={result.dialect} 
+            dialect_confident={result.dialect_confident} 
+          />
         </div>
       </td>
       <td className="p-2">
@@ -188,7 +254,8 @@ export default function FindingsTable({ results=[], onView }) {
   return (
     <div>
       {grouped.positive && renderSection("Positive", grouped.positive, "positive")}
-      {grouped.tested_negative && renderSection("Clean", grouped.tested_negative, "clean")}
+      {grouped.suspected && renderSection("Suspected", grouped.suspected, "suspected")}
+      {grouped.clean && renderSection("Clean", grouped.clean, "clean")}
       {grouped.not_applicable && renderSection("No parameters (NA)", grouped.not_applicable, "na", false)}
       {grouped.error && renderSection("Errors", grouped.error, "error", false)}
     </div>

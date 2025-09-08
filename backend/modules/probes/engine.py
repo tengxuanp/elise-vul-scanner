@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from .xss_canary import run_xss_probe, XssProbe
 from .sqli_triage import run_sqli_probe, SqliProbe
 from .redirect_oracle import run_redirect_probe, RedirectProbe
-from backend.modules.targets import Target
+from ..targets import Target
 
 @dataclass
 class ProbeBundle:

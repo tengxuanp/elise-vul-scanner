@@ -82,7 +82,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "reason_code": reason_code,
                 "evidence_id": evidence_id
             })
-            
+
             return {
                 "target": target.to_dict(), 
                 "family": fam, 
@@ -198,8 +198,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
                         "proba": top_proba
                     })
-                else:
-                    fallback_reason = "ml_unavailable_or_disabled"
+            except Exception as e:
+                fallback_reason = "ml_unavailable_or_disabled"
                 
                 for attempt_idx, cand in enumerate(ranked):
                     payload = cand.get("payload")
@@ -341,6 +341,24 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "top_k_used": None,
             "timing_ms": 0
         }
+    except Exception as e:
+        logging.error(f"Error processing target {target.url}: {e}")
+        return {
+            "target": target.to_dict(),
+            "decision": DECISION["ERR"],
+            "why": ["error"],
+            "cvss": None,
+            "rank_source": None,
+            "ml_role": None,
+            "gated": False,
+            "ml_family": None,
+            "ml_proba": None,
+            "ml_threshold": None,
+            "model_tag": None,
+            "attempt_idx": None,
+            "top_k_used": None,
+            "timing_ms": 0
+        }
 
 def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3) -> Dict[str, Any]:
     """
@@ -407,7 +425,6 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                 "timing_ms": 0,
                 "status": ep.get("status", 0)
             })
-        else:
             all_targets.extend(targets)
     
     # Process targets in parallel with time budget

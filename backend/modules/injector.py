@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 import httpx, time
-from backend.modules.targets import Target
+from .targets import Target
 
 @dataclass
 class InjectionResult:

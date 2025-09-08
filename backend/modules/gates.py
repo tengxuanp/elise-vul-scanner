@@ -1,4 +1,4 @@
-from backend.modules.targets import Target
+from .targets import Target
 
 def gate_not_applicable(t: Target) -> bool:
     if not t.param: return True
