@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import MLScoreDisplay from "./MLScoreDisplay";
+import { API_BASE } from "../../lib/api";
 
 export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
   const [evidence, setEvidence] = useState(null);
@@ -13,7 +14,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
   useEffect(() => {
     if (open && evidenceId && jobId) {
       setLoading(true);
-      fetch(`/api/evidence/${jobId}/${evidenceId}`)
+      fetch(`${API_BASE}/evidence/${jobId}/${evidenceId}`)
         .then(res => res.json())
         .then(data => {
           setEvidence(data);

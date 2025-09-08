@@ -58,6 +58,19 @@ const RankSourceBadge = ({ rank_source }) => {
   );
 };
 
+// ML chip with probability
+const MLChip = ({ rank_source, ml_proba }) => {
+  if (rank_source !== "ml" || ml_proba == null) return null;
+  return (
+    <span 
+      className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
+      title="ML prioritized payload; decision from probe proof."
+    >
+      ML p={ml_proba.toFixed(2)}
+    </span>
+  );
+};
+
 // Microcopy display
 const Microcopy = ({ why }) => {
   const messages = why?.map(code => microcopyMap[code]).filter(Boolean) || [];
@@ -110,16 +123,17 @@ export default function FindingsTable({ results=[], onView }) {
         <div className="space-y-1">
           {badge(result.decision)}
           <ProvenanceChips why={result.why} />
+          <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} />
         </div>
       </td>
       <td className="p-2">
         <RankSourceBadge rank_source={result.rank_source} />
       </td>
       <td className="p-2">
-        <PCalBadge p_cal={result.ml_proba} />
+        {result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
       </td>
       <td className="p-2 font-semibold">
-        {result.cvss?.base ?? "-"}
+        {result.cvss?.base ?? "—"}
       </td>
       <td className="p-2 text-right">
         <button 

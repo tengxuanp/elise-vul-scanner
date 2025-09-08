@@ -69,53 +69,19 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         if probe_result:
             fam, reason_code = probe_result
-            # Probe confirmed vulnerability - but still run ML for telemetry
+            # Probe confirmed vulnerability - decision from probe proof, not ML
             ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
             ev.cvss = cvss_for(fam, ev)
             ev.why = unique_merge(ev.why, [reason_code])
-            
-            # Run ML ranking for telemetry even for probe-confirmed vulnerabilities
-            ctx = {
-                "family": fam,
-                "param_in": target.param_in,
-                "param": target.param,
-                "payload": "",
-                "probe_sql_error": probe_bundle.sqli.error_based,
-                "probe_timing_delta_gt2s": probe_bundle.sqli.time_based,
-                "probe_reflection_html": probe_bundle.xss.reflected and probe_bundle.xss.context == "html",
-                "probe_reflection_js": probe_bundle.xss.reflected and probe_bundle.xss.context == "js_string",
-                "probe_redirect_location_reflects": probe_bundle.redirect.influence,
-                "status_class": target.status // 100 if target.status else 0,
-                "content_type_html": "text/html" in (target.content_type or ""),
-                "content_type_json": "application/json" in (target.content_type or ""),
-                "ctx_html": probe_bundle.xss.context == "html",
-                "ctx_attr": probe_bundle.xss.context == "attr",
-                "ctx_js": probe_bundle.xss.context == "js_string"
-            }
-            
-            features = build_features(ctx)
-            ranked = rank_payloads(fam, features, top_k=1)  # Just get ML telemetry
-            
-            # Extract ML telemetry
-            rank_source = ranked[0].get("rank_source", "defaults") if ranked else "defaults"
-            model_tag = ranked[0].get("model_tag") if ranked else None
-            ml_proba = ranked[0].get("p_cal") if ranked else None
-            threshold = {"xss": float(os.getenv("ELISE_TAU_XSS", "0.75")), 
-                        "sqli": float(os.getenv("ELISE_TAU_SQLI", "0.70")), 
-                        "redirect": float(os.getenv("ELISE_TAU_REDIRECT", "0.60"))}.get(fam, 0.5)
-            
-            # Log ML ranker usage
-            if rank_source == "ml" and ranked:
-                top_payload = ranked[0].get("payload", "")
-                logging.info("ranker_used", extra={
-                    "family": fam,
-                    "model_tag": model_tag,
-                    "threshold": threshold,
-                    "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
-                    "proba": ml_proba
-                })
-            
             evidence_id = write_evidence(job_id, ev)
+            
+            # Log confirm event
+            logging.info("confirm", extra={
+                "family": fam,
+                "rank_source": "probe_only",
+                "reason_code": reason_code,
+                "evidence_id": evidence_id
+            })
             
             return {
                 "target": target.to_dict(), 
@@ -124,11 +90,15 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "why": ["probe_proof", reason_code],
                 "evidence_id": evidence_id,
                 "cvss": ev.cvss,  # Pass through the CVSS from evidence
-                "rank_source": rank_source,  # Use ML rank_source if available
-                "ml_family": fam,
-                "ml_proba": ml_proba,
-                "ml_threshold": threshold,
-                "model_tag": model_tag,
+                "rank_source": "probe_only",  # Decision from probe, not ML
+                "ml_role": None,
+                "gated": False,
+                "ml_family": None,
+                "ml_proba": None,
+                "ml_threshold": None,
+                "model_tag": None,
+                "attempt_idx": None,
+                "top_k_used": None,
                 "timing_ms": 0  # Probe-only results have no injection timing
             }
         
@@ -142,7 +112,22 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             candidates.append("redirect")
         
         if not candidates:
-            return {"target": target.to_dict(), "decision": DECISION["ABS"], "why": ["no_candidates"]}
+            return {
+                "target": target.to_dict(), 
+                "decision": DECISION["ABS"], 
+                "why": ["no_candidates"],
+                "cvss": None,
+                "rank_source": None,  # No candidates means no ranking
+                "ml_role": None,
+                "gated": False,
+                "ml_family": None,
+                "ml_proba": None,
+                "ml_threshold": None,
+                "model_tag": None,
+                "attempt_idx": None,
+                "top_k_used": None,
+                "timing_ms": 0
+            }
         
         # Build context for ML ranking
         ctx = {
@@ -186,6 +171,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         tried = []
         attempted_by_family = {}
+        ml_used = False
+        fallback_reason = None
         
         for fam in candidates:
             try:
@@ -201,6 +188,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 
                 # Log ML ranker usage (once per family)
                 if rank_source == "ml" and ranked:
+                    ml_used = True
                     top_payload = ranked[0].get("payload", "")
                     top_proba = ranked[0].get("p_cal", 0.0)
                     logging.info("ranker_used", extra={
@@ -210,8 +198,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
                         "proba": top_proba
                     })
+                else:
+                    fallback_reason = "ml_unavailable_or_disabled"
                 
-                for cand in ranked:
+                for attempt_idx, cand in enumerate(ranked):
                     payload = cand.get("payload")
                     score = cand.get("score")
                     p_cal = cand.get("p_cal")
@@ -221,10 +211,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     if below_threshold(fam, p_cal) and budget_tight():
                         continue
                     
-                    # Measure injection timing
-                    inj_start = time.time()
+                    # Measure injection timing using perf_counter for better precision
+                    inj_start = time.perf_counter()
                     inj = inject_once(target, fam, payload)
-                    inj_timing_ms = int((time.time() - inj_start) * 1000)
+                    inj_timing_ms = int((time.perf_counter() - inj_start) * 1000)
                     
                     # Build comprehensive signals from probes + injection outcome
                     signals = {
@@ -253,6 +243,16 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         ev.why = unique_merge(ev.why, ["ml_ranked", reason_code])
                         evidence_id = write_evidence(job_id, ev)
                         
+                        # Log confirm event
+                        logging.info("confirm", extra={
+                            "family": fired_family,
+                            "rank_source": rank_source,
+                            "reason_code": reason_code,
+                            "evidence_id": evidence_id,
+                            "ml_proba": p_cal if rank_source == "ml" else None,
+                            "attempt_idx": attempt_idx if rank_source == "ml" else None
+                        })
+                        
                         return {
                             "target": target.to_dict(), 
                             "family": fired_family, 
@@ -260,11 +260,15 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "why": unique_merge([], ["ml_ranked", reason_code]),
                             "evidence_id": evidence_id,
                             "cvss": ev.cvss,  # Pass through the CVSS from evidence
-                            "rank_source": rank_source,
-                            "ml_family": fam,
-                            "ml_proba": p_cal,
-                            "ml_threshold": threshold,
-                            "model_tag": model_tag,
+                            "rank_source": rank_source,  # "ml" if ML ranked, "defaults" if fallback
+                            "ml_role": "prioritization" if rank_source == "ml" else None,
+                            "gated": False,
+                            "ml_family": fam if rank_source == "ml" else None,
+                            "ml_proba": p_cal if rank_source == "ml" else None,
+                            "ml_threshold": threshold if rank_source == "ml" else None,
+                            "model_tag": model_tag if rank_source == "ml" else None,
+                            "attempt_idx": attempt_idx if rank_source == "ml" else None,
+                            "top_k_used": top_k if rank_source == "ml" else None,
                             "timing_ms": inj_timing_ms
                         }
                         
@@ -273,18 +277,47 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 if "ranker" in str(e).lower() and REQUIRE_RANKER:
                     raise e
                 # Otherwise continue with next family
+                fallback_reason = "ranker_failed"
                 continue
         
         # If none confirmed, mark auditable negative
+        why_reasons = [f"tried:{sum(attempted_by_family.values())}", "no_confirm_after_topk"]
+        if fallback_reason:
+            why_reasons.append(fallback_reason)
+        
+        # Determine rank_source for clean rows
+        clean_rank_source = "ml" if ml_used else "defaults"
+        clean_ml_proba = None
+        clean_attempt_idx = None
+        
+        # If ML was used, get the first attempt's ML telemetry
+        if ml_used and tried:
+            # Find the first ML-ranked payload that was attempted
+            for fam in candidates:
+                try:
+                    ranked = rank_payloads(fam, features, top_k=1)
+                    if ranked and ranked[0].get("rank_source") == "ml":
+                        clean_ml_proba = ranked[0].get("p_cal")
+                        clean_attempt_idx = 0
+                        break
+                except:
+                    continue
+        
         return {
             "target": target.to_dict(), 
             "decision": DECISION["NEG"], 
-            "why": unique_merge([], ["ml_attempted", f"tried:{sum(attempted_by_family.values())}", "no_confirm_after_topk"]),
-            "rank_source": "defaults",  # Default for negative results
+            "why": unique_merge([], why_reasons),
+            "cvss": None,  # No CVSS for non-positive results
+            "rank_source": clean_rank_source,
+            "ml_role": None,
+            "gated": False,
             "ml_family": None,
-            "ml_proba": None,
+            "ml_proba": clean_ml_proba,
             "ml_threshold": None,
             "model_tag": None,
+            "attempt_idx": clean_attempt_idx,
+            "top_k_used": None,
+            "timing_ms": 0,
             "meta": {
                 "ml_attempted_payloads": tried[:3],  # trim for payload privacy
                 "attempted_by_family": attempted_by_family
@@ -292,7 +325,22 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         }
         
     except Exception as e:
-        return {"target": target.to_dict(), "decision": DECISION["ABS"], "why": [f"error: {str(e)}"]}
+        return {
+            "target": target.to_dict(), 
+            "decision": DECISION["ERR"], 
+            "why": [f"error: {str(e)}"],
+            "cvss": None,
+            "rank_source": "defaults",
+            "ml_role": None,
+            "gated": False,
+            "ml_family": None,
+            "ml_proba": None,
+            "ml_threshold": None,
+            "model_tag": None,
+            "attempt_idx": None,
+            "top_k_used": None,
+            "timing_ms": 0
+        }
 
 def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3) -> Dict[str, Any]:
     """
@@ -331,19 +379,33 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
         # If no targets (no parameters), mark as not_applicable
         if not targets:
             endpoints_without_params += 1
+            # Extract path from URL for NA rows
+            from urllib.parse import urlparse
+            parsed_url = urlparse(ep.get("url", ""))
+            path = parsed_url.path or "/"
+            
             results.append({
-                "target": {
-                    "url": ep.get("url", ""),
-                    "method": ep.get("method", "GET"),
-                    "param_in": "none",
-                    "param": "none",
-                    "headers": ep.get("headers", {}),
-                    "status": ep.get("status"),
-                    "content_type": ep.get("content_type"),
-                    "base_params": {}
-                },
+                "evidence_id": None,
+                "url": ep.get("url", ""),
+                "path": path,
+                "method": ep.get("method", "GET"),
+                "param_in": "none",
+                "param": "none",
+                "family": None,
                 "decision": DECISION["NA"],
-                "why": ["no_parameters_detected"]
+                "why": ["no_parameters_detected"],
+                "cvss": None,
+                "rank_source": None,  # NA rows have no rank_source
+                "ml_role": None,
+                "gated": False,
+                "ml_family": None,
+                "ml_proba": None,
+                "ml_threshold": None,
+                "model_tag": None,
+                "attempt_idx": None,
+                "top_k_used": None,
+                "timing_ms": 0,
+                "status": ep.get("status", 0)
             })
         else:
             all_targets.extend(targets)
@@ -396,12 +458,16 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                         "family": result.get("family"),
                         "decision": result["decision"],
                         "why": result["why"],
-                        "cvss": result.get("cvss", {"base": 0.0}),
+                        "cvss": result.get("cvss"),
                         "rank_source": result.get("rank_source"),
+                        "ml_role": result.get("ml_role"),
+                        "gated": result.get("gated"),
                         "ml_family": result.get("ml_family"),
                         "ml_proba": result.get("ml_proba"),
                         "ml_threshold": result.get("ml_threshold"),
                         "model_tag": result.get("model_tag"),
+                        "attempt_idx": result.get("attempt_idx"),
+                        "top_k_used": result.get("top_k_used"),
                         "timing_ms": result.get("timing_ms", 0),
                         "status": result["target"].get("status", 0)
                     }
@@ -426,12 +492,16 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                         "family": None,
                         "decision": DECISION["ERR"],
                         "why": [f"processing_error: {str(e)}"],
-                        "cvss": {"base": 0.0},
-                        "rank_source": None,
+                        "cvss": None,
+                        "rank_source": "defaults",
+                        "ml_role": None,
+                        "gated": False,
                         "ml_family": None,
                         "ml_proba": None,
                         "ml_threshold": None,
                         "model_tag": None,
+                        "attempt_idx": None,
+                        "top_k_used": None,
                         "timing_ms": 0,
                         "status": 0
                     })

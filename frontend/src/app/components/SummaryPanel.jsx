@@ -10,17 +10,21 @@ const SummaryPanel = ({
 
   const { summary, meta } = assessmentResult;
   
-  // Calculate confirmed breakdown
+  // Calculate confirmed breakdown using new decision taxonomy
   const confirmedProbe = assessmentResult.results?.filter(r => 
-    r.decision === "confirmed" && r.why?.includes("probe_proof")
+    r.decision === "positive" && r.rank_source === "probe_only"
   ).length || 0;
   
   const confirmedMLInject = assessmentResult.results?.filter(r => 
-    r.decision === "confirmed" && r.why?.includes("ml_ranked")
+    r.decision === "positive" && r.rank_source === "ml"
   ).length || 0;
   
   const clean = assessmentResult.results?.filter(r => 
-    r.decision === "tested_negative"
+    r.decision === "clean"
+  ).length || 0;
+  
+  const na = assessmentResult.results?.filter(r => 
+    r.decision === "not_applicable"
   ).length || 0;
 
   // ML mode badge color
@@ -54,7 +58,7 @@ const SummaryPanel = ({
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>
           <div className="text-gray-600">Endpoints crawled</div>
-          <div className="font-semibold">{meta?.endpoints_crawled || 0}</div>
+          <div className="font-semibold">{meta?.endpoints_supplied || 0}</div>
         </div>
         
         <div>
@@ -79,12 +83,12 @@ const SummaryPanel = ({
         
         <div>
           <div className="text-gray-600">NA (no params)</div>
-          <div className="font-semibold text-gray-500">{summary?.na || 0}</div>
+          <div className="font-semibold text-gray-500">{na}</div>
         </div>
         
         <div>
           <div className="text-gray-600">Processing time</div>
-          <div className="font-semibold">{formatTime(meta?.processing_time_ms)}</div>
+          <div className="font-semibold">{formatTime(meta?.budget_ms_used)}</div>
         </div>
         
         <div>

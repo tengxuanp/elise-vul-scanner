@@ -195,7 +195,7 @@ export default function AssessPage() {
                 Targets enumerated: {assessmentResult.meta.targets_enumerated} |
                 Injections attempted: {assessmentResult.meta.injections_attempted} |
                 Injections succeeded: {assessmentResult.meta.injections_succeeded} |
-                Budget used: {assessmentResult.meta.budget_ms_used}ms
+                Processing time: {(assessmentResult.meta.budget_ms_used / 1000).toFixed(1)}s
               </div>
             </div>
           )}
