@@ -113,6 +113,15 @@ export default function AssessPage() {
   const naResults = results.filter(r => r.decision === "not_applicable");
   const errorResults = results.filter(r => r.decision === "error");
   
+  // Consistency check: total should equal sum of all categories
+  const categorySum = positiveResults.length + suspectedResults.length + abstainResults.length + naResults.length + errorResults.length;
+  const countsConsistent = totalResults === categorySum;
+  
+  // Log inconsistency in dev mode
+  if (!countsConsistent && process.env.NODE_ENV === 'development') {
+    console.warn(`Counts mismatch for job ${jobId}: total=${totalResults}, categories=${categorySum}`);
+  }
+  
   // Calculate ML vs Probe confirmation
   const confirmedProbe = results.filter(r => 
     r.decision === "positive" && r.rank_source === "probe_only"
@@ -292,8 +301,12 @@ export default function AssessPage() {
 
                 {assessmentResult && (
                   <div className="mb-4 flex flex-wrap gap-2">
-                    <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium">
+                    <span 
+                      className={`px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium ${!countsConsistent ? 'border-2 border-yellow-400' : ''}`}
+                      title={!countsConsistent ? 'Counts mismatch: total ≠ sum of categories' : ''}
+                    >
                       Total: {totalResults}
+                      {!countsConsistent && <span className="ml-1 text-yellow-600">⚠️</span>}
                     </span>
                     <span className="px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium">
                       Positive: {positiveResults.length}
@@ -431,6 +444,7 @@ export default function AssessPage() {
           onClose={() => setView(null)}
           evidenceId={view}
           jobId={jobId}
+          meta={assessmentResult?.meta}
         />
       </div>
     </div>

@@ -30,6 +30,14 @@ class EvidenceRow:
     # New response snippet fields
     response_snippet_text: str | None = None  # HTML-escaped safe text
     response_snippet_raw: str | None = None   # base64 encoded raw bytes
+    # XSS Context fields
+    xss_context: str | None = None  # "html_body|attr|js_string|url|css"
+    xss_escaping: str | None = None  # "raw|html|url|js|unknown"
+    xss_context_source: str | None = None  # "rule|ml"
+    xss_context_ml_proba: float | None = None  # ML probability when source="ml"
+    # Telemetry fields
+    attempt_idx: int | None = None  # Attempt index for this payload
+    top_k_used: int | None = None   # Number of top-k payloads used
 
     @staticmethod
     def _create_validation_flags(signals: Dict[str,Any]) -> Dict[str,bool]:
@@ -58,6 +66,26 @@ class EvidenceRow:
             "sqli_error_based": getattr(p.sqli, "error_based", None),
         }
         
+        # Extract XSS context information
+        xss_context = None
+        xss_escaping = None
+        xss_context_source = None
+        xss_context_ml_proba = None
+        
+        if family == "xss" and hasattr(p, "xss") and p.xss:
+            xss_context = getattr(p.xss, "xss_context", None)
+            xss_escaping = getattr(p.xss, "xss_escaping", None)
+            
+            # Determine source and ML probability
+            xss_context_ml = getattr(p.xss, "xss_context_ml", None)
+            xss_context_rule = getattr(p.xss, "xss_context_rule", None)
+            
+            if xss_context_ml and xss_context_ml.get("pred"):
+                xss_context_source = "ml"
+                xss_context_ml_proba = xss_context_ml.get("proba")
+            elif xss_context_rule:
+                xss_context_source = "rule"
+        
         # Sanitize response snippet
         response_snippet = "<probe_confirmed>"
         response_snippet_text = html.escape(response_snippet)
@@ -74,7 +102,13 @@ class EvidenceRow:
             ml_threshold=None,
             model_tag=None,
             response_snippet_text=response_snippet_text,
-            response_snippet_raw=response_snippet_raw
+            response_snippet_raw=response_snippet_raw,
+            xss_context=xss_context,
+            xss_escaping=xss_escaping,
+            xss_context_source=xss_context_source,
+            xss_context_ml_proba=xss_context_ml_proba,
+            attempt_idx=0,
+            top_k_used=0
         )
 
     @classmethod
@@ -91,6 +125,26 @@ class EvidenceRow:
             "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
             "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location","")).startswith(("http://","https://"))),
         }
+
+        # Extract XSS context information
+        xss_context = None
+        xss_escaping = None
+        xss_context_source = None
+        xss_context_ml_proba = None
+        
+        if family == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+            xss_context = _get(probe_bundle.xss, "xss_context", None)
+            xss_escaping = _get(probe_bundle.xss, "xss_escaping", None)
+            
+            # Determine source and ML probability
+            xss_context_ml = _get(probe_bundle.xss, "xss_context_ml", None)
+            xss_context_rule = _get(probe_bundle.xss, "xss_context_rule", None)
+            
+            if xss_context_ml and xss_context_ml.get("pred"):
+                xss_context_source = "ml"
+                xss_context_ml_proba = xss_context_ml.get("proba")
+            elif xss_context_rule:
+                xss_context_source = "rule"
 
         # Sanitize response snippet
         response_snippet = getattr(inj, "response_snippet", "")
@@ -110,7 +164,13 @@ class EvidenceRow:
             ml_threshold=ml_threshold,
             model_tag=model_tag,
             response_snippet_text=response_snippet_text,
-            response_snippet_raw=response_snippet_raw
+            response_snippet_raw=response_snippet_raw,
+            xss_context=xss_context,
+            xss_escaping=xss_escaping,
+            xss_context_source=xss_context_source,
+            xss_context_ml_proba=xss_context_ml_proba,
+            attempt_idx=0,  # Will be set by caller
+            top_k_used=0    # Will be set by caller
         )
 
     def to_dict(self, evidence_id: str = None) -> Dict[str, Any]:
@@ -118,13 +178,23 @@ class EvidenceRow:
         d = asdict(self)
         if evidence_id:
             d["evidence_id"] = evidence_id
+        
+        # Ensure telemetry defaults are set
+        if d.get("attempt_idx") is None:
+            d["attempt_idx"] = 0
+        if d.get("top_k_used") is None:
+            d["top_k_used"] = 0
+        if d.get("rank_source") is None:
+            why = d.get("why", [])
+            d["rank_source"] = "probe_only" if any("probe" in str(code) for code in why) else "none"
+        
         return d
 
 def _sanitize_filename_component(component: str) -> str:
     """Sanitize a filename component by replacing unsafe characters with underscores."""
     return re.sub(r'[^a-zA-Z0-9_.-]+', '_', component)
 
-def write_evidence(job_id: str, ev: EvidenceRow) -> str:
+def write_evidence(job_id: str, ev: EvidenceRow, probe_bundle=None) -> str:
     """Write evidence to file and return evidence_id."""
     jid = f"{job_id}".replace("/", "_")
     outdir = DATA_DIR / "jobs" / jid
@@ -136,8 +206,29 @@ def write_evidence(job_id: str, ev: EvidenceRow) -> str:
     evidence_id = f"{ts}_{ev.family}_{safe_param}"
     path = outdir / f"{evidence_id}.json"
     
+    # Prepare evidence data
+    evidence_data = asdict(ev)
+    
+    # Add detailed XSS context data if available
+    if ev.family == "xss" and probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+        xss_probe = probe_bundle.xss
+        evidence_data["xss_context_details"] = {
+            "fragment_left_64": getattr(xss_probe, "fragment_left_64", ""),
+            "fragment_right_64": getattr(xss_probe, "fragment_right_64", ""),
+            "raw_reflection": getattr(xss_probe, "raw_reflection", ""),
+            "in_script_tag": getattr(xss_probe, "in_script_tag", False),
+            "in_attr": getattr(xss_probe, "in_attr", False),
+            "attr_name": getattr(xss_probe, "attr_name", ""),
+            "in_style": getattr(xss_probe, "in_style", False),
+            "attr_quote": getattr(xss_probe, "attr_quote", ""),
+            "content_type": getattr(xss_probe, "content_type", ""),
+            "xss_context_rule": getattr(xss_probe, "xss_context_rule", None),
+            "xss_context_ml": getattr(xss_probe, "xss_context_ml", None),
+            "xss_escaping_ml": getattr(xss_probe, "xss_escaping_ml", None)
+        }
+    
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(asdict(ev), f, ensure_ascii=False, indent=2)
+        json.dump(evidence_data, f, ensure_ascii=False, indent=2)
     return evidence_id
 
 def read_evidence(job_id: str, evidence_id: str) -> Dict[str, Any]:

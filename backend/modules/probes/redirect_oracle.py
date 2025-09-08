@@ -5,6 +5,9 @@ from dataclasses import dataclass
 class RedirectProbe:
     influence: bool = False
     location: str | None = None
+    # Param information for UI display
+    param_in: str = ""
+    param: str = ""
 
 def run_redirect_probe(url, method, param_in, param, headers=None):
     params={}; data=None; js=None
@@ -15,5 +18,5 @@ def run_redirect_probe(url, method, param_in, param, headers=None):
     r = httpx.request(method, url, params=params, data=data, json=js, headers=headers, timeout=8.0, follow_redirects=False)
     loc = r.headers.get("location")
     if (300 <= r.status_code < 400) and loc and loc.startswith(("http://","https://")):
-        return RedirectProbe(True, loc)
+        return RedirectProbe(True, loc, param_in="header", param="location")
     return RedirectProbe()

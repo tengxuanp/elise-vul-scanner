@@ -56,19 +56,33 @@ const RankSourceBadge = ({ rank_source }) => {
 
 // ML chip with probability
 const MLChip = ({ rank_source, ml_proba }) => {
-  if (rank_source !== "ml" || ml_proba == null) return null;
-  return (
-    <span 
-      className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
-      title="ML prioritized payload; decision from probe proof."
-    >
-      ML p={ml_proba.toFixed(2)}
-    </span>
-  );
+  if (rank_source === "ml" && ml_proba != null) {
+    return (
+      <span 
+        className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
+        title="ML prioritized payload; decision from probe proof."
+      >
+        ML p={ml_proba.toFixed(2)}
+      </span>
+    );
+  }
+  
+  if (rank_source === "ctx_pool") {
+    return (
+      <span 
+        className="px-2 py-0.5 rounded text-xs bg-blue-100 text-blue-700 font-mono"
+        title="Context-aware payload pool used for XSS"
+      >
+        CTX
+      </span>
+    );
+  }
+  
+  return null;
 };
 
 // XSS Context/Escaping chips
-const XSSContextChips = ({ family, xss_context, xss_escaping }) => {
+const XSSContextChips = ({ family, xss_context, xss_escaping, xss_context_source, xss_context_ml_proba }) => {
   if (family !== "xss" || !xss_context || !xss_escaping) return null;
   
   const contextMap = {
@@ -89,12 +103,22 @@ const XSSContextChips = ({ family, xss_context, xss_escaping }) => {
   };
   
   return (
-    <span 
-      className="px-2 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-mono"
-      title={`XSS Context: ${xss_context}, Escaping: ${xss_escaping}`}
-    >
-      {contextMap[xss_context] || "?"}/{escapingMap[xss_escaping] || "?"}
-    </span>
+    <div className="flex gap-1 items-center">
+      <span 
+        className="px-2 py-0.5 rounded text-xs bg-orange-100 text-orange-700 font-mono"
+        title={`XSS Context: ${xss_context}, Escaping: ${xss_escaping}`}
+      >
+        {contextMap[xss_context] || "?"}/{escapingMap[xss_escaping] || "?"}
+      </span>
+      {xss_context_source === "ml" && xss_context_ml_proba && (
+        <span 
+          className="px-1.5 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
+          title="ML-assisted classification"
+        >
+          ML {xss_context_ml_proba.toFixed(2)}
+        </span>
+      )}
+    </div>
   );
 };
 
@@ -167,9 +191,23 @@ export default function FindingsTable({ results=[], onView }) {
       <td className="p-2 break-all">
         <div>{result.method} {result.url}</div>
         <Microcopy why={result.why} />
+        {result.error_message && (
+          <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+            Error: {result.error_message}
+          </div>
+        )}
       </td>
       <td className="p-2">
-        {result.param_in}:{result.param}
+        {(() => {
+          // Fallback order: param_in:param -> header:location for redirect -> none:none
+          if (result.param_in && result.param) {
+            return `${result.param_in}:${result.param}`;
+          } else if (result.family === 'redirect') {
+            return 'header:location';
+          } else {
+            return <span className="text-gray-500">none:none</span>;
+          }
+        })()}
       </td>
       <td className="p-2">
         <div className="space-y-1">
@@ -179,7 +217,9 @@ export default function FindingsTable({ results=[], onView }) {
           <XSSContextChips 
             family={result.family} 
             xss_context={result.xss_context} 
-            xss_escaping={result.xss_escaping} 
+            xss_escaping={result.xss_escaping}
+            xss_context_source={result.xss_context_source}
+            xss_context_ml_proba={result.xss_context_ml_proba}
           />
           <SQLiDialectChip 
             family={result.family} 

@@ -9,6 +9,35 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from collections import defaultdict
+
+# Global event aggregator for tracking probe and injection attempts
+_event_aggregator = defaultdict(lambda: {"probe_attempts": 0, "probe_successes": 0, "inject_attempts": 0, "inject_successes": 0})
+
+def record_probe_attempt(target_id: str, family: str, success: bool):
+    """Record a probe attempt event."""
+    _event_aggregator[target_id]["probe_attempts"] += 1
+    if success:
+        _event_aggregator[target_id]["probe_successes"] += 1
+
+def record_inject_attempt(target_id: str, family: str, success: bool):
+    """Record an injection attempt event."""
+    _event_aggregator[target_id]["inject_attempts"] += 1
+    if success:
+        _event_aggregator[target_id]["inject_successes"] += 1
+
+def get_event_totals() -> Dict[str, int]:
+    """Get total counts from all events."""
+    totals = {"probe_attempts": 0, "probe_successes": 0, "inject_attempts": 0, "inject_successes": 0}
+    for events in _event_aggregator.values():
+        for key in totals:
+            totals[key] += events[key]
+    return totals
+
+def clear_event_aggregator():
+    """Clear the event aggregator (for testing)."""
+    global _event_aggregator
+    _event_aggregator.clear()
 
 from .targets import enumerate_targets, Target
 from .probes.engine import run_probes
@@ -24,12 +53,22 @@ from backend.app_state import DATA_DIR
 
 def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure all result rows have non-null telemetry defaults."""
-    if result.get("attempt_idx") is None:
-        result["attempt_idx"] = 0
-    if result.get("top_k_used") is None:
-        result["top_k_used"] = 0
+    # Set attempt_idx default
+    result.setdefault("attempt_idx", 0)
+    
+    # Set top_k_used default
+    result.setdefault("top_k_used", 0)
+    
+    # Set rank_source default based on result type
     if result.get("rank_source") is None:
-        result["rank_source"] = "none"
+        # Determine rank_source based on decision and provenance
+        decision = result.get("decision")
+        why = result.get("why", [])
+        if decision == DECISION["POS"] and any("probe" in str(code) for code in why):
+            result["rank_source"] = "probe_only"
+        else:
+            result["rank_source"] = "none"
+    
     return result
 
 # Environment flags
@@ -71,11 +110,28 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
     """Process a single target and return the result."""
     try:
         if gate_not_applicable(target):
-            return _ensure_telemetry_defaults({"target": target.to_dict(), "decision": DECISION["NA"], "why": ["gate_not_applicable"]})
+            target_dict = target.to_dict()
+            # Ensure NA results have proper param_in and param values for UI display
+            if not target_dict.get("param_in") or target_dict.get("param_in") == "":
+                target_dict["param_in"] = "none"
+            if not target_dict.get("param") or target_dict.get("param") == "":
+                target_dict["param"] = "none"
+            return _ensure_telemetry_defaults({"target": target_dict, "decision": DECISION["NA"], "why": ["gate_not_applicable"]})
         
         # Run probes
         probe_bundle = run_probes(target)
         probe_result = _confirmed_family(probe_bundle)
+        
+        # Record probe attempt
+        target_id = f"{target.url}:{target.param_in}:{target.param}"
+        if probe_result:
+            fam, reason_code = probe_result
+            record_probe_attempt(target_id, fam, True)
+        else:
+            # Record probe attempt for each family that was probed
+            for family in ["xss", "sqli", "redirect"]:
+                if hasattr(probe_bundle, family) and getattr(probe_bundle, family):
+                    record_probe_attempt(target_id, family, False)
         
         if probe_result:
             fam, reason_code = probe_result
@@ -83,7 +139,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
             ev.cvss = cvss_for(fam, ev)
             ev.why = unique_merge(ev.why, [reason_code])
-            evidence_id = write_evidence(job_id, ev)
+            evidence_id = write_evidence(job_id, ev, probe_bundle)
             
             # Log confirm event
             logging.info("confirm", extra={
@@ -93,7 +149,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "evidence_id": evidence_id
             })
 
-            return _ensure_telemetry_defaults({
+            result_dict = {
                 "target": target.to_dict(), 
                 "family": fam, 
                 "decision": DECISION["POS"], 
@@ -110,7 +166,60 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "attempt_idx": None,
                 "top_k_used": None,
                 "timing_ms": 0  # Probe-only results have no injection timing
-            })
+            }
+            
+            # Add XSS context fields if this is an XSS finding
+            if fam == "xss":
+                result_dict.update({
+                    "xss_context": ev.xss_context,
+                    "xss_escaping": ev.xss_escaping,
+                    "xss_context_source": ev.xss_context_source,
+                    "xss_context_ml_proba": ev.xss_context_ml_proba
+                })
+                
+                # Add param information from XSS probe if available
+                if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                    xss_probe = probe_bundle.xss
+                    if hasattr(xss_probe, "param_in") and hasattr(xss_probe, "param"):
+                        result_dict.update({
+                            "param_in": xss_probe.param_in,
+                            "param": xss_probe.param
+                        })
+            
+            # Add param information for redirect findings
+            elif fam == "redirect":
+                if hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                    redirect_probe = probe_bundle.redirect
+                    if hasattr(redirect_probe, "param_in") and hasattr(redirect_probe, "param"):
+                        result_dict.update({
+                            "param_in": redirect_probe.param_in,
+                            "param": redirect_probe.param
+                        })
+            
+            # Optional demo flag: force one context injection after XSS reflection
+            force_context_inject = os.getenv("XSS_FORCE_CONTEXT_INJECT_ON_REFLECTION", "false").lower() == "true"
+            if force_context_inject and fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                xss_probe = probe_bundle.xss
+                if hasattr(xss_probe, "xss_context") and hasattr(xss_probe, "xss_escaping"):
+                    try:
+                        from backend.modules.payloads import payload_pool_for_xss
+                        context_payloads = payload_pool_for_xss(xss_probe.xss_context, xss_probe.xss_escaping)
+                        if context_payloads:
+                            # Try one context-aware payload
+                            demo_payload = context_payloads[0]
+                            record_inject_attempt(target_id, "xss", False)
+                            
+                            inj_start = time.perf_counter()
+                            inj = inject_once(target, "xss", demo_payload)
+                            inj_timing_ms = int((time.perf_counter() - inj_start) * 1000)
+                            
+                            # Check if it succeeded (simplified check)
+                            if hasattr(inj, "status") and inj.status == 200:
+                                record_inject_attempt(target_id, "xss", True)
+                    except Exception as e:
+                        logging.warning(f"Demo context injection failed: {e}")
+            
+            return _ensure_telemetry_defaults(result_dict)
         
         # ML payload ranking and injection
         candidates = []
@@ -186,7 +295,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         for fam in candidates:
             try:
-                ranked = rank_payloads(fam, features, top_k=top_k or 3)
+                # Extract XSS context information if available
+                xss_context = None
+                xss_escaping = None
+                if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                    xss_context = getattr(probe_bundle.xss, "xss_context", None)
+                    xss_escaping = getattr(probe_bundle.xss, "xss_escaping", None)
+                
+                ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
                 attempted_by_family[fam] = len(ranked)
                 
                 # Get ML telemetry from first ranked item
@@ -226,6 +342,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     inj = inject_once(target, fam, payload)
                     inj_timing_ms = int((time.perf_counter() - inj_start) * 1000)
                     
+                    # Record injection attempt
+                    record_inject_attempt(target_id, fam, False)  # Will be updated to True if successful
+                    
                     # Build comprehensive signals from probes + injection outcome
                     signals = {
                         "xss_context": getattr(probe_bundle.xss, "context", None) if probe_bundle else None,
@@ -238,6 +357,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     fired_family, reason_code = oracle_from_signals(signals)
                     
                     if fired_family:
+                        # Update injection attempt to success
+                        record_inject_attempt(target_id, fam, True)
+                        
                         # Create evidence with ML scores and correct family
                         ev = EvidenceRow.from_injection(
                             target, fired_family, probe_bundle, cand, inj,
@@ -251,7 +373,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         ev.score = score
                         ev.p_cal = p_cal
                         ev.why = unique_merge(ev.why, ["ml_ranked", reason_code])
-                        evidence_id = write_evidence(job_id, ev)
+                        evidence_id = write_evidence(job_id, ev, probe_bundle)
                         
                         # Log confirm event
                         logging.info("confirm", extra={
@@ -263,7 +385,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "attempt_idx": attempt_idx if rank_source == "ml" else None
                         })
                         
-                        return {
+                        result_dict = {
                             "target": target.to_dict(), 
                             "family": fired_family, 
                             "decision": DECISION["POS"], 
@@ -281,6 +403,17 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "top_k_used": top_k if rank_source == "ml" else None,
                             "timing_ms": inj_timing_ms
                         }
+                        
+                        # Add XSS context fields if this is an XSS finding
+                        if fired_family == "xss":
+                            result_dict.update({
+                                "xss_context": ev.xss_context,
+                                "xss_escaping": ev.xss_escaping,
+                                "xss_context_source": ev.xss_context_source,
+                                "xss_context_ml_proba": ev.xss_context_ml_proba
+                            })
+                        
+                        return result_dict
                         
             except RuntimeError as e:
                 # If ranker fails and REQUIRE_RANKER is set, propagate the error
@@ -335,30 +468,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         })
         
     except Exception as e:
+        logging.error(f"Error processing target {target.url}: {e}")
         return _ensure_telemetry_defaults({
             "target": target.to_dict(), 
             "decision": DECISION["ERR"], 
-            "why": [f"error: {str(e)}"],
+            "why": ["error"],
+            "error_message": str(e),
             "cvss": None,
             "rank_source": "defaults",
-            "ml_role": None,
-            "gated": False,
-            "ml_family": None,
-            "ml_proba": None,
-            "ml_threshold": None,
-            "model_tag": None,
-            "attempt_idx": None,
-            "top_k_used": None,
-            "timing_ms": 0
-        })
-    except Exception as e:
-        logging.error(f"Error processing target {target.url}: {e}")
-        return _ensure_telemetry_defaults({
-            "target": target.to_dict(),
-            "decision": DECISION["ERR"],
-            "why": ["error"],
-            "cvss": None,
-            "rank_source": None,
             "ml_role": None,
             "gated": False,
             "ml_family": None,

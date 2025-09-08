@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional
 from backend.modules.targets import enumerate_targets, enumerate_targets_from_endpoints, Target
-from backend.modules.fuzzer_core import _process_target, DECISION
+from backend.modules.fuzzer_core import _process_target, get_event_totals, clear_event_aggregator, DECISION
 
 def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->Dict[str,Any]:
     """
@@ -12,6 +12,9 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
     
     # Start timing
     start_time = time.perf_counter()
+    
+    # Clear event aggregator for fresh counts
+    clear_event_aggregator()
     
     # Use deterministic target enumeration
     target_dicts = enumerate_targets_from_endpoints(endpoints)
@@ -85,11 +88,30 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
     end_time = time.perf_counter()
     processing_ms = int(1000 * (end_time - start_time))
     
-    # Calculate split counters
-    probe_attempts = 0
-    probe_successes = 0
-    ml_inject_attempts = 0
-    ml_inject_successes = 0
+    # Get event-based counters
+    event_totals = get_event_totals()
+    probe_attempts = event_totals.get("probe_attempts", 0)
+    probe_successes = event_totals.get("probe_successes", 0)
+    ml_inject_attempts = event_totals.get("inject_attempts", 0)
+    ml_inject_successes = event_totals.get("inject_successes", 0)
+    
+    # XSS context counters
+    xss_reflections_total = 0
+    xss_rule_high_conf = 0
+    xss_ml_invoked = 0
+    xss_final_from_ml = 0
+    xss_context_dist = {}
+    
+    # XSS context payload pool uplift counters
+    xss_ctx_pool_used = 0
+    xss_first_hit_attempts_ctx = 0
+    xss_first_hit_attempts_baseline = 0
+    
+    # Calculate result-based counters for consistency check
+    result_probe_attempts = 0
+    result_probe_successes = 0
+    result_ml_inject_attempts = 0
+    result_ml_inject_successes = 0
     
     for result in results:
         rank_source = result.get("rank_source", "none")
@@ -98,24 +120,52 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
         attempt_idx = result.get("attempt_idx", 0)
         top_k_used = result.get("top_k_used", 0)
         
-        # Count probe attempts and successes
+        # Count result-based counters for consistency check
         if rank_source == "probe_only":
-            probe_attempts += 1  # At least one probe attempt per target
+            result_probe_attempts += 1  # At least one probe attempt per target
             if decision == DECISION["POS"]:
-                probe_successes += 1
+                result_probe_successes += 1
         
         # Count ML injection attempts and successes
-        elif rank_source in ["ml", "defaults"] or "ml_ranked" in why:
+        elif rank_source in ["ml", "defaults", "ctx_pool"] or "ml_ranked" in why:
             # Count injection attempts based on top_k_used
-            if top_k_used > 0:
-                ml_inject_attempts += top_k_used
-            elif attempt_idx > 0:
-                ml_inject_attempts += attempt_idx
+            if (top_k_used or 0) > 0:
+                result_ml_inject_attempts += top_k_used or 0
+            elif (attempt_idx or 0) > 0:
+                result_ml_inject_attempts += attempt_idx or 0
             else:
-                ml_inject_attempts += 1  # At least one attempt
+                result_ml_inject_attempts += 1  # At least one attempt
             
             if decision == DECISION["POS"]:
-                ml_inject_successes += 1
+                result_ml_inject_successes += 1
+        
+        # Count XSS context statistics
+        if result.get("family") == "xss" and result.get("xss_context"):
+            xss_reflections_total += 1
+            
+            # Count context distribution
+            context = result.get("xss_context", "unknown")
+            xss_context_dist[context] = xss_context_dist.get(context, 0) + 1
+            
+            # Count rule vs ML usage
+            xss_context_source = result.get("xss_context_source")
+            if xss_context_source == "rule":
+                xss_rule_high_conf += 1
+            elif xss_context_source == "ml":
+                xss_ml_invoked += 1
+                xss_final_from_ml += 1
+            
+            # Count context payload pool usage and first-hit attempts
+            if rank_source == "ctx_pool":
+                xss_ctx_pool_used += 1
+                # Count attempts before first positive for context pool
+                attempt_idx = result.get("attempt_idx", 0) or 0
+                if decision == DECISION["POS"]:
+                    xss_first_hit_attempts_ctx += attempt_idx + 1
+            elif rank_source in ["ml", "defaults"] and decision == DECISION["POS"]:
+                # Count attempts before first positive for baseline
+                attempt_idx = result.get("attempt_idx", 0) or 0
+                xss_first_hit_attempts_baseline += attempt_idx + 1
     
     summary = {
         "total": len(results),
@@ -135,6 +185,25 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
         "probe_successes": probe_successes,
         "ml_inject_attempts": ml_inject_attempts,
         "ml_inject_successes": ml_inject_successes,
+        # XSS context counters
+        "xss_reflections_total": xss_reflections_total,
+        "xss_rule_high_conf": xss_rule_high_conf,
+        "xss_ml_invoked": xss_ml_invoked,
+        "xss_final_from_ml": xss_final_from_ml,
+        "xss_context_dist": xss_context_dist,
+        # XSS context payload pool uplift counters
+        "xss_ctx_pool_used": xss_ctx_pool_used,
+        "xss_first_hit_attempts_ctx": xss_first_hit_attempts_ctx,
+        "xss_first_hit_attempts_baseline": xss_first_hit_attempts_baseline,
+        "xss_first_hit_attempts_delta": xss_first_hit_attempts_baseline - xss_first_hit_attempts_ctx if (xss_first_hit_attempts_ctx or 0) > 0 else 0,
+        # Consistency check
+        "counters_consistent": (
+            probe_attempts == result_probe_attempts and
+            probe_successes == result_probe_successes and
+            ml_inject_attempts == result_ml_inject_attempts and
+            ml_inject_successes == result_ml_inject_successes and
+            (probe_successes + ml_inject_successes) == sum(1 for r in results if r.get("decision") == "positive")
+        ),
         # Backward compatibility
         "injections_attempted": probe_attempts + ml_inject_attempts,
         "injections_succeeded": probe_successes + ml_inject_successes,

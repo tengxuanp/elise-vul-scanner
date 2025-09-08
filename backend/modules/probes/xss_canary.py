@@ -2,8 +2,13 @@ import httpx
 import html
 import urllib.parse
 import re
+import json
+import time
+import os
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from pathlib import Path
+from backend.app_state import DATA_DIR
 
 CANARY = "EliseXSSCanary123"
 
@@ -14,11 +19,28 @@ class XssProbe:
     reflected: bool = False
     xss_context: Optional[str] = None
     xss_escaping: Optional[str] = None
+    # New ML fields
+    xss_context_rule: Optional[Dict[str, Any]] = None
+    xss_context_ml: Optional[Dict[str, Any]] = None
+    xss_escaping_ml: Optional[Dict[str, Any]] = None
+    # Additional fields for evidence
+    fragment_left_64: str = ""
+    fragment_right_64: str = ""
+    raw_reflection: str = ""
+    in_script_tag: bool = False
+    in_attr: bool = False
+    attr_name: str = ""
+    in_style: bool = False
+    attr_quote: str = ""
+    content_type: str = ""
+    # Param information for UI display
+    param_in: str = ""
+    param: str = ""
 
-def detect_xss_context(text: str, canary_pos: int) -> str:
-    """Detect XSS context using rule-based heuristics."""
+def detect_xss_context_with_confidence(text: str, canary_pos: int) -> Dict[str, Any]:
+    """Detect XSS context using rule-based heuristics with confidence scoring."""
     if canary_pos == -1:
-        return "unknown"
+        return {"pred": "unknown", "conf": 0.0}
     
     # Get context window around the canary
     window_start = max(0, canary_pos - 50)
@@ -39,35 +61,40 @@ def detect_xss_context(text: str, canary_pos: int) -> str:
         after_canary = script_content[canary_in_script + len(CANARY):canary_in_script + len(CANARY) + 10]
         
         if ('"' in before_canary and '"' in after_canary) or ("'" in before_canary and "'" in after_canary):
-            return "js_string"
+            return {"pred": "js_string", "conf": 0.95}  # High confidence
         else:
-            return "html_body"  # In script but not in string
+            return {"pred": "html_body", "conf": 0.85}  # High confidence
     
     # Check for CSS context
     style_start = text.rfind('<style', 0, canary_pos)
     style_end = text.find('</style>', canary_pos)
     if style_start != -1 and style_end != -1 and style_start < canary_pos < style_end:
-        return "css"
+        return {"pred": "css", "conf": 0.95}  # High confidence
     
     # Check for inline style attribute
     if 'style=' in window:
-        return "css"
+        return {"pred": "css", "conf": 0.90}  # High confidence
     
     # Check for URL context (href, src, action attributes)
     url_attrs = ['href=', 'src=', 'action=', 'formaction=']
     for attr in url_attrs:
         if attr in window:
-            return "url"
+            return {"pred": "url", "conf": 0.90}  # High confidence
     
     # Check for HTML attribute context
     if ('"' in window or "'" in window) and ('=' in window):
-        return "attr"
+        return {"pred": "attr", "conf": 0.80}  # Medium-high confidence
     
     # Check for HTML body context
     if '<' in window and '>' in window:
-        return "html_body"
+        return {"pred": "html_body", "conf": 0.70}  # Medium confidence
     
-    return "unknown"
+    return {"pred": "unknown", "conf": 0.30}  # Low confidence
+
+def detect_xss_context(text: str, canary_pos: int) -> str:
+    """Legacy function for backward compatibility."""
+    result = detect_xss_context_with_confidence(text, canary_pos)
+    return result["pred"]
 
 def detect_xss_escaping(text: str, canary_pos: int) -> str:
     """Detect XSS escaping using rule-based heuristics."""
@@ -77,6 +104,10 @@ def detect_xss_escaping(text: str, canary_pos: int) -> str:
     # Get the actual reflected canary
     canary_end = canary_pos + len(CANARY)
     reflected_canary = text[canary_pos:canary_end]
+    
+    # Check for raw reflection first
+    if reflected_canary == CANARY:
+        return "raw"
     
     # Check for HTML escaping
     html_escaped = html.escape(CANARY)
@@ -93,13 +124,74 @@ def detect_xss_escaping(text: str, canary_pos: int) -> str:
     if reflected_canary == js_escaped:
         return "js"
     
-    # Check for raw reflection
-    if reflected_canary == CANARY:
-        return "raw"
-    
     return "unknown"
 
-def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None):
+def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: str, param: str, 
+                               text: str, canary_pos: int, headers: Dict[str, str] = None) -> None:
+    """Capture XSS reflection data for ML training."""
+    if canary_pos == -1:
+        return
+    
+    # Extract context window
+    window_start = max(0, canary_pos - 64)
+    window_end = min(len(text), canary_pos + len(CANARY) + 64)
+    fragment_left_64 = text[window_start:canary_pos]
+    fragment_right_64 = text[canary_pos + len(CANARY):window_end]
+    
+    # Detect context features
+    context_result = detect_xss_context_with_confidence(text, canary_pos)
+    
+    # Extract additional features
+    in_script_tag = '<script' in text[max(0, canary_pos - 200):canary_pos]
+    in_style = '<style' in text[max(0, canary_pos - 200):canary_pos] or 'style=' in text[max(0, canary_pos - 50):canary_pos + 50]
+    
+    # Detect attribute context
+    in_attr = False
+    attr_name = ""
+    attr_quote = ""
+    
+    # Look for attribute patterns around the canary
+    attr_window = text[max(0, canary_pos - 100):canary_pos + 100]
+    attr_match = re.search(r'(\w+)=["\']([^"\']*' + re.escape(CANARY) + r'[^"\']*)["\']', attr_window)
+    if attr_match:
+        in_attr = True
+        attr_name = attr_match.group(1)
+        attr_quote = attr_match.group(0)[attr_match.start(2) - 1]
+    
+    # Get raw reflection
+    raw_reflection = text[canary_pos:canary_pos + len(CANARY)]
+    
+    # Create event data
+    event_data = {
+        "timestamp": str(int(time.time() * 1000)),
+        "job_id": job_id,
+        "url": url,
+        "method": method,
+        "param_in": param_in,
+        "param": param,
+        "fragment_left_64": fragment_left_64,
+        "fragment_right_64": fragment_right_64,
+        "in_script_tag": in_script_tag,
+        "in_attr": in_attr,
+        "attr_name": attr_name,
+        "in_style": in_style,
+        "attr_quote": attr_quote,
+        "content_type": headers.get("content-type", "") if headers else "",
+        "raw_reflection": raw_reflection,
+        "rule_context": context_result["pred"],
+        "rule_escaping": detect_xss_escaping(text, canary_pos),
+        "rule_conf": context_result["conf"]
+    }
+    
+    # Write to NDJSON file
+    job_dir = DATA_DIR / "jobs" / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    
+    events_file = job_dir / "xss_context_events.ndjson"
+    with open(events_file, "a", encoding="utf-8") as f:
+        f.write(json.dumps(event_data) + "\n")
+
+def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None):
     """Run XSS probe with enhanced context and escaping detection."""
     params = {}; data=None; js=None
     if param_in=="query": params={param: CANARY}
@@ -112,20 +204,99 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
     if CANARY in text:
         canary_pos = text.find(CANARY)
         
-        # Detect context and escaping
-        xss_context = detect_xss_context(text, canary_pos)
+        # Capture data for ML training if job_id provided
+        if job_id:
+            capture_xss_reflection_data(job_id, url, method, param_in, param, text, canary_pos, headers)
+        
+        # Get rule-based predictions with confidence
+        context_result = detect_xss_context_with_confidence(text, canary_pos)
         xss_escaping = detect_xss_escaping(text, canary_pos)
+        
+        # Check if we should use ML for low-confidence cases
+        rule_conf_threshold = float(os.getenv("XSS_CONTEXT_RULE_CONFIDENCE", "0.9"))
+        use_ml = os.getenv("XSS_CONTEXT_ML_ENABLED", "false").lower() == "true"
+        
+        final_context = context_result["pred"]
+        final_escaping = xss_escaping
+        context_rule = context_result
+        context_ml = None
+        escaping_ml = None
+        
+        # Use ML if rule confidence is below threshold and ML is enabled
+        if use_ml and context_result["conf"] < rule_conf_threshold:
+            try:
+                from backend.modules.ml.xss_context_infer import predict_xss_context, predict_xss_escaping
+                
+                # Prepare features for ML
+                window_start = max(0, canary_pos - 64)
+                window_end = min(len(text), canary_pos + len(CANARY) + 64)
+                text_window = text[window_start:window_end]
+                
+                # Get ML predictions
+                context_ml = predict_xss_context(text_window, canary_pos - window_start)
+                escaping_ml = predict_xss_escaping(text_window, canary_pos - window_start)
+                
+                # Use ML predictions if available
+                if context_ml and context_ml.get("pred"):
+                    final_context = context_ml["pred"]
+                if escaping_ml and escaping_ml.get("pred"):
+                    final_escaping = escaping_ml["pred"]
+                    
+            except ImportError:
+                # ML models not available, use rules
+                pass
         
         # Legacy context for backwards compatibility
         ctx = "none"
-        if xss_context in ["html_body", "attr", "js_string"]:
-            ctx = xss_context.replace("html_body", "html")
+        if final_context in ["html_body", "attr", "js_string"]:
+            ctx = final_context.replace("html_body", "html")
+        
+        # Extract additional fields for evidence
+        window_start = max(0, canary_pos - 64)
+        window_end = min(len(text), canary_pos + len(CANARY) + 64)
+        fragment_left_64 = text[window_start:canary_pos]
+        fragment_right_64 = text[canary_pos + len(CANARY):window_end]
+        raw_reflection = text[canary_pos:canary_pos + len(CANARY)]
+        
+        # Extract feature flags
+        in_script_tag = '<script' in text[max(0, canary_pos - 200):canary_pos]
+        in_style = '<style' in text[max(0, canary_pos - 200):canary_pos] or 'style=' in text[max(0, canary_pos - 50):canary_pos + 50]
+        
+        # Detect attribute context
+        in_attr = False
+        attr_name = ""
+        attr_quote = ""
+        
+        # Look for attribute patterns around the canary
+        attr_window = text[max(0, canary_pos - 100):canary_pos + 100]
+        attr_match = re.search(r'(\w+)=["\']([^"\']*' + re.escape(CANARY) + r'[^"\']*)["\']', attr_window)
+        if attr_match:
+            in_attr = True
+            attr_name = attr_match.group(1)
+            attr_quote = attr_match.group(0)[attr_match.start(2) - 1]
+        
+        # Get content type from headers
+        content_type = headers.get("content-type", "") if headers else ""
         
         return XssProbe(
             context=ctx,
             reflected=True,
-            xss_context=xss_context,
-            xss_escaping=xss_escaping
+            xss_context=final_context,
+            xss_escaping=final_escaping,
+            xss_context_rule=context_rule,
+            xss_context_ml=context_ml,
+            xss_escaping_ml=escaping_ml,
+            fragment_left_64=fragment_left_64,
+            fragment_right_64=fragment_right_64,
+            raw_reflection=raw_reflection,
+            in_script_tag=in_script_tag,
+            in_attr=in_attr,
+            attr_name=attr_name,
+            in_style=in_style,
+            attr_quote=attr_quote,
+            content_type=content_type,
+            param_in=param_in or "unknown",
+            param=param or "<reflected>"
         )
     
     return XssProbe()

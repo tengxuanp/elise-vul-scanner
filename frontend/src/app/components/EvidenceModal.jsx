@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import MLScoreDisplay from "./MLScoreDisplay";
 import { API_BASE } from "../../lib/api";
 
-export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
+export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }) {
   const [evidence, setEvidence] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
@@ -35,26 +35,38 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
     
     const url = new URL(evidence.url);
     const method = evidence.method.toUpperCase();
-    let curl = `curl -i -X ${method}`;
+    let curl = `curl -i`;
     
-    // Add headers
+    // Add method if not GET
+    if (method !== "GET") {
+      curl += ` -X ${method}`;
+    }
+    
+    // Add headers with redaction for sensitive values
+    const sensitiveHeaders = ['authorization', 'cookie', 'x-api-key', 'x-auth-token'];
     if (evidence.request_headers) {
       Object.entries(evidence.request_headers).forEach(([key, value]) => {
-        curl += ` -H "${key}: ${value}"`;
+        const lowerKey = key.toLowerCase();
+        const redactedValue = sensitiveHeaders.includes(lowerKey) ? "***" : value;
+        curl += ` -H "${key}: ${redactedValue}"`;
       });
     }
     
-    // Add parameters based on param_in
+    // Add Content-Type and parameters based on param_in
     if (evidence.param_in === "query") {
       url.searchParams.set(evidence.param, evidence.payload);
       curl += ` "${url.toString()}"`;
     } else if (evidence.param_in === "form") {
+      curl += ` -H "Content-Type: application/x-www-form-urlencoded"`;
       curl += ` "${url.toString()}"`;
-      curl += ` -d "${evidence.param}=${evidence.payload}"`;
+      const encodedParam = encodeURIComponent(evidence.param);
+      const encodedPayload = encodeURIComponent(evidence.payload);
+      curl += ` -d "${encodedParam}=${encodedPayload}"`;
     } else if (evidence.param_in === "json") {
+      curl += ` -H "Content-Type: application/json"`;
       curl += ` "${url.toString()}"`;
       const jsonData = { [evidence.param]: evidence.payload };
-      curl += ` -d '${JSON.stringify(jsonData)}'`;
+      curl += ` --data-raw '${JSON.stringify(jsonData)}'`;
     } else {
       curl += ` "${url.toString()}"`;
     }
@@ -215,10 +227,10 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
                 <div className="text-xs text-zinc-500 mb-1">Telemetry</div>
                 <div className="flex gap-2 text-xs">
                   <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                    Attempt: {evidence?.attempt_idx ?? "—"}
+                    Attempt: {evidence?.attempt_idx ?? 0}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                    Top-K: {evidence?.top_k_used ?? "—"}
+                    Top-K: {evidence?.top_k_used ?? 0}
                   </span>
                   <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
                     Rank: {evidence?.rank_source ?? "—"}
@@ -263,16 +275,34 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
             </div>
             
             {/* ML Scores */}
-            {(evidence?.score !== undefined || evidence?.p_cal !== undefined) && (
-              <div className="my-4">
-                <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
-                <MLScoreDisplay 
-                  score={evidence?.score}
-                  p_cal={evidence?.p_cal}
-                  family={evidence?.family}
-                />
-              </div>
-            )}
+            {(() => {
+              const isProbeOnly = evidence?.rank_source === "probe_only";
+              const noMLAttempts = meta?.ml_inject_attempts === 0;
+              const hasMLScores = evidence?.score !== undefined || evidence?.p_cal !== undefined;
+              
+              if (isProbeOnly || noMLAttempts) {
+                return (
+                  <div className="my-4">
+                    <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+                    <div className="text-xs text-gray-500 italic">
+                      No ML injection attempted.
+                    </div>
+                  </div>
+                );
+              } else if (hasMLScores) {
+                return (
+                  <div className="my-4">
+                    <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+                    <MLScoreDisplay 
+                      score={evidence?.score}
+                      p_cal={evidence?.p_cal}
+                      family={evidence?.family}
+                    />
+                  </div>
+                );
+              }
+              return null;
+            })()}
             
             <div className="text-xs text-zinc-500 my-2 flex items-center justify-between">
               <span>Response snippet</span>
