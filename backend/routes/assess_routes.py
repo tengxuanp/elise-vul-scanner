@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 
 from backend.app_state import DATA_DIR, USE_ML, REQUIRE_RANKER
 from backend.modules.fuzzer_core import run_job
+from backend.pipeline.workflow import assess_endpoints
 # from backend.modules.ml.infer_ranker import available_models, using_defaults  # Not used in this file
 from backend.routes.canonical_healthz_routes import get_healthz_data
 
@@ -41,6 +42,8 @@ class AssessResponse(BaseModel):
     mode: str  # "direct" | "from_persisted" | "crawl_then_assess"
     summary: Dict[str, int]
     results: List[Dict[str, Any]]
+    findings: List[Dict[str, Any]]
+    meta: Dict[str, Any]
     healthz: Dict[str, Any]
 
 @router.post("/assess", response_model=AssessResponse)
@@ -82,8 +85,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 target_url = persisted_data.get("target_url")
         
         # Run assessment
-        if target_url:
-            # Use target_url pathway
+        if target_url and mode != "from_persisted":
+            # Use target_url pathway (but not for from_persisted mode)
             result = await run_in_threadpool(
                 run_job,
                 target_url=target_url,
@@ -91,23 +94,43 @@ async def assess_vulnerabilities(request: AssessRequest):
                 top_k=request.top_k or 3
             )
         else:
-            # Use endpoints pathway - need to implement this in fuzzer_core
-            # For now, we'll convert endpoints to a mock target_url
+            # Use endpoints pathway with deterministic enumeration
             if not endpoints:
                 raise HTTPException(status_code=422, detail="No endpoints provided")
             
-            # Extract base URL from first endpoint
-            first_endpoint = endpoints[0]
-            base_url = first_endpoint.get('url', '').split('?')[0].split('#')[0]
-            if not base_url:
-                raise HTTPException(status_code=422, detail="Invalid endpoint URL")
-            
             result = await run_in_threadpool(
-                run_job,
-                target_url=base_url,
+                assess_endpoints,
+                endpoints=endpoints,
                 job_id=request.job_id,
                 top_k=request.top_k or 3
             )
+        
+        # Handle persist-after-crawl for target_url pathway
+        persist_warning = None
+        if target_url and request.persist_after_crawl:
+            try:
+                # Get endpoints from the pipeline result
+                pipeline_endpoints = result.get("endpoints", [])
+                if pipeline_endpoints:
+                    # Create job directory
+                    job_dir = DATA_DIR / "jobs" / request.job_id
+                    job_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Write endpoints.json with same shape as /api/crawl
+                    endpoints_path = job_dir / "endpoints.json"
+                    with open(endpoints_path, 'w') as f:
+                        json.dump({
+                            "job_id": request.job_id,
+                            "target_url": target_url,
+                            "endpoints": pipeline_endpoints,
+                            "endpoints_count": len(pipeline_endpoints),
+                            "crawl_opts": {}  # Default crawl options
+                        }, f, indent=2)
+                    
+                    # Set mode to crawl_then_assess
+                    mode = "crawl_then_assess"
+            except Exception as e:
+                persist_warning = f"Failed to persist endpoints: {str(e)}"
         
         # Calculate summary from results
         results = result.get("results", [])
@@ -122,11 +145,18 @@ async def assess_vulnerabilities(request: AssessRequest):
         # Get healthz data
         healthz_data = get_healthz_data()
         
+        # Prepare meta with persist warning if applicable
+        meta = result.get("meta", {})
+        if persist_warning:
+            meta["persist_warning"] = persist_warning
+        
         return AssessResponse(
             job_id=request.job_id,
             mode=mode,
             summary=summary,
             results=results,
+            findings=result.get("findings", []),
+            meta=meta,
             healthz=healthz_data
         )
         

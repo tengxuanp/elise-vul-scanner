@@ -1,0 +1,98 @@
+[
+  {
+    "url": "http://127.0.0.1:5001/product?id=1",
+    "path": "/product",
+    "method": "GET",
+    "status": 200,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [{"name": "id"}],
+      "form": [],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/profile?name=test",
+    "path": "/profile", 
+    "method": "GET",
+    "status": 200,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [{"name": "name"}],
+      "form": [],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/script?msg=hello",
+    "path": "/script",
+    "method": "GET", 
+    "status": 200,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [{"name": "msg"}],
+      "form": [],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/search?q=test",
+    "path": "/search",
+    "method": "GET",
+    "status": 200,
+    "content_type": "text/html", 
+    "param_locs": {
+      "query": [{"name": "q"}],
+      "form": [],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/go?url=https://example.com",
+    "path": "/go",
+    "method": "GET",
+    "status": 302,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [{"name": "url"}],
+      "form": [],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/login",
+    "path": "/login",
+    "method": "POST",
+    "status": 401,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [],
+      "form": [{"name": "username"}, {"name": "password"}],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/notes",
+    "path": "/notes", 
+    "method": "POST",
+    "status": 302,
+    "content_type": "text/html",
+    "param_locs": {
+      "query": [],
+      "form": [{"name": "content"}],
+      "json": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:5001/api/search",
+    "path": "/api/search",
+    "method": "POST",
+    "status": 200,
+    "content_type": "application/json",
+    "param_locs": {
+      "query": [],
+      "form": [],
+      "json": [{"name": "query"}, {"name": "limit"}]
+    }
+  }
+]

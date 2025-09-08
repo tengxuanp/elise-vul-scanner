@@ -58,9 +58,19 @@ All crawl artifacts are stored under `DATA_DIR/jobs/<job_id>/`:
 
 ### Telemetry Fields
 Every assessment result includes:
-- `attempt_idx` - Injection attempt number
-- `top_k_used` - Number of payloads attempted
-- `rank_source` - How payloads were selected (`ml`, `probe_only`, `defaults`)
+- `attempt_idx` - Injection attempt number (non-null, defaults to 0)
+- `top_k_used` - Number of payloads attempted (non-null, defaults to 0)
+- `rank_source` - How payloads were selected (`ml`, `probe_only`, `defaults`, `none`)
+
+### Response Fields
+The `/api/assess` endpoint returns:
+- `job_id` - Unique job identifier
+- `mode` - Operation mode (`direct`, `from_persisted`, `crawl_then_assess`)
+- `summary` - Counts by decision type
+- `results` - Raw assessment results with telemetry
+- `findings` - User-facing finding objects
+- `meta` - Assessment metadata (endpoints_supplied, targets_enumerated, etc.)
+- `healthz` - System diagnostics and ML status
 
 ### Diagnostics
 The system provides transparent diagnostics:
@@ -298,6 +308,7 @@ The training pipeline generates 1000 synthetic samples per family and trains Log
 ### Core Assessment API
 - `POST /api/crawl` - Crawl target and persist endpoints
 - `POST /api/assess` - Run vulnerability assessment with clear mode semantics
+  - Returns: `job_id`, `mode`, `summary`, `results`, `findings`, `meta`, `healthz`
 - `GET /api/healthz` - System diagnostics and ML status
 - `GET /api/evidence/{job_id}/{evidence_id}` - Fetch individual evidence files
 

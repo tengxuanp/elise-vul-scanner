@@ -1,17 +1,13 @@
 "use client";
 import { useState } from "react";
 import { TriangleAlert, ShieldCheck, Database, Link as LinkIcon, ChevronDown, ChevronRight } from "lucide-react";
+import { humanizeWhyCodes } from "../../lib/microcopy";
 
 const famIcon = (f) => f==="xss" ? <TriangleAlert className="icon" /> : f==="sqli" ? <Database className="icon" /> : <LinkIcon className="icon" />;
 
 const badge = (t) => <span className={`px-2 py-0.5 rounded text-xs ${t==="positive"?"bg-green-100 text-green-700":t==="suspected"?"bg-amber-100 text-amber-700":t==="error"?"bg-red-100 text-red-700":"bg-zinc-100 text-zinc-700"}`}>{t}</span>;
 
-// Human-readable microcopy mapping
-const microcopyMap = {
-  "no_confirm_after_topk": "Tried top-K ranked payloads, none confirmed.",
-  "ml_attempted": "ML suggested payloads were attempted.",
-  "no_parameters_detected": "Endpoint has no testable parameters."
-};
+// Use centralized microcopy mapping from lib/microcopy.js
 
 // Provenance chips
 const ProvenanceChips = ({ why }) => {
@@ -129,7 +125,7 @@ const SQLiDialectChip = ({ family, dialect, dialect_confident }) => {
 
 // Microcopy display
 const Microcopy = ({ why }) => {
-  const messages = why?.map(code => microcopyMap[code]).filter(Boolean) || [];
+  const messages = humanizeWhyCodes(why || []);
   if (!messages.length) return null;
   return (
     <div className="text-xs text-gray-500 mt-1">

@@ -42,6 +42,109 @@ class Target:
             json_body = base
         return params, data, json_body
 
+def enumerate_targets_from_endpoints(endpoints: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Deterministic target enumeration from endpoints.
+    For each endpoint, emit a target row for each parameter found in any location.
+    """
+    targets = []
+    
+    for endpoint in endpoints:
+        method = str(endpoint.get("method", "GET")).upper()
+        url = str(endpoint.get("url", ""))
+        path = str(endpoint.get("path", ""))
+        status = endpoint.get("status")
+        content_type = endpoint.get("content_type")
+        param_locs = endpoint.get("param_locs", {})
+        
+        # Extract parameter names from each location
+        query_params = []
+        form_params = []
+        json_params = []
+        
+        # Handle param_locs structure
+        if isinstance(param_locs, dict):
+            # Extract names from Param objects, dicts, or strings
+            def extract_param_name(p):
+                if hasattr(p, 'name'):
+                    return p.name
+                elif isinstance(p, dict) and 'name' in p:
+                    return p['name']
+                else:
+                    return str(p)
+            
+            query_params = [extract_param_name(p) for p in (param_locs.get("query") or [])]
+            form_params = [extract_param_name(p) for p in (param_locs.get("form") or [])]
+            json_params = [extract_param_name(p) for p in (param_locs.get("json") or [])]
+        
+        # Fallback: check legacy 'params' field
+        if not any([query_params, form_params, json_params]) and isinstance(endpoint.get("params"), list):
+            # Legacy format: params is a list of parameter names
+            query_params = [str(p) for p in endpoint.get("params", [])]
+        
+        # Create targets for each parameter in each location
+        for param_name in query_params:
+            base_params = _build_query_base_params(url)
+            targets.append({
+                "url": url,
+                "path": path,
+                "method": method,
+                "param_in": "query",
+                "param": param_name,
+                "headers": {},
+                "status": status,
+                "content_type": content_type,
+                "base_params": base_params,
+                "source": "persisted"
+            })
+        
+        for param_name in form_params:
+            targets.append({
+                "url": url,
+                "path": path,
+                "method": method,
+                "param_in": "form",
+                "param": param_name,
+                "headers": {},
+                "status": status,
+                "content_type": content_type,
+                "base_params": {"__form_present__": True},
+                "source": "persisted"
+            })
+        
+        for param_name in json_params:
+            targets.append({
+                "url": url,
+                "path": path,
+                "method": method,
+                "param_in": "json",
+                "param": param_name,
+                "headers": {},
+                "status": status,
+                "content_type": content_type,
+                "base_params": {"__json_present__": True},
+                "source": "persisted"
+            })
+    
+    return targets
+
+
+def _build_query_base_params(url: str) -> Dict[str, Any]:
+    """Build base parameters for query string, preserving existing params."""
+    from urllib.parse import urlparse, parse_qs
+    
+    try:
+        parsed = urlparse(url)
+        query_params = parse_qs(parsed.query)
+        # Convert lists to single values and add sentinel for probed param
+        base_params = {}
+        for key, values in query_params.items():
+            base_params[key] = values[0] if values else ""
+        return base_params
+    except Exception:
+        return {}
+
+
 def enumerate_targets(endpoint: Dict[str, Any]) -> Iterable[Target]:
     """Expand a crawled endpoint into concrete targets by param location."""
     _method = str(endpoint.get("method", "GET")).upper()

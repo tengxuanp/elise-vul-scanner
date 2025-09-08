@@ -7,7 +7,7 @@ def gate_not_applicable(t: Target) -> bool:
 
 def gate_candidate_xss(t: Target) -> bool:
     ctype = (t.content_type or "").lower()
-    return (t.param_in in ("query","form")) and ("json" not in ctype)
+    return t.param_in in ("query", "form", "json")
 
 def gate_candidate_sqli(t: Target) -> bool:
     return t.param_in in ("query","form","json")

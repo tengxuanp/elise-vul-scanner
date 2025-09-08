@@ -19,8 +19,8 @@ const SummaryPanel = ({
     r.decision === "positive" && r.rank_source === "ml"
   ).length || 0;
   
-  const clean = assessmentResult.results?.filter(r => 
-    r.decision === "clean"
+  const abstain = assessmentResult.results?.filter(r => 
+    r.decision === "abstain"
   ).length || 0;
   
   const na = assessmentResult.results?.filter(r => 
@@ -67,18 +67,32 @@ const SummaryPanel = ({
         </div>
         
         <div>
-          <div className="text-gray-600">Confirmed (Probe)</div>
-          <div className="font-semibold text-green-600">{confirmedProbe}</div>
+          <div className="text-gray-600 flex items-center gap-1">
+            Confirmed (Probe)
+            {meta?.probe_successes !== undefined && (
+              <span className="text-xs text-blue-500" title="Server-reported counter">ℹ️</span>
+            )}
+          </div>
+          <div className="font-semibold text-green-600">
+            {meta?.probe_successes !== undefined ? meta.probe_successes : confirmedProbe}
+          </div>
         </div>
         
         <div>
-          <div className="text-gray-600">Confirmed (ML+Inject)</div>
-          <div className="font-semibold text-blue-600">{confirmedMLInject}</div>
+          <div className="text-gray-600 flex items-center gap-1">
+            Confirmed (ML+Inject)
+            {meta?.ml_inject_successes !== undefined && (
+              <span className="text-xs text-blue-500" title="Server-reported counter">ℹ️</span>
+            )}
+          </div>
+          <div className="font-semibold text-blue-600">
+            {meta?.ml_inject_successes !== undefined ? meta.ml_inject_successes : confirmedMLInject}
+          </div>
         </div>
         
         <div>
-          <div className="text-gray-600">Clean</div>
-          <div className="font-semibold text-gray-600">{clean}</div>
+          <div className="text-gray-600">Abstain</div>
+          <div className="font-semibold text-gray-600">{abstain}</div>
         </div>
         
         <div>
@@ -88,7 +102,9 @@ const SummaryPanel = ({
         
         <div>
           <div className="text-gray-600">Processing time</div>
-          <div className="font-semibold">{formatTime(meta?.budget_ms_used)}</div>
+          <div className="font-semibold">
+            {meta?.processing_time || formatTime(meta?.processing_ms || meta?.budget_ms_used)}
+          </div>
         </div>
         
         <div>

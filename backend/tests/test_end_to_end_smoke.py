@@ -92,7 +92,10 @@ class TestAssessAPI:
             "target_url": "http://test.com"
         })
         assert response.status_code == 422
-        assert "Cannot specify both" in response.json()["detail"]
+        detail = response.json()["detail"]
+        # Check if the error message is in the detail array
+        error_messages = [item["msg"] for item in detail if isinstance(item, dict) and "msg" in item]
+        assert any("Cannot specify both" in msg for msg in error_messages)
     
     def test_assess_no_pathway(self):
         """Test assess API rejects no pathway."""
@@ -109,7 +112,7 @@ class TestAssessAPI:
         assert response.status_code == 422
         assert "No persisted endpoints found" in response.json()["detail"]
     
-    @patch('backend.modules.fuzzer_core.run_job')
+    @patch('backend.routes.assess_routes.run_job')
     def test_assess_with_target_url(self, mock_run_job):
         """Test assess API with target_url pathway."""
         # Mock fuzzer response
@@ -131,10 +134,13 @@ class TestAssessAPI:
                     "ml_proba": None,
                     "ml_threshold": None,
                     "model_tag": None,
+                    "attempt_idx": 0,
+                    "top_k_used": 0,
                     "timing_ms": 150,
                     "status": 200
                 }
             ],
+            "findings": [],
             "meta": {
                 "endpoints_supplied": 1,
                 "targets_enumerated": 1,
@@ -159,6 +165,8 @@ class TestAssessAPI:
         assert data["mode"] == "direct"
         assert "summary" in data
         assert "results" in data
+        assert "findings" in data
+        assert "meta" in data
         assert "healthz" in data
         
         # Verify summary
@@ -174,10 +182,12 @@ class TestAssessAPI:
         assert len(results) == 1
         result = results[0]
         
-        # Verify telemetry fields
+        # Verify telemetry fields are non-null
         assert "attempt_idx" in result
         assert "top_k_used" in result
         assert "rank_source" in result
+        assert result["attempt_idx"] is not None
+        assert result["top_k_used"] is not None
         assert result["rank_source"] is not None
         
         # Verify healthz
@@ -187,9 +197,76 @@ class TestAssessAPI:
         assert "models_available" in healthz
         assert "thresholds" in healthz
     
+    @patch('backend.routes.assess_routes.run_job')
+    def test_assess_persist_after_crawl(self, mock_run_job):
+        """Test assess API with persist_after_crawl=true."""
+        # Mock fuzzer response with endpoints
+        mock_run_job.return_value = {
+            "results": [
+                {
+                    "evidence_id": "test-evidence-1",
+                    "url": "http://test.com",
+                    "path": "/",
+                    "method": "GET",
+                    "param_in": "query",
+                    "param": "test",
+                    "decision": "positive",
+                    "family": "xss",
+                    "why": ["probe_proof"],
+                    "cvss": {"base": 6.1},
+                    "attempt_idx": 0,
+                    "top_k_used": 0,
+                    "rank_source": "probe_only"
+                }
+            ],
+            "findings": [],
+            "meta": {
+                "endpoints_supplied": 1,
+                "targets_enumerated": 1
+            },
+            "endpoints": [
+                {
+                    "url": "http://test.com",
+                    "path": "/",
+                    "method": "GET",
+                    "params": ["test"],
+                    "param_locs": {"query": ["test"], "form": [], "json": []},
+                    "status": 200,
+                    "source": "nav",
+                    "content_type": "text/html",
+                    "seen": 1
+                }
+            ]
+        }
+        
+        response = client.post("/api/assess", json={
+            "job_id": "test-persist-123",
+            "target_url": "http://test.com",
+            "persist_after_crawl": True,
+            "top_k": 3
+        })
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        # Verify mode is set correctly
+        assert data["mode"] == "crawl_then_assess"
+        
+        # Verify endpoints were persisted
+        job_dir = DATA_DIR / "jobs" / "test-persist-123"
+        endpoints_path = job_dir / "endpoints.json"
+        assert endpoints_path.exists()
+        
+        with open(endpoints_path, 'r') as f:
+            persisted_data = json.load(f)
+            assert persisted_data["job_id"] == "test-persist-123"
+            assert persisted_data["target_url"] == "http://test.com"
+            assert len(persisted_data["endpoints"]) == 1
+            assert persisted_data["endpoints_count"] == 1
+    
     def test_assess_with_persisted_endpoints(self):
-        """Test assess API loading from persisted endpoints."""
-        # Create test persisted endpoints
+        """Test assess API loading from persisted endpoints with enumeration."""
+        # Create test persisted endpoints with proper param_locs structure
         job_dir = DATA_DIR / "jobs" / "test-persisted-123"
         job_dir.mkdir(parents=True, exist_ok=True)
         
@@ -198,40 +275,63 @@ class TestAssessAPI:
             "target_url": "http://test.com",
             "endpoints": [
                 {
-                    "url": "http://test.com/page1",
+                    "url": "http://test.com/page1?param1=value1",
+                    "path": "/page1",
                     "method": "GET",
-                    "params": [{"name": "param1", "in": "query"}]
+                    "status": 200,
+                    "content_type": "text/html",
+                    "param_locs": {
+                        "query": [{"name": "param1"}],
+                        "form": [],
+                        "json": []
+                    }
+                },
+                {
+                    "url": "http://test.com/api",
+                    "path": "/api",
+                    "method": "POST",
+                    "status": 200,
+                    "content_type": "application/json",
+                    "param_locs": {
+                        "query": [],
+                        "form": [],
+                        "json": [{"name": "data"}]
+                    }
                 }
             ],
-            "endpoints_count": 1
+            "endpoints_count": 2
         }
         
         endpoints_path = job_dir / "endpoints.json"
         with open(endpoints_path, 'w') as f:
             json.dump(endpoints_data, f)
         
-        with patch('backend.modules.fuzzer_core.run_job') as mock_run_job:
-            mock_run_job.return_value = {
-                "results": [],
-                "meta": {
-                    "endpoints_supplied": 1,
-                    "targets_enumerated": 1,
-                    "injections_attempted": 0,
-                    "injections_succeeded": 0,
-                    "budget_ms_used": 100,
-                    "errors_by_kind": {}
-                }
-            }
-            
-            response = client.post("/api/assess", json={
-                "job_id": "test-persisted-123"
-            })
-            
-            assert response.status_code == 200
-            data = response.json()
-            
-            assert data["mode"] == "from_persisted"
-            assert data["summary"]["total"] == 0
+        # Test with real enumeration (no mocking to verify actual behavior)
+        response = client.post("/api/assess", json={
+            "job_id": "test-persisted-123"
+        })
+        
+        assert response.status_code == 200
+        data = response.json()
+        
+        assert data["mode"] == "from_persisted"
+        assert data["meta"]["endpoints_supplied"] == 2
+        assert data["meta"]["targets_enumerated"] == 2  # Should enumerate 2 targets from the endpoints
+        
+        # Verify new meta counters are present
+        assert "processing_ms" in data["meta"], "Should have processing_ms"
+        assert data["meta"]["processing_ms"] > 0, "Processing time should be positive"
+        assert "processing_time" in data["meta"], "Should have processing_time string"
+        assert "probe_attempts" in data["meta"], "Should have probe_attempts"
+        assert "probe_successes" in data["meta"], "Should have probe_successes"
+        assert "ml_inject_attempts" in data["meta"], "Should have ml_inject_attempts"
+        assert "ml_inject_successes" in data["meta"], "Should have ml_inject_successes"
+        
+        # Verify all results have non-null telemetry
+        for result in data["results"]:
+            assert result["attempt_idx"] is not None
+            assert result["top_k_used"] is not None
+            assert result["rank_source"] is not None
 
 class TestHealthzAPI:
     """Test healthz API contract."""

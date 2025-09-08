@@ -54,9 +54,19 @@ def get_healthz_data():
     
     # Check playwright import
     try:
-        from modules.playwright_crawler import crawl_site
-    except Exception as e:
-        fails.append(f"Playwright import failed: {e}")
+        import playwright  # noqa
+        playwright_ok = True
+    except Exception:
+        playwright_ok = False
+        fails.append("Playwright: Fail")
+    
+    # Check crawler import
+    try:
+        from backend.modules import playwright_crawler as _crawler  # noqa
+        crawler_import_ok = True
+    except Exception:
+        crawler_import_ok = False
+        fails.append("Crawler import: Fail")
     
     # Get ML model availability information
     ml_status = "disabled"
@@ -101,6 +111,9 @@ def get_healthz_data():
             "xss_tau": float(os.getenv("ELISE_TAU_XSS", "0.75")),
             "redirect_tau": float(os.getenv("ELISE_TAU_REDIRECT", "0.60")),
         },
+        "playwright_ok": playwright_ok,
+        "crawler_import_ok": crawler_import_ok,
+        "checks": fails,
         "failed_checks": fails
     }
 

@@ -198,3 +198,24 @@ class TestRedirectOracle:
         
         assert result.redirect_detected is False
         assert result.location is None
+
+class TestNoParametersCase:
+    """Test handling of targets with no parameters."""
+    
+    def test_no_parameters_detected(self):
+        """Test that targets with no parameters get not_applicable decision."""
+        from backend.modules.targets import Target
+        
+        # Create a target with no parameters
+        target = Target(
+            url="http://test.com/",
+            method="GET",
+            param_in=None,
+            param=None,
+            status=200,
+            content_type="text/html"
+        )
+        
+        # This should be handled by gates, but let's verify the decision logic
+        from backend.modules.gates import gate_not_applicable
+        assert gate_not_applicable(target) is True

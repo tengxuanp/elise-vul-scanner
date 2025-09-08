@@ -209,6 +209,57 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId }) {
                 <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
                 <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
               </div>
+
+              {/* Telemetry */}
+              <div>
+                <div className="text-xs text-zinc-500 mb-1">Telemetry</div>
+                <div className="flex gap-2 text-xs">
+                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                    Attempt: {evidence?.attempt_idx ?? "—"}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                    Top-K: {evidence?.top_k_used ?? "—"}
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                    Rank: {evidence?.rank_source ?? "—"}
+                  </span>
+                </div>
+              </div>
+
+              {/* XSS Context/Escaping or SQLi Dialect */}
+              {(evidence?.xss_context || evidence?.xss_escaping) && (
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">XSS Context</div>
+                  <div className="flex gap-2 text-xs">
+                    {evidence.xss_context && (
+                      <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
+                        Context: {evidence.xss_context}
+                      </span>
+                    )}
+                    {evidence.xss_escaping && (
+                      <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
+                        Escaping: {evidence.xss_escaping}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {evidence?.dialect && (
+                <div>
+                  <div className="text-xs text-zinc-500 mb-1">SQLi Dialect</div>
+                  <div className="flex gap-2 text-xs">
+                    <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
+                      {evidence.dialect}
+                    </span>
+                    {evidence.dialect_confident && (
+                      <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
+                        (confident)
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             
             {/* ML Scores */}

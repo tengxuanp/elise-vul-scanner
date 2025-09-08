@@ -22,6 +22,16 @@ from .playwright_crawler import crawl_site
 from .confirmers import confirm_xss, confirm_sqli, confirm_redirect, oracle_from_signals
 from backend.app_state import DATA_DIR
 
+def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure all result rows have non-null telemetry defaults."""
+    if result.get("attempt_idx") is None:
+        result["attempt_idx"] = 0
+    if result.get("top_k_used") is None:
+        result["top_k_used"] = 0
+    if result.get("rank_source") is None:
+        result["rank_source"] = "none"
+    return result
+
 # Environment flags
 REQUIRE_RANKER = os.getenv("ELISE_REQUIRE_RANKER", "0") == "1"
 
@@ -61,7 +71,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
     """Process a single target and return the result."""
     try:
         if gate_not_applicable(target):
-            return {"target": target.to_dict(), "decision": DECISION["NA"], "why": ["gate_not_applicable"]}
+            return _ensure_telemetry_defaults({"target": target.to_dict(), "decision": DECISION["NA"], "why": ["gate_not_applicable"]})
         
         # Run probes
         probe_bundle = run_probes(target)
@@ -83,7 +93,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "evidence_id": evidence_id
             })
 
-            return {
+            return _ensure_telemetry_defaults({
                 "target": target.to_dict(), 
                 "family": fam, 
                 "decision": DECISION["POS"], 
@@ -100,7 +110,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "attempt_idx": None,
                 "top_k_used": None,
                 "timing_ms": 0  # Probe-only results have no injection timing
-            }
+            })
         
         # ML payload ranking and injection
         candidates = []
@@ -112,7 +122,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             candidates.append("redirect")
         
         if not candidates:
-            return {
+            return _ensure_telemetry_defaults({
                 "target": target.to_dict(), 
                 "decision": DECISION["ABS"], 
                 "why": ["no_candidates"],
@@ -127,7 +137,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "attempt_idx": None,
                 "top_k_used": None,
                 "timing_ms": 0
-            }
+            })
         
         # Build context for ML ranking
         ctx = {
@@ -303,7 +313,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 except:
                     continue
         
-        return {
+        return _ensure_telemetry_defaults({
             "target": target.to_dict(), 
             "decision": DECISION["NEG"], 
             "why": unique_merge([], why_reasons),
@@ -322,10 +332,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "ml_attempted_payloads": tried[:3],  # trim for payload privacy
                 "attempted_by_family": attempted_by_family
             }
-        }
+        })
         
     except Exception as e:
-        return {
+        return _ensure_telemetry_defaults({
             "target": target.to_dict(), 
             "decision": DECISION["ERR"], 
             "why": [f"error: {str(e)}"],
@@ -340,10 +350,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "attempt_idx": None,
             "top_k_used": None,
             "timing_ms": 0
-        }
+        })
     except Exception as e:
         logging.error(f"Error processing target {target.url}: {e}")
-        return {
+        return _ensure_telemetry_defaults({
             "target": target.to_dict(),
             "decision": DECISION["ERR"],
             "why": ["error"],
@@ -358,7 +368,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "attempt_idx": None,
             "top_k_used": None,
             "timing_ms": 0
-        }
+        })
 
 def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3) -> Dict[str, Any]:
     """

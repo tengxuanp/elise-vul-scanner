@@ -28,11 +28,15 @@ export default function AssessPage() {
         const healthResponse = await health();
         // Healthz returns [data, status_code], we need the data part
         const healthData = Array.isArray(healthResponse) ? healthResponse[0] : healthResponse;
-        const ml_active = healthData.use_ml;
-        const using_defaults = healthData.defaults_in_use;
+        const use_ml = healthData.use_ml;
+        const ml_active = healthData.ml_active;
+        const models_available = healthData.models_available || {};
+        const defaults_in_use = healthData.defaults_in_use;
         
-        if (ml_active) {
-          setMlMode(using_defaults ? "Defaults only" : "Calibrated models");
+        if (use_ml && ml_active) {
+          // Check if we have actual models available
+          const hasModels = Object.values(models_available).some(model => model.has_model);
+          setMlMode(hasModels ? "Calibrated models" : "Defaults only");
         } else {
           setMlMode("Off");
         }
@@ -99,13 +103,13 @@ export default function AssessPage() {
 
   const findings = assessmentResult?.findings || [];
   const results = assessmentResult?.results || [];
-  const negatives = results.filter(r => r.decision === "clean");
+  const negatives = results.filter(r => r.decision === "abstain");
   
   // Calculate detailed breakdown for summary using new decision taxonomy
   const totalResults = results.length;
   const positiveResults = results.filter(r => r.decision === "positive");
   const suspectedResults = results.filter(r => r.decision === "suspected");
-  const cleanResults = results.filter(r => r.decision === "clean");
+  const abstainResults = results.filter(r => r.decision === "abstain");
   const naResults = results.filter(r => r.decision === "not_applicable");
   const errorResults = results.filter(r => r.decision === "error");
   
@@ -235,17 +239,44 @@ export default function AssessPage() {
                   </span>
                 </div>
 
+                {/* Warning banner for enumeration issues */}
+                {assessmentResult?.meta && 
+                 assessmentResult.meta.targets_enumerated === 0 && 
+                 assessmentResult.meta.endpoints_supplied > 0 && (
+                  <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                    <div className="text-sm font-medium text-yellow-800">
+                      ⚠️ No targets enumerated despite detected parameters
+                    </div>
+                    <div className="text-xs text-yellow-700 mt-1">
+                      Check enumeration/gating rules. Endpoints may have parameters that weren't recognized.
+                    </div>
+                  </div>
+                )}
+
                 {assessmentResult?.meta && (
                   <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded">
                     <div className="text-sm font-medium text-green-800 mb-2">
                       Target: {targetUrl}
                     </div>
-                    <div className="text-xs text-green-700">
-                      Endpoints supplied: {assessmentResult.meta.endpoints_supplied} | 
-                      Targets enumerated: {assessmentResult.meta.targets_enumerated} |
-                      Injections attempted: {assessmentResult.meta.injections_attempted} |
-                      Injections succeeded: {assessmentResult.meta.injections_succeeded} |
-                      Processing time: {(assessmentResult.meta.budget_ms_used / 1000).toFixed(1)}s
+                    <div className="text-xs text-green-700 space-y-1">
+                      <div>
+                        Endpoints supplied: {assessmentResult.meta.endpoints_supplied} | 
+                        Targets enumerated: {assessmentResult.meta.targets_enumerated}
+                      </div>
+                      <div>
+                        Probes attempted: {assessmentResult.meta.probe_attempts || 0} | 
+                        ML injections attempted: {assessmentResult.meta.ml_inject_attempts || 0}
+                      </div>
+                      <div>
+                        Injections succeeded (Probe): {assessmentResult.meta.probe_successes || 0} | 
+                        Injections succeeded (ML): {assessmentResult.meta.ml_inject_successes || 0}
+                      </div>
+                      <div>
+                        Processing time: {assessmentResult.meta.processing_time || 
+                          (assessmentResult.meta.processing_ms ? 
+                            `${(assessmentResult.meta.processing_ms / 1000).toFixed(1)}s` : 
+                            'N/A')}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -271,7 +302,7 @@ export default function AssessPage() {
                       Suspected: {suspectedResults.length}
                     </span>
                     <span className="px-2 py-1 bg-gray-100 text-gray-800 rounded text-xs font-medium">
-                      Clean: {cleanResults.length}
+                      Abstain: {abstainResults.length}
                     </span>
                     <span className="px-2 py-1 bg-slate-100 text-slate-800 rounded text-xs font-medium">
                       NA: {naResults.length}
@@ -304,10 +335,10 @@ export default function AssessPage() {
                         Suspected ({suspectedResults.length})
                       </button>
                       <button
-                        onClick={() => setTab("clean")}
-                        className={`pb-2 -mb-px border-b-2 ${tab === "clean" ? "border-zinc-900" : "border-transparent"}`}
+                        onClick={() => setTab("abstain")}
+                        className={`pb-2 -mb-px border-b-2 ${tab === "abstain" ? "border-zinc-900" : "border-transparent"}`}
                       >
-                        Clean ({cleanResults.length})
+                        Abstain ({abstainResults.length})
                       </button>
                       <button
                         onClick={() => setTab("na")}
@@ -330,7 +361,7 @@ export default function AssessPage() {
                     ) : (
                       <div className="overflow-x-auto">
                         {(() => {
-                          const currentResults = tab === "clean" ? cleanResults : 
+                          const currentResults = tab === "abstain" ? abstainResults : 
                                                tab === "na" ? naResults : 
                                                tab === "error" ? errorResults : [];
                           
@@ -351,7 +382,7 @@ export default function AssessPage() {
                                     <td className="p-2">{item.param_in}:{item.param}</td>
                                     <td className="p-2">
                                       <span className={`px-2 py-1 rounded text-xs ${
-                                        item.decision === "clean" ? "bg-gray-100 text-gray-800" :
+                                        item.decision === "abstain" ? "bg-gray-100 text-gray-800" :
                                         item.decision === "not_applicable" ? "bg-slate-100 text-slate-800" :
                                         item.decision === "error" ? "bg-red-100 text-red-800" :
                                         "bg-yellow-100 text-yellow-800"

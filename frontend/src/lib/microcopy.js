@@ -30,7 +30,8 @@ export const microcopyMap = {
   'redirect_js': 'JavaScript redirect',
   
   // General assessment
-  'probe_proof': 'Confirmed by probe',
+  'probe_proof': 'Confirmed by probe oracle',
+  'ml_ranked': 'Ranked by ML, then confirmed',
   'ml_prioritized': 'ML prioritized payload',
   'threshold_met': 'Above decision threshold',
   'threshold_not_met': 'Below decision threshold',

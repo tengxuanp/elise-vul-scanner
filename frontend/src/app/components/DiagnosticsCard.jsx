@@ -118,6 +118,23 @@ export default function DiagnosticsCard({ healthz }) {
               </span>
             </div>
 
+            {/* Playwright and Crawler Import Status */}
+            <div className="border-t pt-2 mt-2">
+              <div className="flex justify-between">
+                <span className="text-gray-600">Playwright:</span>
+                <span className={`font-medium ${healthz.playwright_ok ? 'text-green-600' : 'text-red-600'}`}>
+                  {healthz.playwright_ok ? 'OK' : 'Fail'}
+                </span>
+              </div>
+              
+              <div className="flex justify-between">
+                <span className="text-gray-600">Crawler import:</span>
+                <span className={`font-medium ${healthz.crawler_import_ok ? 'text-green-600' : 'text-red-600'}`}>
+                  {healthz.crawler_import_ok ? 'OK' : 'Fail'}
+                </span>
+              </div>
+            </div>
+
             {healthz.failed_checks && healthz.failed_checks.length > 0 && (
               <div className="border-t pt-2 mt-2">
                 <div className="text-gray-600 mb-1">Failed Checks:</div>
