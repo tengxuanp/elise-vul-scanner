@@ -548,13 +548,13 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                       <div className="text-xs text-zinc-500 mb-1">Telemetry</div>
                       <div className="flex gap-2 text-xs">
                         <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                          Attempt: {evidence?.attempt_idx ?? 0}
+                          Attempt: {evidence?.telemetry?.attempt_idx ?? evidence?.attempt_idx ?? 0}
                         </span>
                         <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                          Top-K: {evidence?.top_k_used ?? 0}
+                          Top-K: {evidence?.telemetry?.top_k_used ?? evidence?.top_k_used ?? 0}
                         </span>
                         <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                          Rank: {evidence?.rank_source ?? "—"}
+                          Rank: {evidence?.telemetry?.rank_source ?? evidence?.rank_source ?? "—"}
                         </span>
                       </div>
                     </div>

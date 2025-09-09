@@ -54,6 +54,8 @@ class EvidenceRow:
     ranking_model: Dict[str,Any] | None = None  # Model info
     # Attempt timeline
     attempts_timeline: list | None = None  # Detailed attempt history
+    # Telemetry
+    telemetry: Dict[str,Any] | None = None  # Header telemetry matching attempt timeline
     # Vulnerability proof
     vuln_proof: Dict[str,Any] | None = None  # Why vulnerable rationale
 

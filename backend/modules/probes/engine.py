@@ -24,7 +24,7 @@ def run_probes(t: Target, families: list = None, plan=None) -> ProbeBundle:
     
     # Create probe results for each family
     if "xss" in families:
-        xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers)
+        xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers, plan=plan)
     else:
         # Create mock XSS probe result
         from unittest.mock import Mock

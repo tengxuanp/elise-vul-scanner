@@ -170,26 +170,27 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 probe_bundle.error_based = None
                 probe_result = None
         
-        # Record probe attempts only for families that were actually probed
-        if probe_result:
-            fam, reason_code = probe_result
-            if plan is None or probe_enabled(plan, fam):
-                # For ml_with_context strategy, XSS probes are signals only, not successes
-                if plan and plan.name == "ml_with_context" and fam == "xss":
-                    record_probe_attempt(target_id, fam, False)  # Record as attempt but not success
-                else:
-                    record_probe_attempt(target_id, fam, True)
-            else:
-                # Strategy violation: probe ran for disabled family
-                logging.warning(f"Strategy violation: {fam} probe ran when disabled by strategy {plan.name}")
-        elif probe_bundle is not None:
-            # Record probe attempt for each family that was probed
+        # Record probe attempts for each family that was actually probed
+        if probe_bundle is not None:
             for family in families_to_probe:
-                if (plan is None or probe_enabled(plan, family)) and hasattr(probe_bundle, family) and getattr(probe_bundle, family):
-                    record_probe_attempt(target_id, family, False)
-                elif plan is not None and not probe_enabled(plan, family) and hasattr(probe_bundle, family) and getattr(probe_bundle, family):
-                    # Strategy violation: probe ran for disabled family
-                    logging.warning(f"Strategy violation: {family} probe ran when disabled by strategy {plan.name}")
+                if hasattr(probe_bundle, family) and getattr(probe_bundle, family):
+                    probe_obj = getattr(probe_bundle, family)
+                    # Check if probe was skipped due to strategy
+                    if hasattr(probe_obj, 'skipped') and probe_obj.skipped:
+                        continue  # Don't record skipped probes
+                    
+                    # Record probe attempt
+                    record_probe_attempt(target_id, family, False)  # Will be updated to True if confirmed
+                    
+                    # Check if this probe confirmed a vulnerability
+                    if probe_result and probe_result[0] == family:
+                        # This probe confirmed a vulnerability
+                        if plan and plan.name == "ml_with_context" and family == "xss":
+                            # For ml_with_context, XSS probes are signals only, not confirmed findings
+                            pass  # Don't record as success
+                        else:
+                            # Record as successful probe
+                            record_probe_attempt(target_id, family, True)
         
         if probe_result:
             fam, reason_code = probe_result
@@ -246,6 +247,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 redirect_location = ev.redirect_details.get("location") if ev.redirect_details else None
                 sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
                 ev.vuln_proof = create_vuln_proof(fam, context, escaping, redirect_location, sqli_error)
+                
+                # Add telemetry for probe evidence
+                ev.telemetry = {
+                    "attempt_idx": 0,  # Probes don't have attempt indices
+                    "top_k_used": 0,   # Probes don't use top-k
+                    "rank_source": "probe_only"
+                }
                 
                 evidence_id = write_evidence(job_id, ev, probe_bundle)
                 
@@ -595,6 +603,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "rank_source": rank_source
                         }
                         ev.attempts_timeline = create_attempt_timeline([attempt_data])
+                        
+                        # Add telemetry to match attempt timeline
+                        ev.telemetry = {
+                            "attempt_idx": attempt_idx + 1,  # 1-based
+                            "top_k_used": len(ranked),
+                            "rank_source": rank_source
+                        }
                         
                         # Add vulnerability proof
                         context = getattr(ev, "xss_context", None)

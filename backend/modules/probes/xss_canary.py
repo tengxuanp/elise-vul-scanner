@@ -36,6 +36,8 @@ class XssProbe:
     # Param information for UI display
     param_in: str = ""
     param: str = ""
+    # Strategy enforcement
+    skipped: bool = False
 
 def detect_xss_context_with_confidence(text: str, canary_pos: int) -> Dict[str, Any]:
     """Detect XSS context using rule-based heuristics with confidence scoring."""
@@ -196,8 +198,14 @@ def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: st
     with open(events_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(event_data) + "\n")
 
-def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None):
+def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None):
     """Run XSS probe with enhanced context and escaping detection."""
+    # Check if XSS probes are disabled by the current plan
+    if plan and "xss" in plan.probes_disabled:
+        probe = XssProbe()
+        probe.skipped = True
+        return probe
+    
     params = {}; data=None; js=None
     if param_in=="query": params={param: CANARY}
     elif param_in=="form": data={param: CANARY}

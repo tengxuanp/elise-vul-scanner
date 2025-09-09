@@ -152,11 +152,11 @@ export default function AssessPage() {
   
   // Calculate ML vs Probe confirmation
   const confirmedProbe = results.filter(r => 
-    r.decision === "positive" && r.rank_source === "probe_only"
+    r.decision === "positive" && r.provenance === "Probe"
   ).length;
   
   const confirmedML = results.filter(r => 
-    r.decision === "positive" && r.rank_source === "ml"
+    r.decision === "positive" && r.provenance === "Inject"
   ).length;
 
   if (!jobId) {

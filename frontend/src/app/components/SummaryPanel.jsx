@@ -17,20 +17,18 @@ const SummaryPanel = ({
   
   // Calculate confirmed breakdown using new decision taxonomy
   const confirmedProbe = assessmentResult.results?.filter(r => 
-    r.decision === "positive" && r.rank_source === "probe_only"
+    r.decision === "positive" && r.provenance === "Probe"
   ).length || 0;
   
   const confirmedMLInject = assessmentResult.results?.filter(r => 
-    r.decision === "positive" && r.rank_source === "ml"
+    r.decision === "positive" && r.provenance === "Inject"
   ).length || 0;
   
   const abstain = assessmentResult.results?.filter(r => 
     r.decision === "abstain"
   ).length || 0;
   
-  const na = assessmentResult.results?.filter(r => 
-    r.decision === "not_applicable"
-  ).length || 0;
+  const na = summary?.na || 0;
 
   // ML mode badge color
   const getMLBadgeColor = (mode) => {
@@ -107,7 +105,7 @@ const SummaryPanel = ({
       {/* Totals Consistency Check */}
       {assessmentResult?.results && (
         (() => {
-          const totalFromSummary = (summary?.positive || 0) + (summary?.suspected || 0) + (summary?.abstain || 0) + (summary?.na || 0);
+          const totalFromSummary = summary?.total || ((summary?.positive || 0) + (summary?.suspected || 0) + (summary?.abstain || 0) + (summary?.na || 0));
           const totalFromResults = assessmentResult.results.length;
           const naCount = summary?.na || 0;
           // NA results are not included in the results array, so we need to account for that
@@ -211,10 +209,10 @@ const SummaryPanel = ({
         <div className="mt-6 pt-4 border-t">
           <h4 className="font-medium text-sm text-gray-700 mb-3">Top Payload Families (by positives)</h4>
           {(() => {
-            // Group by payload family prefix
+            // Group by family
             const familyCounts = {};
             assessmentResult.results
-              .filter(r => r.decision === "positive" && r.payload)
+              .filter(r => r.decision === "positive" && r.family)
               .forEach(r => {
                 const family = r.family || "unknown";
                 familyCounts[family] = (familyCounts[family] || 0) + 1;
