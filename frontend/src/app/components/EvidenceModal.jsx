@@ -293,7 +293,11 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
   };
 
   const RankingTab = ({ evidence }) => {
-    if (!evidence?.ranking_topk || evidence.ranking_topk.length === 0) {
+    // Handle both old format (object with topk array) and new format (direct array)
+    const rankingTopk = evidence?.ranking_topk;
+    const topkArray = Array.isArray(rankingTopk) ? rankingTopk : rankingTopk?.topk;
+    
+    if (!topkArray || topkArray.length === 0) {
       return <div className="text-sm text-gray-500">No ranking data available</div>;
     }
 
@@ -319,7 +323,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
         <div>
           <div className="text-sm font-medium mb-2">Top-K Payloads</div>
           <div className="space-y-2">
-            {evidence.ranking_topk.map((payload, idx) => (
+            {topkArray?.map((payload, idx) => (
               <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded">
                 <div className="flex-1">
                   <div className="text-sm font-mono">{payload.payload_id}</div>
@@ -363,19 +367,25 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <div className="text-xs text-gray-500">Payload</div>
-                <div className="font-mono text-xs break-all">{attempt.payload_id}</div>
+                <div className="font-mono text-xs break-all">{attempt.payload_id || attempt.payload}</div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">Request</div>
-                <div className="font-mono text-xs">{attempt.request.method} {attempt.request.path}</div>
+                <div className="font-mono text-xs">
+                  {attempt.request?.method || attempt.method} {attempt.request?.path || attempt.path}
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">Response</div>
-                <div className="font-mono text-xs">{attempt.response.status} ({attempt.response.latency_ms}ms)</div>
+                <div className="font-mono text-xs">
+                  {attempt.response?.status || attempt.status} ({attempt.response?.latency_ms || attempt.latency_ms}ms)
+                </div>
               </div>
               <div>
                 <div className="text-xs text-gray-500">Parameter</div>
-                <div className="font-mono text-xs">{attempt.request.param_in}:{attempt.request.param}</div>
+                <div className="font-mono text-xs">
+                  {attempt.request?.param_in || attempt.param_in}:{attempt.request?.param || attempt.param}
+                </div>
               </div>
             </div>
             

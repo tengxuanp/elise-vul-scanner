@@ -10,13 +10,14 @@ class ProbeBundle:
     sqli: SqliProbe
     redirect: RedirectProbe
 
-def run_probes(t: Target, families: list = None) -> ProbeBundle:
+def run_probes(t: Target, families: list = None, plan=None) -> ProbeBundle:
     """
     Run probes for specified families.
     
     Args:
         t: Target to probe
         families: List of families to probe. If None, runs all families.
+        plan: Strategy plan for defensive checks
     """
     if families is None:
         families = ["xss", "sqli", "redirect"]
@@ -34,7 +35,7 @@ def run_probes(t: Target, families: list = None) -> ProbeBundle:
         xss_result.xss_escaping = None
     
     if "sqli" in families:
-        sqli_result = run_sqli_probe(t.url, t.method, t.param_in, t.param, t.headers)
+        sqli_result = run_sqli_probe(t.url, t.method, t.param_in, t.param, t.headers, plan)
     else:
         # Create mock SQLi probe result
         from unittest.mock import Mock
@@ -44,7 +45,7 @@ def run_probes(t: Target, families: list = None) -> ProbeBundle:
         sqli_result.boolean_delta = 0
     
     if "redirect" in families:
-        redirect_result = run_redirect_probe(t.url, t.method, t.param_in, t.param, t.headers)
+        redirect_result = run_redirect_probe(t.url, t.method, t.param_in, t.param, t.headers, plan)
     else:
         # Create mock redirect probe result
         from unittest.mock import Mock

@@ -50,8 +50,8 @@ def make_plan(name: str, env: Optional[Dict[str, Any]] = None) -> Plan:
     elif s == ScanStrategy.PROBE_ONLY:
         return Plan(s, probes_disabled=set(), allow_injections=False)
     elif s == ScanStrategy.ML_WITH_CONTEXT:
-        # XSS canary for context classification; SQLi probes enabled; Redirect disabled.
-        return Plan(s, probes_disabled={"redirect"}, allow_injections=True, force_ctx_inject_on_probe=True)
+        # Only XSS canary is allowed (as signal).
+        return Plan(s, probes_disabled={"redirect", "sqli"}, allow_injections=True, force_ctx_inject_on_probe=True)
     elif s == ScanStrategy.HYBRID:
         return Plan(s, probes_disabled=set(), allow_injections=True, force_ctx_inject_on_probe=True)
     else:  # AUTO

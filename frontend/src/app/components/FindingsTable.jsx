@@ -255,7 +255,9 @@ export default function FindingsTable({ results=[], onView }) {
         <RankSourceBadge rank_source={result.rank_source} />
       </td>
       <td className="p-2">
-        {result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
+        {(result.provenance === "Inject" && result.rank_source && ["ml", "ml_ranked", "ctx_pool"].includes(result.rank_source) && result.ml_proba != null) 
+          ? result.ml_proba.toFixed(2) 
+          : "—"}
       </td>
       <td className="p-2 font-semibold">
         {result.cvss?.base ?? "—"}

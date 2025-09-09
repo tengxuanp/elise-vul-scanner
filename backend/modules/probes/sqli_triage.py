@@ -69,6 +69,7 @@ class SqliProbe:
     dialect: Optional[str] = None
     dialect_signals: List[str] = None
     dialect_confident: bool = False
+    skipped: bool = False
 
 def detect_sqli_dialect(response_text: str, headers: dict) -> tuple[str, List[str], bool]:
     """Detect SQLi dialect using rule-based heuristics."""
@@ -110,8 +111,14 @@ def detect_sqli_dialect(response_text: str, headers: dict) -> tuple[str, List[st
     
     return "unknown", matched_signals, False
 
-def run_sqli_probe(url, method, param_in, param, headers=None) -> SqliProbe:
+def run_sqli_probe(url, method, param_in, param, headers=None, plan=None) -> SqliProbe:
     """Run SQLi probe with enhanced dialect detection."""
+    # Defensive check: skip if SQLi probes are disabled
+    if plan and "sqli" in plan.probes_disabled:
+        probe = SqliProbe()
+        probe.skipped = True
+        return probe
+    
     probe = SqliProbe()
     
     def send(val):

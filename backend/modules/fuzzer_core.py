@@ -137,13 +137,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         if plan is None:
             # Fallback behavior when no plan is provided
             families_to_probe = ["xss", "sqli", "redirect"]
-            probe_bundle = run_probes(target, families_to_probe)
+            probe_bundle = run_probes(target, families_to_probe, plan)
             probe_result = _confirmed_family(probe_bundle)
         else:
             # Only run probes for enabled families
             families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
             if families_to_probe:
-                probe_bundle = run_probes(target, families_to_probe)
+                probe_bundle = run_probes(target, families_to_probe, plan)
                 probe_result = _confirmed_family(probe_bundle)
             else:
                 # No probes enabled by strategy - create empty probe bundle
@@ -573,16 +573,19 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             ev.sqli_details = create_sqli_details(probe_bundle.sqli)
                         
                         # Add ranking information
-                        ev.ranking_topk = create_ranking_info(ranked, rank_source, model_tag)
+                        ranking_info = create_ranking_info(ranked, rank_source, model_tag)
+                        ev.ranking_topk = ranking_info.get("topk") if ranking_info else None
                         ev.ranking_source = rank_source
                         ev.ranking_pool_size = len(ranked)
                         ev.ranking_model = {"name": model_tag, "version": "2025-01-01", "features": ["param_in", "context", "path_hash"]} if model_tag else None
                         
                         # Add attempt timeline (current attempt)
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(target.url)
                         attempt_data = {
                             "payload": cand.get("payload", ""),
                             "method": target.method,
-                            "path": target.path,
+                            "path": parsed_url.path,
                             "param_in": target.param_in,
                             "param": target.param,
                             "status": inj.status,
@@ -591,7 +594,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "why": ["signal:reflection+payload"],
                             "rank_source": rank_source
                         }
-                        ev.attempts_timeline = [attempt_data]
+                        ev.attempts_timeline = create_attempt_timeline([attempt_data])
                         
                         # Add vulnerability proof
                         context = getattr(ev, "xss_context", None)

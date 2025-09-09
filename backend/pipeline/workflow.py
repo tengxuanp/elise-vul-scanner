@@ -1,10 +1,49 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from backend.modules.targets import enumerate_targets, enumerate_targets_from_endpoints, Target
 from backend.modules.fuzzer_core import _process_target, get_event_totals, clear_event_aggregator, DECISION
 from backend.modules.decisions import canonicalize_results, ensure_all_telemetry_defaults
 from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_plan, probe_enabled, injections_enabled, validate_strategy_requirements
 from backend.modules.event_aggregator import get_aggregator
 from backend.app_state import REQUIRE_RANKER
+
+def upsert_row(results: List[Dict[str, Any]], key: Tuple[str, str, str, str, str], patch: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update an existing row or insert a new one based on the key.
+    
+    Args:
+        results: List of result rows
+        key: (family, method, path, param_in, param) tuple
+        patch: Dictionary of fields to update/add
+        
+    Returns:
+        The updated or newly created row
+    """
+    family, method, path, param_in, param = key
+    
+    # Look for existing row with matching key
+    for r in results:
+        if (r.get("family") == family and 
+            r.get("method") == method and 
+            r.get("path") == path and 
+            r.get("param_in") == param_in and 
+            r.get("param") == param):
+            # Update existing row
+            r.update(patch)
+            return r
+    
+    # Not found -> insert a new one
+    row = {
+        "family": family,
+        "method": method,
+        "path": path,
+        "param_in": param_in,
+        "param": param,
+        "decision": "abstain",
+        "provenance": "Probe" if patch.get("provenance") == "Probe" else "Inject"
+    }
+    row.update(patch)
+    results.append(row)
+    return row
 
 def create_assessment_response_from_results(results: List[Dict[str, Any]], job_id: str, strategy: str) -> Dict[str, Any]:
     """
@@ -26,9 +65,9 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
     na = sum(1 for r in results if r.get("decision") == "not_applicable")
     error = sum(1 for r in results if r.get("decision") == "error")
     
-    # Calculate confirmed counts
-    confirmed_probe = sum(1 for r in results if r.get("rank_source") == "probe_only" and r.get("decision") == "positive")
-    confirmed_ml_inject = sum(1 for r in results if r.get("rank_source") in ["ml", "ctx_pool"] and r.get("decision") == "positive")
+    # Calculate confirmed counts from row-derived data
+    confirmed_probe = sum(1 for r in results if r.get("decision") == "positive" and r.get("provenance") == "Probe")
+    confirmed_ml_inject = sum(1 for r in results if r.get("decision") == "positive" and r.get("provenance") == "Inject")
     
     # Create findings aggregates by family (same structure as fuzzer_core.py)
     findings_by_family = {}
@@ -191,8 +230,8 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     # Get strategy behavior (for backward compatibility)
     behavior = get_strategy_behavior(scan_strategy)
     
-    # Start timing
-    start_time = time.perf_counter()
+    # Start timing using monotonic nanoseconds
+    start_time = time.monotonic_ns()
     
     # Clear event aggregator for fresh counts
     clear_event_aggregator()
@@ -210,6 +249,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     results, findings = [], []
     
     # Process each enumerated target
+    raw_results = []
     for target_dict in target_dicts:
         # Convert dict to Target object
         target = Target(
@@ -225,11 +265,64 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         
         # Use the same _process_target function from fuzzer_core
         result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan)
-        results.append(result)
+        raw_results.append(result)
         
         # Extract evidence if present
         if "evidence" in result:
             findings.append(result["evidence"])
+    
+    # Apply upsert logic to create one-row-per-(target,family)
+    # Do not create rows for NA/no-params. Keep them out of results; the NA badge is computed separately.
+    results = []
+    na_count = 0
+    for result in raw_results:
+        if result.get("decision") in ["positive", "suspected", "error"]:
+            # Create key for upsert
+            target = result.get("target", {})
+            family = result.get("family", "unknown")
+            method = target.get("method", "GET")
+            path = target.get("url", "")
+            param_in = target.get("param_in", "none")
+            param = target.get("param", "none")
+            
+            key = (family, method, path, param_in, param)
+            
+            # Determine provenance
+            provenance = "Probe" if result.get("rank_source") == "probe_only" else "Inject"
+            
+            # Create patch for upsert
+            patch = {
+                "decision": result.get("decision"),
+                "provenance": provenance,
+                "why": result.get("why", []),
+                "cvss": result.get("cvss"),
+                "evidence_id": result.get("evidence_id"),
+                "rank_source": result.get("rank_source"),
+                "ml_role": result.get("ml_role"),
+                "gated": result.get("gated", False),
+                "ml_family": result.get("ml_family"),
+                "ml_proba": result.get("ml_proba"),
+                "ml_threshold": result.get("ml_threshold"),
+                "model_tag": result.get("model_tag"),
+                "attempt_idx": result.get("attempt_idx"),
+                "top_k_used": result.get("top_k_used"),
+                "timing_ms": result.get("timing_ms", 0)
+            }
+            
+            # Add XSS context fields if present
+            if result.get("xss_context") is not None:
+                patch.update({
+                    "xss_context": result.get("xss_context"),
+                    "xss_escaping": result.get("xss_escaping"),
+                    "xss_context_source": result.get("xss_context_source"),
+                    "xss_context_ml_proba": result.get("xss_context_ml_proba")
+                })
+            
+            # Upsert the row
+            upsert_row(results, key, patch)
+        elif result.get("decision") == "not_applicable":
+            # Count NA results but don't add them to results array
+            na_count += 1
     
     # Handle endpoints with no parameters
     endpoints_without_params = 0
@@ -250,27 +343,11 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         
         if not has_params:
             endpoints_without_params += 1
-            results.append({
-                "target": {
-                    "url": ep.get("url", ""),
-                    "method": ep.get("method", "GET"),
-                    "param_in": "none",
-                    "param": "none",
-                    "headers": ep.get("headers", {}),
-                    "status": ep.get("status"),
-                    "content_type": ep.get("content_type"),
-                    "base_params": {}
-                },
-                "decision": DECISION["NA"],
-                "why": ["no_parameters_detected"],
-                "attempt_idx": 0,
-                "top_k_used": 0,
-                "rank_source": "none"
-            })
     
     # End timing
-    end_time = time.perf_counter()
-    processing_ms = int(1000 * (end_time - start_time))
+    end_time = time.monotonic_ns()
+    elapsed_s = (end_time - start_time) / 1e9
+    processing_ms = int(1000 * elapsed_s)
     
     # Get event-based counters
     event_totals = get_event_totals()
@@ -351,16 +428,34 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
                 attempt_idx = result.get("attempt_idx", 0) or 0
                 xss_first_hit_attempts_baseline += attempt_idx + 1
     
-    # Compute confirmed probe and ML inject counts from results
-    confirmed_probe = sum(1 for r in results if r.get("rank_source") == "probe_only" and r.get("decision") == DECISION["POS"])
-    confirmed_ml_inject = sum(1 for r in results if r.get("rank_source") in ["ml", "ctx_pool"] and r.get("decision") == DECISION["POS"])
+    # Compute confirmed probe and ML inject counts from row-derived data
+    confirmed_probe = sum(1 for r in results if r.get("decision") == DECISION["POS"] and r.get("provenance") == "Probe")
+    confirmed_ml_inject = sum(1 for r in results if r.get("decision") == DECISION["POS"] and r.get("provenance") == "Inject")
+    
+    # Strategy violation checks
+    if plan.name == "ml_only":
+        # ML-only: no probe positives allowed
+        probe_positives = sum(1 for r in results if r.get("provenance") == "Probe" and r.get("decision") == DECISION["POS"])
+        if probe_positives > 0:
+            violations.append("strategy_violation:probe_positive_under_ml_only")
+    
+    elif plan.name == "ml_with_context":
+        # ML-with-Context: XSS canary allowed, no probe positives; disable Redirect family
+        probe_positives = sum(1 for r in results if r.get("provenance") == "Probe" and r.get("decision") == DECISION["POS"])
+        if probe_positives > 0:
+            violations.append("strategy_violation:probe_positive_under_ml_with_context")
+        
+        # Check for redirect family (should be disabled)
+        redirect_results = [r for r in results if r.get("family") == "redirect"]
+        if redirect_results:
+            violations.append("strategy_violation:redirect_family_under_ml_with_context")
     
     summary = {
-        "total": len(results),
+        "total": len(results) + na_count + endpoints_without_params,
         "positive": sum(r["decision"]==DECISION["POS"] for r in results),
         "suspected": sum(r["decision"]==DECISION["SUS"] for r in results),
         "abstain": sum(r["decision"]==DECISION["ABS"] for r in results),
-        "na": sum(r["decision"]==DECISION["NA"] for r in results),
+        "na": na_count + endpoints_without_params,
         "confirmed_probe": confirmed_probe,
         "confirmed_ml_inject": confirmed_ml_inject,
     }
@@ -370,7 +465,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "targets_enumerated": targets_enumerated,
         "endpoints_without_params": endpoints_without_params,
         "processing_ms": processing_ms,
-        "processing_time": f"{processing_ms/1000:.1f}s",
+        "processing_time": f"{elapsed_s:.1f}s",
         "probe_attempts": probe_attempts,
         "probe_successes": probe_successes,
         "ml_inject_attempts": ml_inject_attempts,
@@ -399,11 +494,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         # Counters consistency check
         "counters_consistent": (
             (probe_successes + ml_inject_successes) == (confirmed_probe + confirmed_ml_inject) and
-            probe_attempts == result_probe_attempts and
-            probe_successes == result_probe_successes and
-            ml_inject_attempts == result_ml_inject_attempts and
-            ml_inject_successes == result_ml_inject_successes and
-            (probe_successes + ml_inject_successes) == sum(1 for r in results if r.get("decision") == "positive")
+            (confirmed_probe + confirmed_ml_inject) == sum(1 for r in results if r.get("decision") == "positive")
         ),
         # Backward compatibility
         "injections_attempted": probe_attempts + ml_inject_attempts,

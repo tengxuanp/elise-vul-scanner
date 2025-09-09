@@ -99,6 +99,9 @@ def convert_evidence_to_result(evidence_data: Dict[str, Any]) -> Dict[str, Any]:
         "base_params": {}
     }
     
+    # Determine provenance based on rank_source
+    provenance = "Probe" if rank_source == "probe_only" else "Inject"
+    
     # Create result dict
     result = {
         "target": target,
@@ -107,6 +110,7 @@ def convert_evidence_to_result(evidence_data: Dict[str, Any]) -> Dict[str, Any]:
         "why": why,
         "cvss": cvss if cvss_base > 0 else None,
         "rank_source": rank_source,
+        "provenance": provenance,  # Add provenance field
         "ml_role": "prioritization" if rank_source == "ml" else None,
         "gated": False,
         "ml_family": ml_family,

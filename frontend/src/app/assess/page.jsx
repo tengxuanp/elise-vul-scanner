@@ -376,7 +376,7 @@ export default function AssessPage() {
                       return (
                         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
                           <div className="text-sm text-blue-800">
-                            XSS canary for context; Top-K injections. Redirect/SQLi probes disabled.
+                            XSS canary for context; Top‑K injections. Redirect/SQLi probes disabled.
                           </div>
                         </div>
                       );

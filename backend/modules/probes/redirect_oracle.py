@@ -8,8 +8,15 @@ class RedirectProbe:
     # Param information for UI display
     param_in: str = ""
     param: str = ""
+    skipped: bool = False
 
-def run_redirect_probe(url, method, param_in, param, headers=None):
+def run_redirect_probe(url, method, param_in, param, headers=None, plan=None):
+    # Defensive check: skip if redirect probes are disabled
+    if plan and "redirect" in plan.probes_disabled:
+        probe = RedirectProbe()
+        probe.skipped = True
+        return probe
+    
     params={}; data=None; js=None
     external = "https://example.com/"
     if param_in=="query": params={param: external}

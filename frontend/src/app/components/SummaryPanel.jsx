@@ -92,12 +92,26 @@ const SummaryPanel = ({
         </div>
       )}
 
+      {/* Counters Consistency Check */}
+      {meta?.counters_consistent === false && (
+        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+          <div className="text-sm font-medium text-yellow-800 mb-1">
+            ⚠️ Counters Inconsistent
+          </div>
+          <div className="text-xs text-yellow-700">
+            Event counters don't match table rows. Check server logs for details.
+          </div>
+        </div>
+      )}
+
       {/* Totals Consistency Check */}
       {assessmentResult?.results && (
         (() => {
           const totalFromSummary = (summary?.positive || 0) + (summary?.suspected || 0) + (summary?.abstain || 0) + (summary?.na || 0);
           const totalFromResults = assessmentResult.results.length;
-          const totalsMatch = totalFromSummary === totalFromResults;
+          const naCount = summary?.na || 0;
+          // NA results are not included in the results array, so we need to account for that
+          const totalsMatch = totalFromSummary === (totalFromResults + naCount);
           
           if (!totalsMatch) {
             return (
@@ -106,7 +120,7 @@ const SummaryPanel = ({
                   ⚠️ Totals Mismatch
                 </div>
                 <div className="text-xs text-yellow-700">
-                  Summary total ({totalFromSummary}) ≠ Results count ({totalFromResults})
+                  Summary total ({totalFromSummary}) ≠ Results count ({totalFromResults}) + NA count ({naCount})
                   {jobId && <div>Job ID: {jobId}</div>}
                 </div>
               </div>
