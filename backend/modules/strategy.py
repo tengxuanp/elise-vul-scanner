@@ -15,6 +15,7 @@ class ScanStrategy(str, Enum):
     AUTO = "auto"
     PROBE_ONLY = "probe_only"
     ML_ONLY = "ml_only"
+    ML_WITH_CONTEXT = "ml_with_context"  # ML-only but with XSS context classification
     HYBRID = "hybrid"
 
 @dataclass
@@ -45,30 +46,16 @@ def make_plan(name: str, env: Optional[Dict[str, Any]] = None) -> Plan:
     s = ScanStrategy(name.lower())
     
     if s == ScanStrategy.ML_ONLY:
-        return Plan(
-            s, 
-            probes_disabled={"xss", "redirect", "sqli"}, 
-            allow_injections=True
-        )
+        return Plan(s, probes_disabled={"xss", "redirect", "sqli"}, allow_injections=True)
     elif s == ScanStrategy.PROBE_ONLY:
-        return Plan(
-            s, 
-            probes_disabled=set(), 
-            allow_injections=False
-        )
+        return Plan(s, probes_disabled=set(), allow_injections=False)
+    elif s == ScanStrategy.ML_WITH_CONTEXT:
+        # XSS canary allowed ONLY as a signal; Redirect/SQLi probes disabled.
+        return Plan(s, probes_disabled={"redirect", "sqli"}, allow_injections=True, force_ctx_inject_on_probe=True)
     elif s == ScanStrategy.HYBRID:
-        return Plan(
-            s, 
-            probes_disabled=set(), 
-            allow_injections=True, 
-            force_ctx_inject_on_probe=True
-        )
+        return Plan(s, probes_disabled=set(), allow_injections=True, force_ctx_inject_on_probe=True)
     else:  # AUTO
-        return Plan(
-            s, 
-            probes_disabled=set(), 
-            allow_injections=True
-        )
+        return Plan(s)
 
 def probe_enabled(plan: Plan, family: str) -> bool:
     """Check if probes are enabled for a specific family."""

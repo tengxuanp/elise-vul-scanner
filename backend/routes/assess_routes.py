@@ -152,15 +152,15 @@ async def assess_vulnerabilities(request: AssessRequest):
             except Exception as e:
                 persist_warning = f"Failed to persist endpoints: {str(e)}"
         
-        # Calculate summary from results
+        # Use summary from workflow result (includes confirmed_probe and confirmed_ml_inject)
         results = result.get("results", [])
-        summary = {
+        summary = result.get("summary", {
             "total": len(results),
             "positive": len([r for r in results if r.get("decision") == "positive"]),
             "suspected": len([r for r in results if r.get("decision") == "suspected"]),
             "abstain": len([r for r in results if r.get("decision") == "abstain"]),
             "na": len([r for r in results if r.get("decision") == "not_applicable"])
-        }
+        })
         
         # Get healthz data
         healthz_data = get_healthz_data()

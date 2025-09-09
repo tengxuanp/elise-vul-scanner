@@ -10,9 +10,49 @@ class ProbeBundle:
     sqli: SqliProbe
     redirect: RedirectProbe
 
-def run_probes(t: Target) -> ProbeBundle:
+def run_probes(t: Target, families: list = None) -> ProbeBundle:
+    """
+    Run probes for specified families.
+    
+    Args:
+        t: Target to probe
+        families: List of families to probe. If None, runs all families.
+    """
+    if families is None:
+        families = ["xss", "sqli", "redirect"]
+    
+    # Create probe results for each family
+    if "xss" in families:
+        xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers)
+    else:
+        # Create mock XSS probe result
+        from unittest.mock import Mock
+        xss_result = Mock()
+        xss_result.reflected = False
+        xss_result.context = None
+        xss_result.xss_context = None
+        xss_result.xss_escaping = None
+    
+    if "sqli" in families:
+        sqli_result = run_sqli_probe(t.url, t.method, t.param_in, t.param, t.headers)
+    else:
+        # Create mock SQLi probe result
+        from unittest.mock import Mock
+        sqli_result = Mock()
+        sqli_result.error_based = False
+        sqli_result.time_based = False
+        sqli_result.boolean_delta = 0
+    
+    if "redirect" in families:
+        redirect_result = run_redirect_probe(t.url, t.method, t.param_in, t.param, t.headers)
+    else:
+        # Create mock redirect probe result
+        from unittest.mock import Mock
+        redirect_result = Mock()
+        redirect_result.influence = False
+    
     return ProbeBundle(
-        xss=run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers),
-        sqli=run_sqli_probe(t.url, t.method, t.param_in, t.param, t.headers),
-        redirect=run_redirect_probe(t.url, t.method, t.param_in, t.param, t.headers),
+        xss=xss_result,
+        sqli=sqli_result,
+        redirect=redirect_result,
     )

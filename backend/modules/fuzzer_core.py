@@ -55,6 +55,12 @@ from backend.app_state import DATA_DIR
 
 def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
     """Ensure all result rows have non-null telemetry defaults."""
+    # Decision canonicalization
+    CANON = {"clean": "abstain", "not_vulnerable": "abstain"}
+    decision = result.get("decision", "")
+    if isinstance(decision, str):
+        result["decision"] = CANON.get(decision.lower(), decision)
+    
     # Set attempt_idx default
     result.setdefault("attempt_idx", 0)
     
@@ -110,6 +116,7 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
 
 def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None) -> Dict[str, Any]:
     """Process a single target and return the result."""
+    violations = []  # Track strategy violations
     try:
         if gate_not_applicable(target):
             target_dict = target.to_dict()
@@ -130,41 +137,48 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         if plan is None:
             # Fallback behavior when no plan is provided
             families_to_probe = ["xss", "sqli", "redirect"]
-            probe_bundle = run_probes(target)
-            probe_result = _confirmed_family(probe_bundle)
-        elif any(probe_enabled(plan, family) for family in ["xss", "sqli", "redirect"]):
-            families_to_probe = ["xss", "sqli", "redirect"]
-            probe_bundle = run_probes(target)
+            probe_bundle = run_probes(target, families_to_probe)
             probe_result = _confirmed_family(probe_bundle)
         else:
-            # No probes enabled by strategy - create empty probe bundle
-            # Create proper Mock objects for probe families
-            xss_mock = Mock()
-            xss_mock.reflected = False
-            xss_mock.context = None
-            xss_mock.xss_context = None
-            xss_mock.xss_escaping = None
-            
-            sqli_mock = Mock()
-            sqli_mock.error_based = False
-            sqli_mock.time_based = False
-            sqli_mock.boolean_delta = 0
-            
-            redirect_mock = Mock()
-            redirect_mock.influence = False
-            
-            probe_bundle = Mock()
-            probe_bundle.xss = xss_mock
-            probe_bundle.sqli = sqli_mock
-            probe_bundle.redirect = redirect_mock
-            probe_bundle.error_based = None
-            probe_result = None
+            # Only run probes for enabled families
+            families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
+            if families_to_probe:
+                probe_bundle = run_probes(target, families_to_probe)
+                probe_result = _confirmed_family(probe_bundle)
+            else:
+                # No probes enabled by strategy - create empty probe bundle
+                families_to_probe = []
+                # Create proper Mock objects for probe families
+                xss_mock = Mock()
+                xss_mock.reflected = False
+                xss_mock.context = None
+                xss_mock.xss_context = None
+                xss_mock.xss_escaping = None
+                
+                sqli_mock = Mock()
+                sqli_mock.error_based = False
+                sqli_mock.time_based = False
+                sqli_mock.boolean_delta = 0
+                
+                redirect_mock = Mock()
+                redirect_mock.influence = False
+                
+                probe_bundle = Mock()
+                probe_bundle.xss = xss_mock
+                probe_bundle.sqli = sqli_mock
+                probe_bundle.redirect = redirect_mock
+                probe_bundle.error_based = None
+                probe_result = None
         
         # Record probe attempts only for families that were actually probed
         if probe_result:
             fam, reason_code = probe_result
             if plan is None or probe_enabled(plan, fam):
-                record_probe_attempt(target_id, fam, True)
+                # For ml_with_context strategy, XSS probes are signals only, not successes
+                if plan and plan.name == "ml_with_context" and fam == "xss":
+                    record_probe_attempt(target_id, fam, False)  # Record as attempt but not success
+                else:
+                    record_probe_attempt(target_id, fam, True)
             else:
                 # Strategy violation: probe ran for disabled family
                 logging.warning(f"Strategy violation: {fam} probe ran when disabled by strategy {plan.name}")
@@ -179,66 +193,79 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         if probe_result:
             fam, reason_code = probe_result
-            # Probe confirmed vulnerability - decision from probe proof, not ML
-            ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
-            ev.cvss = cvss_for(fam, ev)
-            ev.why = unique_merge(ev.why, [reason_code])
-            evidence_id = write_evidence(job_id, ev, probe_bundle)
             
-            # Log confirm event
-            logging.info("confirm", extra={
-                "family": fam,
-                "rank_source": "probe_only",
-                "reason_code": reason_code,
-                "evidence_id": evidence_id
-            })
+            # For ml_with_context strategy, XSS probes are signals only, not confirmed findings
+            if plan and plan.name == "ml_with_context" and fam == "xss":
+                # XSS probe is a signal for context classification - don't create a confirmed result
+                # Just record the probe attempt and continue to ML injections
+                logging.info("XSS probe signal for context classification", extra={
+                    "family": fam,
+                    "reason_code": reason_code,
+                    "strategy": plan.name
+                })
+                # Continue to ML injections below
+                pass
+            else:
+                # Probe confirmed vulnerability - decision from probe proof, not ML
+                ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
+                ev.cvss = cvss_for(fam, ev)
+                ev.why = unique_merge(ev.why, [reason_code])
+                evidence_id = write_evidence(job_id, ev, probe_bundle)
+                
+                # Log confirm event
+                logging.info("confirm", extra={
+                    "family": fam,
+                    "rank_source": "probe_only",
+                    "reason_code": reason_code,
+                    "evidence_id": evidence_id
+                })
 
-            result_dict = {
-                "target": target.to_dict(), 
-                "family": fam, 
-                "decision": DECISION["POS"], 
-                "why": ["probe_proof", reason_code],
-                "evidence_id": evidence_id,
-                "cvss": ev.cvss,  # Pass through the CVSS from evidence
-                "rank_source": "probe_only",  # Decision from probe, not ML
-                "ml_role": None,
-                "gated": False,
-                "ml_family": None,
+                result_dict = {
+                    "target": target.to_dict(), 
+                    "family": fam, 
+                    "decision": DECISION["POS"], 
+                    "why": ["probe_proof", reason_code],
+                    "evidence_id": evidence_id,
+                    "cvss": ev.cvss,  # Pass through the CVSS from evidence
+                    "rank_source": "probe_only",  # Decision from probe, not ML
+                    "ml_role": None,
+                    "gated": False,
+                    "ml_family": None,
                 "ml_proba": None,
                 "ml_threshold": None,
                 "model_tag": None,
                 "attempt_idx": None,
                 "top_k_used": None,
                 "timing_ms": 0  # Probe-only results have no injection timing
-            }
-            
-            # Add XSS context fields if this is an XSS finding
-            if fam == "xss":
-                result_dict.update({
-                    "xss_context": ev.xss_context,
-                    "xss_escaping": ev.xss_escaping,
-                    "xss_context_source": ev.xss_context_source,
-                    "xss_context_ml_proba": ev.xss_context_ml_proba
-                })
+                }
                 
-                # Add param information from XSS probe if available
-                if hasattr(probe_bundle, "xss") and probe_bundle.xss:
-                    xss_probe = probe_bundle.xss
-                    if hasattr(xss_probe, "param_in") and hasattr(xss_probe, "param"):
-                        result_dict.update({
-                            "param_in": xss_probe.param_in,
-                            "param": xss_probe.param
-                        })
-            
-            # Add param information for redirect findings
-            elif fam == "redirect":
-                if hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
-                    redirect_probe = probe_bundle.redirect
-                    if hasattr(redirect_probe, "param_in") and hasattr(redirect_probe, "param"):
-                        result_dict.update({
-                            "param_in": redirect_probe.param_in,
-                            "param": redirect_probe.param
-                        })
+                # Add XSS context fields if this is an XSS finding
+                if fam == "xss":
+                    result_dict.update({
+                        "xss_context": ev.xss_context,
+                        "xss_escaping": ev.xss_escaping,
+                        "xss_context_source": ev.xss_context_source,
+                        "xss_context_ml_proba": ev.xss_context_ml_proba
+                    })
+                    
+                    # Add param information from XSS probe if available
+                    if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                        xss_probe = probe_bundle.xss
+                        if hasattr(xss_probe, "param_in") and hasattr(xss_probe, "param"):
+                            result_dict.update({
+                                "param_in": xss_probe.param_in,
+                                "param": xss_probe.param
+                            })
+                
+                # Add param information for redirect findings
+                elif fam == "redirect":
+                    if hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                        redirect_probe = probe_bundle.redirect
+                        if hasattr(redirect_probe, "param_in") and hasattr(redirect_probe, "param"):
+                            result_dict.update({
+                                "param_in": redirect_probe.param_in,
+                                "param": redirect_probe.param
+                            })
             
             # Optional demo flag: force one context injection after XSS reflection
             force_context_inject = os.getenv("XSS_FORCE_CONTEXT_INJECT_ON_REFLECTION", "false").lower() == "true"
@@ -263,7 +290,33 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     except Exception as e:
                         logging.warning(f"Demo context injection failed: {e}")
             
-            return _ensure_telemetry_defaults(result_dict)
+            # For ml_with_context strategy, we still want to run ML injections
+            # even when probes confirm vulnerabilities
+            if plan and plan.name == "ml_with_context":
+                # Continue to ML injections below, but store the probe result
+                probe_confirmed_family = fam
+                # Create a minimal result_dict for ml_with_context strategy
+                probe_confirmed_evidence = {
+                    "target": target.to_dict(),
+                    "family": fam,
+                    "decision": DECISION["POS"],
+                    "why": ["probe_proof", reason_code],
+                    "evidence_id": None,  # Will be set if needed
+                    "cvss": None,
+                    "rank_source": "probe_only",
+                    "ml_role": None,
+                    "gated": False,
+                    "ml_family": None,
+                    "ml_proba": None,
+                    "ml_threshold": None,
+                    "model_tag": None,
+                    "attempt_idx": None,
+                    "top_k_used": None,
+                    "timing_ms": 0
+                }
+            else:
+                # For other strategies, return probe result immediately
+                return _ensure_telemetry_defaults(result_dict)
         
         # ML payload ranking and injection (with strategy enforcement)
         candidates = []
@@ -271,8 +324,17 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             candidates.append("xss")
         if gate_candidate_sqli(target):
             candidates.append("sqli")
-        if gate_candidate_redirect(target):
-            candidates.append("redirect")
+        
+        # For ml_with_context strategy, exclude redirect family entirely
+        if plan and plan.name == "ml_with_context":
+            # Only XSS and SQLi candidates allowed
+            if "redirect" in candidates:
+                candidates.remove("redirect")
+                violations.append("strategy_violation:redirect_under_ml_with_context")
+        else:
+            # For other strategies, include redirect
+            if gate_candidate_redirect(target):
+                candidates.append("redirect")
         
         # Check if injections are enabled by strategy
         if plan is not None and not injections_enabled(plan):
@@ -371,6 +433,12 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 
                 # Get ML telemetry from first ranked item
                 rank_source = ranked[0].get("rank_source", "defaults") if ranked else "defaults"
+                
+                # Record context pool usage if ctx_pool is used
+                if rank_source == "ctx_pool":
+                    from backend.modules.event_aggregator import get_aggregator
+                    aggregator = get_aggregator()
+                    aggregator.record_context_pool_usage()
                 model_tag = ranked[0].get("model_tag") if ranked else None
                 
                 # Get threshold for this family
@@ -462,8 +530,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "ml_proba": p_cal if rank_source == "ml" else None,
                             "ml_threshold": threshold if rank_source == "ml" else None,
                             "model_tag": model_tag if rank_source == "ml" else None,
-                            "attempt_idx": attempt_idx if rank_source == "ml" else None,
-                            "top_k_used": top_k if rank_source == "ml" else None,
+                            "attempt_idx": (attempt_idx + 1) if rank_source in ["ml", "ctx_pool"] else None,
+                            "top_k_used": len(ranked) if rank_source in ["ml", "ctx_pool"] else None,
                             "timing_ms": inj_timing_ms
                         }
                         
@@ -480,6 +548,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         
             except Exception as e:
                 # If ML ranking fails, continue with next family
+                logging.warning(f"ML ranking failed for family {fam}: {e}")
                 fallback_reason = "ml_unavailable_or_disabled"
                 continue
             except RuntimeError as e:
@@ -536,6 +605,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
     except Exception as e:
         logging.error(f"Error processing target {target.url}: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        logging.error(f"Error type: {type(e).__name__}")
+        logging.error(f"Error message: {str(e)}")
         return _ensure_telemetry_defaults({
             "target": target.to_dict(), 
             "decision": DECISION["ERR"], 
@@ -586,7 +659,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     injections_attempted = 0
     injections_succeeded = 0
     errors_by_kind = {}
-    rank_source_counts = {"probe_only": 0, "ml": 0, "defaults": 0}
+    rank_source_counts = {"probe_only": 0, "ml": 0, "ctx_pool": 0, "defaults": 0}
     
     # Collect all targets for parallel processing
     all_targets = []
@@ -698,6 +771,10 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                     error_type = "processing_error"
                     errors_by_kind[error_type] = errors_by_kind.get(error_type, 0) + 1
                     
+                    logging.error(f"Error processing target {target.url} in run_job: {e}")
+                    import traceback
+                    logging.error(f"Traceback: {traceback.format_exc()}")
+                    
                     results.append({
                         "evidence_id": None,
                         "url": target.url,
@@ -767,6 +844,20 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
         # Event-based counters
         **event_meta
     }
+    
+    # Handle ml_with_context strategy: if we have a probe-confirmed result,
+    # we still want to run ML injections and return the ML result instead
+    if plan and plan.name == "ml_with_context" and 'probe_confirmed_evidence' in locals():
+        # For ml_with_context, prefer ML results over probe results
+        if results:  # If we have ML results, use them
+            return {
+                "results": results, 
+                "findings": findings_aggregates, 
+                "job_id": job_id, 
+                "meta": meta
+            }
+        else:  # If no ML results, fall back to probe result
+            return _ensure_telemetry_defaults(probe_confirmed_evidence)
     
     return {
         "results": results, 

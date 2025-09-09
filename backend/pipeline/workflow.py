@@ -2,8 +2,9 @@ from typing import Any, Dict, List, Optional
 from backend.modules.targets import enumerate_targets, enumerate_targets_from_endpoints, Target
 from backend.modules.fuzzer_core import _process_target, get_event_totals, clear_event_aggregator, DECISION
 from backend.modules.decisions import canonicalize_results, ensure_all_telemetry_defaults
-from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_plan, probe_enabled, injections_enabled
+from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_plan, probe_enabled, injections_enabled, validate_strategy_requirements
 from backend.modules.event_aggregator import get_aggregator
+from backend.app_state import REQUIRE_RANKER
 
 def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto")->Dict[str,Any]:
     """
@@ -21,6 +22,30 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     
     # Create centralized execution plan
     plan = make_plan(strategy)
+    
+    # Health gating: check ML requirements
+    from backend.routes.canonical_healthz_routes import get_healthz_data
+    health_data = get_healthz_data()
+    ml_available = health_data.get("ml_active", False) and any(
+        model.get("has_model", False) for model in health_data.get("models_available", {}).values()
+    )
+    
+    # Validate strategy requirements
+    try:
+        strategy_validation = validate_strategy_requirements(scan_strategy, ml_available)
+    except ValueError as e:
+        if REQUIRE_RANKER:
+            raise ValueError(f"Strategy validation failed: {str(e)}")
+        else:
+            # Fallback to probe_only
+            plan = make_plan("probe_only")
+            strategy_validation = {
+                "strategy": "probe_only",
+                "ml_required": False,
+                "ml_available": ml_available,
+                "fallback": "probe_only",
+                "flags": ["ml_fallback"]
+            }
     
     # Get strategy behavior (for backward compatibility)
     behavior = get_strategy_behavior(scan_strategy)
@@ -185,12 +210,18 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
                 attempt_idx = result.get("attempt_idx", 0) or 0
                 xss_first_hit_attempts_baseline += attempt_idx + 1
     
+    # Compute confirmed probe and ML inject counts from results
+    confirmed_probe = sum(1 for r in results if r.get("rank_source") == "probe_only" and r.get("decision") == DECISION["POS"])
+    confirmed_ml_inject = sum(1 for r in results if r.get("rank_source") in ["ml", "ctx_pool"] and r.get("decision") == DECISION["POS"])
+    
     summary = {
         "total": len(results),
         "positive": sum(r["decision"]==DECISION["POS"] for r in results),
         "suspected": sum(r["decision"]==DECISION["SUS"] for r in results),
         "abstain": sum(r["decision"]==DECISION["ABS"] for r in results),
         "na": sum(r["decision"]==DECISION["NA"] for r in results),
+        "confirmed_probe": confirmed_probe,
+        "confirmed_ml_inject": confirmed_ml_inject,
     }
     
     meta = {
@@ -210,6 +241,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
             "allow_injections": plan.allow_injections,
             "force_ctx_inject_on_probe": plan.force_ctx_inject_on_probe
         },
+        "strategy_validation": strategy_validation,
         # Violation tracking
         "violations": violations,
         # XSS context counters
@@ -223,8 +255,9 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "xss_first_hit_attempts_ctx": xss_first_hit_attempts_ctx,
         "xss_first_hit_attempts_baseline": xss_first_hit_attempts_baseline,
         "xss_first_hit_attempts_delta": xss_first_hit_attempts_baseline - xss_first_hit_attempts_ctx if (xss_first_hit_attempts_ctx or 0) > 0 else 0,
-        # Consistency check
+        # Counters consistency check
         "counters_consistent": (
+            (probe_successes + ml_inject_successes) == (confirmed_probe + confirmed_ml_inject) and
             probe_attempts == result_probe_attempts and
             probe_successes == result_probe_successes and
             ml_inject_attempts == result_ml_inject_attempts and

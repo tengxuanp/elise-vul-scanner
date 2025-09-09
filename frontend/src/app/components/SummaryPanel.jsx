@@ -92,6 +92,30 @@ const SummaryPanel = ({
         </div>
       )}
 
+      {/* Totals Consistency Check */}
+      {assessmentResult?.results && (
+        (() => {
+          const totalFromSummary = (summary?.positive || 0) + (summary?.suspected || 0) + (summary?.abstain || 0) + (summary?.na || 0);
+          const totalFromResults = assessmentResult.results.length;
+          const totalsMatch = totalFromSummary === totalFromResults;
+          
+          if (!totalsMatch) {
+            return (
+              <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                <div className="text-sm font-medium text-yellow-800 mb-1">
+                  ⚠️ Totals Mismatch
+                </div>
+                <div className="text-xs text-yellow-700">
+                  Summary total ({totalFromSummary}) ≠ Results count ({totalFromResults})
+                  {jobId && <div>Job ID: {jobId}</div>}
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()
+      )}
+
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>
           <div className="text-gray-600">Endpoints crawled</div>
@@ -141,6 +165,18 @@ const SummaryPanel = ({
         <div>
           <div className="text-gray-600">NA (no params)</div>
           <div className="font-semibold text-gray-500">{na}</div>
+        </div>
+        
+        <div>
+          <div className="text-gray-600 flex items-center gap-1">
+            Total
+            {assessmentResult?.results && (
+              <span className="text-xs text-blue-500" title="Total results count">ℹ️</span>
+            )}
+          </div>
+          <div className="font-semibold">
+            {assessmentResult?.results?.length || 0}
+          </div>
         </div>
         
         <div>

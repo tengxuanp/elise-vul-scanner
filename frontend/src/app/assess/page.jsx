@@ -25,7 +25,7 @@ export default function AssessPage() {
   // Initialize strategy from URL parameter
   useEffect(() => {
     const urlStrategy = searchParams.get("strategy");
-    if (urlStrategy && ["auto", "probe_only", "ml_only", "hybrid"].includes(urlStrategy)) {
+    if (urlStrategy && ["auto", "probe_only", "ml_only", "ml_with_context", "hybrid"].includes(urlStrategy)) {
       setStrategy(urlStrategy);
     }
   }, [searchParams]);
@@ -123,6 +123,14 @@ export default function AssessPage() {
   const findings = assessmentResult?.findings || [];
   const results = assessmentResult?.results || [];
   const negatives = results.filter(r => r.decision === "abstain");
+  
+  // Check for strategy violations
+  const resultStrategy = assessmentResult?.meta?.strategy;
+  const violations = assessmentResult?.meta?.violations || [];
+  const hasProbeViolations = resultStrategy === "ml_only" && results.some(r => r.rank_source === "probe_only");
+  const hasRedirectViolations = (resultStrategy === "ml_only" || resultStrategy === "ml_with_context") && 
+                                results.some(r => r.family === "redirect");
+  const hasViolations = violations.length > 0 || hasProbeViolations || hasRedirectViolations;
   
   // Calculate detailed breakdown for summary using new decision taxonomy
   const totalResults = results.length;
@@ -236,6 +244,7 @@ export default function AssessPage() {
                         <option value="auto">Auto (recommended)</option>
                         <option value="probe_only">Probe-only</option>
                         <option value="ml_only">ML-only</option>
+                        <option value="ml_with_context">ML with Context</option>
                         <option value="hybrid">Hybrid (demo)</option>
                       </select>
                     </div>
@@ -304,6 +313,7 @@ export default function AssessPage() {
                       Strategy: {strategy === "auto" ? "Auto (recommended)" : 
                                 strategy === "probe_only" ? "Probe-only" :
                                 strategy === "ml_only" ? "ML-only" :
+                                strategy === "ml_with_context" ? "ML with Context" :
                                 strategy === "hybrid" ? "Hybrid (demo)" : strategy}
                     </div>
                     <div className="text-xs text-green-700 space-y-1">
@@ -359,6 +369,14 @@ export default function AssessPage() {
                         <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
                           <div className="text-sm text-yellow-800">
                             Probe + one context-guided injection per XSS hit (demo).
+                          </div>
+                        </div>
+                      );
+                    } else if (assessmentResult?.meta?.strategy === "ml_with_context") {
+                      return (
+                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+                          <div className="text-sm text-blue-800">
+                            XSS canary for context; Top-K injections. Redirect/SQLi probes disabled.
                           </div>
                         </div>
                       );
@@ -511,6 +529,22 @@ export default function AssessPage() {
                   <div className="text-center py-8 text-zinc-600">
                     <p className="mb-4">Ready to assess {targetUrl}</p>
                     <p className="text-sm">Click the "Assess" button above to start vulnerability assessment.</p>
+                  </div>
+                )}
+                
+                {/* Violation Badge */}
+                {hasViolations && (
+                  <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded">
+                    <div className="flex items-center">
+                      <div className="text-sm text-red-800 font-medium">
+                        ⚠️ Strategy Violation Detected
+                      </div>
+                    </div>
+                    <div className="text-xs text-red-600 mt-1">
+                      {hasProbeViolations && "Probe results found in ML-only mode. "}
+                      {hasRedirectViolations && "Redirect results found in ML mode. "}
+                      {violations.length > 0 && `Backend violations: ${violations.join(", ")}`}
+                    </div>
                   </div>
                 )}
               </div>
