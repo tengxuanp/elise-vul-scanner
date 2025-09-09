@@ -192,6 +192,47 @@ const SummaryPanel = ({
         </div>
       </div>
       
+      {/* Top Payload Families */}
+      {assessmentResult.results && assessmentResult.results.length > 0 && (
+        <div className="mt-6 pt-4 border-t">
+          <h4 className="font-medium text-sm text-gray-700 mb-3">Top Payload Families (by positives)</h4>
+          {(() => {
+            // Group by payload family prefix
+            const familyCounts = {};
+            assessmentResult.results
+              .filter(r => r.decision === "positive" && r.payload)
+              .forEach(r => {
+                const family = r.family || "unknown";
+                familyCounts[family] = (familyCounts[family] || 0) + 1;
+              });
+            
+            const sortedFamilies = Object.entries(familyCounts)
+              .sort(([,a], [,b]) => b - a)
+              .slice(0, 5); // Top 5
+            
+            if (sortedFamilies.length === 0) {
+              return <div className="text-sm text-gray-500">No positive results to analyze</div>;
+            }
+            
+            return (
+              <div className="space-y-2">
+                {sortedFamilies.map(([family, count]) => (
+                  <div key={family} className="flex items-center justify-between p-2 bg-gray-50 rounded">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium capitalize">{family}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-green-600">{count}</span>
+                      <span className="text-xs text-gray-500">positives</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+      
       {/* XSS Context Statistics */}
       {meta?.xss_reflections_total > 0 && (
         <div className="mt-6 pt-4 border-t">

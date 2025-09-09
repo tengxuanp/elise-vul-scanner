@@ -7,6 +7,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
   const [evidence, setEvidence] = useState(null);
   const [loading, setLoading] = useState(false);
   const [showRaw, setShowRaw] = useState(false);
+  const [activeTab, setActiveTab] = useState("request");
   
   useEffect(()=>{ document.body.style.overflow = open ? "hidden" : ""; }, [open]);
   
@@ -162,6 +163,276 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
     );
   };
 
+  // Tab components
+  const TabButton = ({ id, label, active, onClick }) => (
+    <button
+      onClick={() => onClick(id)}
+      className={`px-3 py-2 text-sm font-medium rounded-t-lg border-b-2 ${
+        active
+          ? "border-blue-500 text-blue-600 bg-blue-50"
+          : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const ProbeSignalTab = ({ evidence }) => {
+    if (!evidence?.marker && !evidence?.reflection_details && !evidence?.redirect_details && !evidence?.sqli_details) {
+      return <div className="text-sm text-gray-500">No probe signal data available</div>;
+    }
+
+    return (
+      <div className="space-y-4">
+        {/* XSS Marker */}
+        {evidence?.marker && (
+          <div>
+            <div className="text-sm font-medium mb-2">XSS Marker</div>
+            <div className="space-y-2">
+              <div>
+                <div className="text-xs text-gray-500">Raw</div>
+                <div className="flex items-center gap-2">
+                  <code className="flex-1 bg-gray-50 p-2 rounded text-xs font-mono">{evidence.marker.raw}</code>
+                  <button 
+                    onClick={() => navigator.clipboard.writeText(evidence.marker.raw)}
+                    className="px-2 py-1 bg-blue-600 text-white text-xs rounded"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">URL Encoded</div>
+                <code className="block bg-gray-50 p-2 rounded text-xs font-mono">{evidence.marker.url}</code>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">HTML Escaped</div>
+                <code className="block bg-gray-50 p-2 rounded text-xs font-mono">{evidence.marker.html}</code>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Reflection Details */}
+        {evidence?.reflection_details && (
+          <div>
+            <div className="text-sm font-medium mb-2">Reflection Context</div>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Context</div>
+                <div className="font-mono">{evidence.reflection_details.context}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Escaping</div>
+                <div className="font-mono">{evidence.reflection_details.escaping}</div>
+              </div>
+              {evidence.reflection_details.path_hint && (
+                <div className="col-span-2">
+                  <div className="text-xs text-gray-500">Path Hint</div>
+                  <div className="font-mono text-xs">{evidence.reflection_details.path_hint}</div>
+                </div>
+              )}
+            </div>
+            {(evidence.reflection_details.left64 || evidence.reflection_details.right64) && (
+              <div className="mt-3">
+                <div className="text-xs text-gray-500 mb-1">Context Fragments</div>
+                <div className="space-y-1">
+                  {evidence.reflection_details.left64 && (
+                    <div>
+                      <div className="text-xs text-gray-500">Left (64 chars)</div>
+                      <code className="block bg-gray-50 p-2 rounded text-xs font-mono">{evidence.reflection_details.left64}</code>
+                    </div>
+                  )}
+                  {evidence.reflection_details.right64 && (
+                    <div>
+                      <div className="text-xs text-gray-500">Right (64 chars)</div>
+                      <code className="block bg-gray-50 p-2 rounded text-xs font-mono">{evidence.reflection_details.right64}</code>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Redirect Details */}
+        {evidence?.redirect_details && (
+          <div>
+            <div className="text-sm font-medium mb-2">Redirect Oracle</div>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Location</div>
+                <div className="font-mono text-xs break-all">{evidence.redirect_details.location}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Status</div>
+                <div className="font-mono">{evidence.redirect_details.status}</div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* SQLi Details */}
+        {evidence?.sqli_details && (
+          <div>
+            <div className="text-sm font-medium mb-2">SQL Error</div>
+            <div className="space-y-2">
+              <div>
+                <div className="text-xs text-gray-500">Error Excerpt</div>
+                <code className="block bg-red-50 p-2 rounded text-xs font-mono text-red-800">{evidence.sqli_details.error_excerpt}</code>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Dialect Hint</div>
+                <div className="font-mono">{evidence.sqli_details.dialect_hint}</div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const RankingTab = ({ evidence }) => {
+    if (!evidence?.ranking_topk || evidence.ranking_topk.length === 0) {
+      return <div className="text-sm text-gray-500">No ranking data available</div>;
+    }
+
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center gap-4">
+          <div>
+            <div className="text-xs text-gray-500">Source</div>
+            <div className="text-sm font-medium">{evidence.ranking_source || "unknown"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Pool Size</div>
+            <div className="text-sm font-medium">{evidence.ranking_pool_size || 0}</div>
+          </div>
+          {evidence.ranking_model && (
+            <div>
+              <div className="text-xs text-gray-500">Model</div>
+              <div className="text-sm font-medium">{evidence.ranking_model.name}</div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <div className="text-sm font-medium mb-2">Top-K Payloads</div>
+          <div className="space-y-2">
+            {evidence.ranking_topk.map((payload, idx) => (
+              <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded">
+                <div className="flex-1">
+                  <div className="text-sm font-mono">{payload.payload_id}</div>
+                  <div className="text-xs text-gray-500">{payload.family}</div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="text-sm font-medium">{payload.score.toFixed(3)}</div>
+                  {idx === 0 && (
+                    <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">✓ Used</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const AttemptTimelineTab = ({ evidence }) => {
+    if (!evidence?.attempts_timeline || evidence.attempts_timeline.length === 0) {
+      return <div className="text-sm text-gray-500">No attempt timeline available</div>;
+    }
+
+    return (
+      <div className="space-y-3">
+        {evidence.attempts_timeline.map((attempt, idx) => (
+          <div key={idx} className="border rounded p-3">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium">Attempt #{attempt.attempt_idx}</div>
+              <div className="flex items-center gap-2">
+                <span className={`px-2 py-0.5 text-xs rounded ${
+                  attempt.hit ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-700"
+                }`}>
+                  {attempt.hit ? "✓ Hit" : "✗ Miss"}
+                </span>
+                <span className="text-xs text-gray-500">{attempt.rank_source}</span>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Payload</div>
+                <div className="font-mono text-xs break-all">{attempt.payload_id}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Request</div>
+                <div className="font-mono text-xs">{attempt.request.method} {attempt.request.path}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Response</div>
+                <div className="font-mono text-xs">{attempt.response.status} ({attempt.response.latency_ms}ms)</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Parameter</div>
+                <div className="font-mono text-xs">{attempt.request.param_in}:{attempt.request.param}</div>
+              </div>
+            </div>
+            
+            {attempt.why && attempt.why.length > 0 && (
+              <div className="mt-2">
+                <div className="text-xs text-gray-500">Why</div>
+                <div className="flex gap-1 mt-1">
+                  {attempt.why.map((reason, reasonIdx) => (
+                    <span key={reasonIdx} className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded">
+                      {reason}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  const WhyVulnerableTab = ({ evidence }) => {
+    if (!evidence?.vuln_proof) {
+      return <div className="text-sm text-gray-500">No vulnerability proof available</div>;
+    }
+
+    return (
+      <div className="space-y-4">
+        <div>
+          <div className="text-xs text-gray-500 mb-1">Proof Type</div>
+          <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded">
+            {evidence.vuln_proof.type}
+          </span>
+        </div>
+        
+        <div>
+          <div className="text-sm font-medium mb-2">Summary</div>
+          <div className="text-sm text-gray-700">{evidence.vuln_proof.summary}</div>
+        </div>
+        
+        {evidence.vuln_proof.details && evidence.vuln_proof.details.length > 0 && (
+          <div>
+            <div className="text-sm font-medium mb-2">Details</div>
+            <ul className="space-y-1">
+              {evidence.vuln_proof.details.map((detail, idx) => (
+                <li key={idx} className="text-sm text-gray-700 flex items-start">
+                  <span className="text-blue-500 mr-2">•</span>
+                  {detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow p-4">
@@ -184,156 +455,215 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
         
         {!loading && evidence && (
           <>
-            <div className="mb-2">
-              <div className="text-xs text-zinc-500 mb-1">Reproduce</div>
-              <div className="flex gap-2">
-                <code className="flex-1 bg-zinc-50 border rounded p-2 overflow-x-auto text-xs">{curl}</code>
-                <button className="px-2 py-1 rounded bg-zinc-900 text-white text-xs" onClick={()=>navigator.clipboard.writeText(curl)}>Copy</button>
-                <button className="px-2 py-1 rounded bg-blue-600 text-white text-xs" onClick={downloadHttp}>Download .http</button>
-                <button className="px-2 py-1 rounded bg-gray-600 text-white text-xs" onClick={copyHeaders}>Copy headers</button>
-              </div>
+            {/* Tab Navigation */}
+            <div className="border-b border-gray-200 mb-4">
+              <nav className="flex space-x-8">
+                <TabButton
+                  id="request"
+                  label="Request/Response"
+                  active={activeTab === "request"}
+                  onClick={setActiveTab}
+                />
+                <TabButton
+                  id="probe"
+                  label="Probe Signal"
+                  active={activeTab === "probe"}
+                  onClick={setActiveTab}
+                />
+                <TabButton
+                  id="ranking"
+                  label="Ranking & Top-K"
+                  active={activeTab === "ranking"}
+                  onClick={setActiveTab}
+                />
+                <TabButton
+                  id="timeline"
+                  label="Attempt Timeline"
+                  active={activeTab === "timeline"}
+                  onClick={setActiveTab}
+                />
+                <TabButton
+                  id="why"
+                  label="Why Vulnerable"
+                  active={activeTab === "why"}
+                  onClick={setActiveTab}
+                />
+              </nav>
             </div>
 
-            {/* Evidence Details */}
-            <div className="my-4 space-y-3">
-              {/* CVSS and Model Confidence */}
-              <div className="flex items-center gap-4">
-                <div>
-                  <div className="text-xs text-zinc-500">CVSS</div>
-                  <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
-                </div>
-                {evidence?.p_cal != null && (
+            {/* Tab Content */}
+            <div className="min-h-[400px]">
+              {activeTab === "request" && (
+                <div className="space-y-4">
                   <div>
-                    <div className="text-xs text-zinc-500">Model confidence (p_cal)</div>
-                    <div className="font-semibold">{evidence.p_cal.toFixed(2)}</div>
-                  </div>
-                )}
-              </div>
-
-              {/* Provenance */}
-              <div>
-                <div className="text-xs text-zinc-500 mb-1">Provenance</div>
-                <EvidenceProvenanceChips why={evidence?.why} />
-              </div>
-
-              {/* Probe Signals */}
-              <div>
-                <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
-                <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
-              </div>
-
-              {/* Telemetry */}
-              <div>
-                <div className="text-xs text-zinc-500 mb-1">Telemetry</div>
-                <div className="flex gap-2 text-xs">
-                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                    Attempt: {evidence?.attempt_idx ?? 0}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                    Top-K: {evidence?.top_k_used ?? 0}
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
-                    Rank: {evidence?.rank_source ?? "—"}
-                  </span>
-                </div>
-              </div>
-
-              {/* XSS Context/Escaping or SQLi Dialect */}
-              {(evidence?.xss_context || evidence?.xss_escaping) && (
-                <div>
-                  <div className="text-xs text-zinc-500 mb-1">XSS Context</div>
-                  <div className="flex gap-2 text-xs">
-                    {evidence.xss_context && (
-                      <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
-                        Context: {evidence.xss_context}
-                      </span>
-                    )}
-                    {evidence.xss_escaping && (
-                      <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
-                        Escaping: {evidence.xss_escaping}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {evidence?.dialect && (
-                <div>
-                  <div className="text-xs text-zinc-500 mb-1">SQLi Dialect</div>
-                  <div className="flex gap-2 text-xs">
-                    <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
-                      {evidence.dialect}
-                    </span>
-                    {evidence.dialect_confident && (
-                      <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
-                        (confident)
-                      </span>
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            {/* ML Scores */}
-            {(() => {
-              const isProbeOnly = evidence?.rank_source === "probe_only";
-              const noMLAttempts = meta?.ml_inject_attempts === 0;
-              const hasMLScores = evidence?.score !== undefined || evidence?.p_cal !== undefined;
-              
-              if (isProbeOnly || noMLAttempts) {
-                return (
-                  <div className="my-4">
-                    <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
-                    <div className="text-xs text-gray-500 italic">
-                      No ML injection attempted.
+                    <div className="text-xs text-zinc-500 mb-1">Reproduce</div>
+                    <div className="flex gap-2">
+                      <code className="flex-1 bg-zinc-50 border rounded p-2 overflow-x-auto text-xs">{curl}</code>
+                      <button className="px-2 py-1 rounded bg-zinc-900 text-white text-xs" onClick={()=>navigator.clipboard.writeText(curl)}>Copy</button>
+                      <button className="px-2 py-1 rounded bg-blue-600 text-white text-xs" onClick={downloadHttp}>Download .http</button>
+                      <button className="px-2 py-1 rounded bg-gray-600 text-white text-xs" onClick={copyHeaders}>Copy headers</button>
                     </div>
                   </div>
-                );
-              } else if (hasMLScores) {
-                return (
-                  <div className="my-4">
-                    <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
-                    <MLScoreDisplay 
-                      score={evidence?.score}
-                      p_cal={evidence?.p_cal}
-                      family={evidence?.family}
-                    />
+
+                  {/* Evidence Details */}
+                  <div className="space-y-3">
+                    {/* CVSS and Model Confidence */}
+                    <div className="flex items-center gap-4">
+                      <div>
+                        <div className="text-xs text-zinc-500">CVSS</div>
+                        <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
+                      </div>
+                      {evidence?.p_cal != null && (
+                        <div>
+                          <div className="text-xs text-zinc-500">Model confidence (p_cal)</div>
+                          <div className="font-semibold">{evidence.p_cal.toFixed(2)}</div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Provenance */}
+                    <div>
+                      <div className="text-xs text-zinc-500 mb-1">Provenance</div>
+                      <EvidenceProvenanceChips why={evidence?.why} />
+                    </div>
+
+                    {/* Probe Signals */}
+                    <div>
+                      <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
+                      <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
+                    </div>
+
+                    {/* Telemetry */}
+                    <div>
+                      <div className="text-xs text-zinc-500 mb-1">Telemetry</div>
+                      <div className="flex gap-2 text-xs">
+                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                          Attempt: {evidence?.attempt_idx ?? 0}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                          Top-K: {evidence?.top_k_used ?? 0}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-gray-100 text-gray-700">
+                          Rank: {evidence?.rank_source ?? "—"}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* XSS Context/Escaping or SQLi Dialect */}
+                    {(evidence?.xss_context || evidence?.xss_escaping) && (
+                      <div>
+                        <div className="text-xs text-zinc-500 mb-1">XSS Context</div>
+                        <div className="flex gap-2 text-xs">
+                          {evidence.xss_context && (
+                            <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
+                              Context: {evidence.xss_context}
+                            </span>
+                          )}
+                          {evidence.xss_escaping && (
+                            <span className="px-2 py-0.5 rounded bg-orange-100 text-orange-700">
+                              Escaping: {evidence.xss_escaping}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {evidence?.dialect && (
+                      <div>
+                        <div className="text-xs text-zinc-500 mb-1">SQLi Dialect</div>
+                        <div className="flex gap-2 text-xs">
+                          <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
+                            {evidence.dialect}
+                          </span>
+                          {evidence.dialect_confident && (
+                            <span className="px-2 py-0.5 rounded bg-green-100 text-green-700">
+                              (confident)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
-                );
-              }
-              return null;
-            })()}
-            
-            <div className="text-xs text-zinc-500 my-2 flex items-center justify-between">
-              <span>Response snippet</span>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => setShowRaw(!showRaw)}
-                  className="px-2 py-1 rounded bg-gray-600 text-white text-xs"
-                >
-                  {showRaw ? "View Safe" : "View Raw"}
-                </button>
-                {showRaw && evidence?.response_snippet_raw && (
-                  <button 
-                    onClick={() => {
-                      const blob = new Blob([atob(evidence.response_snippet_raw)], { type: "text/plain" });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement("a");
-                      a.href = url;
-                      a.download = `evidence-${evidence?.family || 'unknown'}-raw.txt`;
-                      a.click();
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="px-2 py-1 rounded bg-blue-600 text-white text-xs"
-                  >
-                    Download Raw
-                  </button>
-                )}
-              </div>
+                  
+                  {/* ML Scores */}
+                  {(() => {
+                    const isProbeOnly = evidence?.rank_source === "probe_only";
+                    const noMLAttempts = meta?.ml_inject_attempts === 0;
+                    const hasMLScores = evidence?.score !== undefined || evidence?.p_cal !== undefined;
+                    
+                    if (isProbeOnly || noMLAttempts) {
+                      return (
+                        <div className="my-4">
+                          <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+                          <div className="text-xs text-gray-500 italic">
+                            No ML injection attempted.
+                          </div>
+                        </div>
+                      );
+                    } else if (hasMLScores) {
+                      return (
+                        <div className="my-4">
+                          <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
+                          <MLScoreDisplay 
+                            score={evidence?.score}
+                            p_cal={evidence?.p_cal}
+                            family={evidence?.family}
+                          />
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
+                  
+                  <div className="text-xs text-zinc-500 my-2 flex items-center justify-between">
+                    <span>Response snippet</span>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => setShowRaw(!showRaw)}
+                        className="px-2 py-1 rounded bg-gray-600 text-white text-xs"
+                      >
+                        {showRaw ? "View Safe" : "View Raw"}
+                      </button>
+                      {showRaw && evidence?.response_snippet_raw && (
+                        <button 
+                          onClick={() => {
+                            const blob = new Blob([atob(evidence.response_snippet_raw)], { type: "text/plain" });
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement("a");
+                            a.href = url;
+                            a.download = `evidence-${evidence?.family || 'unknown'}-raw.txt`;
+                            a.click();
+                            URL.revokeObjectURL(url);
+                          }}
+                          className="px-2 py-1 rounded bg-blue-600 text-white text-xs"
+                        >
+                          Download Raw
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <pre className="bg-zinc-50 border rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">
+                    {showRaw && evidence?.response_snippet_raw ? atob(evidence.response_snippet_raw) : (evidence?.response_snippet_text || evidence?.response_snippet || "")}
+                  </pre>
+                </div>
+              )}
+
+            {activeTab === "probe" && (
+              <ProbeSignalTab evidence={evidence} />
+            )}
+
+            {activeTab === "ranking" && (
+              <RankingTab evidence={evidence} />
+            )}
+
+            {activeTab === "timeline" && (
+              <AttemptTimelineTab evidence={evidence} />
+            )}
+
+            {activeTab === "why" && (
+              <WhyVulnerableTab evidence={evidence} />
+            )}
             </div>
-            <pre className="bg-zinc-50 border rounded p-3 max-h-80 overflow-auto whitespace-pre-wrap text-xs">
-{showRaw && evidence?.response_snippet_raw ? atob(evidence.response_snippet_raw) : (evidence?.response_snippet_text || evidence?.response_snippet || "")}
-            </pre>
           </>
         )}
       </div>

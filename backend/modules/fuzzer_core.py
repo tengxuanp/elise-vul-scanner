@@ -210,6 +210,43 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
                 ev.cvss = cvss_for(fam, ev)
                 ev.why = unique_merge(ev.why, [reason_code])
+                
+                # Add rich evidence data
+                import uuid
+                from backend.modules.evidence import (
+                    create_rich_evidence_meta, create_xss_marker, create_reflection_details,
+                    create_redirect_details, create_sqli_details, create_vuln_proof,
+                    redact_sensitive_headers, truncate_response_body
+                )
+                
+                result_id = str(uuid.uuid4())
+                ev.result_id = result_id
+                ev.strategy = plan.name.value if plan else "auto"
+                ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                
+                # Redact sensitive headers
+                ev.request_headers = redact_sensitive_headers(ev.request_headers)
+                # Truncate response body
+                ev.response_snippet = truncate_response_body(ev.response_snippet)
+                
+                # Add probe signal details
+                if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                    xss_probe = probe_bundle.xss
+                    canary = getattr(xss_probe, "raw_reflection", "<probe>")
+                    ev.marker = create_xss_marker(canary)
+                    ev.reflection_details = create_reflection_details(xss_probe)
+                elif fam == "redirect" and hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                    ev.redirect_details = create_redirect_details(probe_bundle.redirect)
+                elif fam == "sqli" and hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
+                    ev.sqli_details = create_sqli_details(probe_bundle.sqli)
+                
+                # Add vulnerability proof
+                context = getattr(ev, "xss_context", None)
+                escaping = getattr(ev, "xss_escaping", None)
+                redirect_location = ev.redirect_details.get("location") if ev.redirect_details else None
+                sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
+                ev.vuln_proof = create_vuln_proof(fam, context, escaping, redirect_location, sqli_error)
+                
                 evidence_id = write_evidence(job_id, ev, probe_bundle)
                 
                 # Log confirm event
@@ -478,8 +515,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     
                     # Build comprehensive signals from probes + injection outcome
                     signals = {
-                        "xss_context": getattr(probe_bundle.xss, "context", None) if probe_bundle else None,
-                        "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle else None,
+                        "xss_context": getattr(probe_bundle.xss, "xss_context", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
+                        "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
                         "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
                         "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
                     }
@@ -504,6 +541,65 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         ev.score = score
                         ev.p_cal = p_cal
                         ev.why = unique_merge(ev.why, ["ml_ranked", reason_code])
+                        
+                        # Add rich evidence data for injection
+                        import uuid
+                        from backend.modules.evidence import (
+                            create_rich_evidence_meta, create_xss_marker, create_reflection_details,
+                            create_redirect_details, create_sqli_details, create_vuln_proof,
+                            create_ranking_info, create_attempt_timeline,
+                            redact_sensitive_headers, truncate_response_body
+                        )
+                        
+                        result_id = str(uuid.uuid4())
+                        ev.result_id = result_id
+                        ev.strategy = plan.name.value if plan else "auto"
+                        ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        
+                        # Redact sensitive headers
+                        ev.request_headers = redact_sensitive_headers(ev.request_headers)
+                        # Truncate response body
+                        ev.response_snippet = truncate_response_body(ev.response_snippet)
+                        
+                        # Add probe signal details (if available)
+                        if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                            xss_probe = probe_bundle.xss
+                            canary = getattr(xss_probe, "raw_reflection", "<probe>")
+                            ev.marker = create_xss_marker(canary)
+                            ev.reflection_details = create_reflection_details(xss_probe)
+                        elif hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                            ev.redirect_details = create_redirect_details(probe_bundle.redirect)
+                        elif hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
+                            ev.sqli_details = create_sqli_details(probe_bundle.sqli)
+                        
+                        # Add ranking information
+                        ev.ranking_topk = create_ranking_info(ranked, rank_source, model_tag)
+                        ev.ranking_source = rank_source
+                        ev.ranking_pool_size = len(ranked)
+                        ev.ranking_model = {"name": model_tag, "version": "2025-01-01", "features": ["param_in", "context", "path_hash"]} if model_tag else None
+                        
+                        # Add attempt timeline (current attempt)
+                        attempt_data = {
+                            "payload": cand.get("payload", ""),
+                            "method": target.method,
+                            "path": target.path,
+                            "param_in": target.param_in,
+                            "param": target.param,
+                            "status": inj.status,
+                            "latency_ms": getattr(inj, "latency_ms", 0),
+                            "hit": True,
+                            "why": ["signal:reflection+payload"],
+                            "rank_source": rank_source
+                        }
+                        ev.attempts_timeline = [attempt_data]
+                        
+                        # Add vulnerability proof
+                        context = getattr(ev, "xss_context", None)
+                        escaping = getattr(ev, "xss_escaping", None)
+                        redirect_location = ev.redirect_details.get("location") if ev.redirect_details else None
+                        sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
+                        ev.vuln_proof = create_vuln_proof(fired_family, context, escaping, redirect_location, sqli_error)
+                        
                         evidence_id = write_evidence(job_id, ev, probe_bundle)
                         
                         # Log confirm event

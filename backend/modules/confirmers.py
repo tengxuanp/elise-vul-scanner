@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 
 # thresholds (env overrides)
-TAU_SQLI = float(os.getenv("ELISE_TAU_SQLI", "0.50"))
+TAU_SQLI = float(os.getenv("ELISE_TAU_SQLI", "0.15"))
 
 
 def confirm_xss(signals: dict) -> tuple[bool, str | None]:

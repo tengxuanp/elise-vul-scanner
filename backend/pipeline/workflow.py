@@ -6,6 +6,131 @@ from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_p
 from backend.modules.event_aggregator import get_aggregator
 from backend.app_state import REQUIRE_RANKER
 
+def create_assessment_response_from_results(results: List[Dict[str, Any]], job_id: str, strategy: str) -> Dict[str, Any]:
+    """
+    Create assessment response from existing results.
+    
+    Args:
+        results: List of assessment results
+        job_id: Job ID
+        strategy: Strategy used
+        
+    Returns:
+        Assessment response dictionary
+    """
+    # Calculate summary statistics
+    total = len(results)
+    positive = sum(1 for r in results if r.get("decision") == "positive")
+    suspected = sum(1 for r in results if r.get("decision") == "suspected")
+    abstain = sum(1 for r in results if r.get("decision") == "abstain")
+    na = sum(1 for r in results if r.get("decision") == "not_applicable")
+    error = sum(1 for r in results if r.get("decision") == "error")
+    
+    # Calculate confirmed counts
+    confirmed_probe = sum(1 for r in results if r.get("rank_source") == "probe_only" and r.get("decision") == "positive")
+    confirmed_ml_inject = sum(1 for r in results if r.get("rank_source") in ["ml", "ctx_pool"] and r.get("decision") == "positive")
+    
+    # Create findings aggregates by family (same structure as fuzzer_core.py)
+    findings_by_family = {}
+    for result in results:
+        if result.get("decision") == "positive" and result.get("family"):
+            family = result["family"]
+            if family not in findings_by_family:
+                findings_by_family[family] = {
+                    "family": family,
+                    "total": 0,
+                    "positives": 0,
+                    "suspected": 0,
+                    "examples": []
+                }
+            findings_by_family[family]["total"] += 1
+            findings_by_family[family]["positives"] += 1
+            if result.get("evidence_id") and len(findings_by_family[family]["examples"]) < 3:
+                findings_by_family[family]["examples"].append(result["evidence_id"])
+    
+    # Convert to list
+    findings = list(findings_by_family.values())
+    
+    # Create meta information
+    meta = {
+        "endpoints_supplied": len(set(r.get("target", {}).get("url", "") for r in results)),
+        "targets_enumerated": total,
+        "endpoints_without_params": na,
+        "processing_ms": 0,  # No processing time for existing results
+        "processing_time": "0.0s",
+        "probe_attempts": 0,
+        "probe_successes": confirmed_probe,
+        "ml_inject_attempts": 0,
+        "ml_inject_successes": confirmed_ml_inject,
+        "strategy": strategy,
+        "flags": {
+            "probes_disabled": [],
+            "allow_injections": True,
+            "force_ctx_inject_on_probe": False
+        },
+        "strategy_validation": {
+            "strategy": strategy,
+            "ml_required": False,
+            "ml_available": True,
+            "fallback": None,
+            "flags": []
+        },
+        "violations": [],
+        "xss_reflections_total": 0,
+        "xss_rule_high_conf": 0,
+        "xss_ml_invoked": 0,
+        "xss_final_from_ml": 0,
+        "xss_context_dist": {},
+        "xss_ctx_pool_used": 0,
+        "xss_first_hit_attempts_ctx": 0,
+        "xss_first_hit_attempts_baseline": 0,
+        "xss_first_hit_attempts_delta": 0,
+        "counters_consistent": True,
+        "injections_attempted": 0,
+        "injections_succeeded": confirmed_probe + confirmed_ml_inject,
+        "budget_ms_used": 0,
+        "errors_by_kind": {}
+    }
+    
+    return {
+        "job_id": job_id,
+        "mode": "from_persisted",
+        "summary": {
+            "total": total,
+            "positive": positive,
+            "suspected": suspected,
+            "abstain": abstain,
+            "na": na,
+            "confirmed_probe": confirmed_probe,
+            "confirmed_ml_inject": confirmed_ml_inject
+        },
+        "results": results,
+        "findings": findings,
+        "meta": meta,
+        "healthz": {
+            "ok": True,
+            "data_dir": str(REQUIRE_RANKER),
+            "model_dir": "models",
+            "use_ml": True,
+            "require_ranker": True,
+            "ml_active": True,
+            "models_available": {},
+            "using_defaults": False,
+            "ml_status": "models_available",
+            "available_models": {},
+            "defaults_in_use": False,
+            "thresholds": {
+                "sqli_tau": 0.15,
+                "xss_tau": 0.75,
+                "redirect_tau": 0.6
+            },
+            "playwright_ok": True,
+            "crawler_import_ok": True,
+            "checks": [],
+            "failed_checks": []
+        }
+    }
+
 def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto")->Dict[str,Any]:
     """
     Assess endpoints using deterministic target enumeration.
@@ -13,6 +138,22 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     """
     import time
     from threading import Lock
+    from backend.modules.evidence_reader import read_evidence_files
+    
+    # Check if evidence files already exist (for from_persisted mode)
+    # Only use existing results if they match the current strategy
+    existing_results = read_evidence_files(job_id)
+    if existing_results:
+        # Filter existing results to only include those with the matching strategy
+        matching_results = [r for r in existing_results if r.get("strategy") == strategy]
+        if matching_results:
+            print(f"Found {len(matching_results)} existing evidence files for job {job_id} with matching strategy {strategy}")
+            # Return matching results instead of re-running assessment
+            return create_assessment_response_from_results(matching_results, job_id, strategy)
+        else:
+            # Show what strategies are available
+            available_strategies = set(r.get("strategy") for r in existing_results)
+            print(f"Found existing evidence files for job {job_id} with strategies {available_strategies}, but current strategy is {strategy}. Re-running assessment.")
     
     # Parse strategy and create execution plan
     try:

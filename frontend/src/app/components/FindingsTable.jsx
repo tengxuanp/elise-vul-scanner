@@ -39,6 +39,22 @@ const PCalBadge = ({ p_cal }) => {
   );
 };
 
+// Proof Type badge
+const ProofTypeBadge = ({ vuln_proof }) => {
+  if (!vuln_proof?.type) return null;
+  const typeMap = {
+    "xss_reflection": "XSS",
+    "redirect_header": "Redirect", 
+    "sqli_error": "SQLi",
+    "other": "Other"
+  };
+  return (
+    <span className="px-2 py-0.5 rounded text-xs bg-red-100 text-red-700" title={`Proof: ${vuln_proof.type}`}>
+      Proof: {typeMap[vuln_proof.type] || vuln_proof.type}
+    </span>
+  );
+};
+
 // Rank Source badge
 const RankSourceBadge = ({ rank_source }) => {
   if (!rank_source) return null;
@@ -219,6 +235,7 @@ export default function FindingsTable({ results=[], onView }) {
         <div className="space-y-1">
           {badge(result.decision)}
           <ProvenanceChips why={result.why} />
+          <ProofTypeBadge vuln_proof={result.vuln_proof} />
           <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} />
           <XSSContextChips 
             family={result.family} 
