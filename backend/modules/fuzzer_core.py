@@ -10,39 +10,41 @@ from typing import Dict, Any, List, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from collections import defaultdict
+from unittest.mock import Mock
 
-# Global event aggregator for tracking probe and injection attempts
-_event_aggregator = defaultdict(lambda: {"probe_attempts": 0, "probe_successes": 0, "inject_attempts": 0, "inject_successes": 0})
+# Import the new event aggregator
+from backend.modules.event_aggregator import get_aggregator
 
 def record_probe_attempt(target_id: str, family: str, success: bool):
     """Record a probe attempt event."""
-    _event_aggregator[target_id]["probe_attempts"] += 1
-    if success:
-        _event_aggregator[target_id]["probe_successes"] += 1
+    aggregator = get_aggregator()
+    aggregator.record_probe_attempt(success)
 
 def record_inject_attempt(target_id: str, family: str, success: bool):
     """Record an injection attempt event."""
-    _event_aggregator[target_id]["inject_attempts"] += 1
-    if success:
-        _event_aggregator[target_id]["inject_successes"] += 1
+    aggregator = get_aggregator()
+    aggregator.record_inject_attempt(success)
 
 def get_event_totals() -> Dict[str, int]:
     """Get total counts from all events."""
-    totals = {"probe_attempts": 0, "probe_successes": 0, "inject_attempts": 0, "inject_successes": 0}
-    for events in _event_aggregator.values():
-        for key in totals:
-            totals[key] += events[key]
-    return totals
+    aggregator = get_aggregator()
+    return {
+        "probe_attempts": aggregator.probe_attempts,
+        "probe_successes": aggregator.probe_successes,
+        "inject_attempts": aggregator.inject_attempts,
+        "inject_successes": aggregator.inject_successes
+    }
 
 def clear_event_aggregator():
     """Clear the event aggregator (for testing)."""
-    global _event_aggregator
-    _event_aggregator.clear()
+    aggregator = get_aggregator()
+    aggregator.reset()
 
 from .targets import enumerate_targets, Target
 from .probes.engine import run_probes
 from .gates import gate_not_applicable, gate_candidate_xss, gate_candidate_sqli, gate_candidate_redirect
 from .ml.infer_ranker import rank_payloads
+from .strategy import probe_enabled, injections_enabled
 from .ml.feature_spec import build_features
 from .injector import inject_once
 from .evidence import EvidenceRow, write_evidence
@@ -106,7 +108,7 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
     fired_family, reason_code = oracle_from_signals(signals)
     return (fired_family, reason_code) if fired_family else None
 
-def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None) -> Dict[str, Any]:
+def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None) -> Dict[str, Any]:
     """Process a single target and return the result."""
     try:
         if gate_not_applicable(target):
@@ -118,20 +120,62 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 target_dict["param"] = "none"
             return _ensure_telemetry_defaults({"target": target_dict, "decision": DECISION["NA"], "why": ["gate_not_applicable"]})
         
-        # Run probes
-        probe_bundle = run_probes(target)
-        probe_result = _confirmed_family(probe_bundle)
-        
-        # Record probe attempt
+        # Run probes (with strategy enforcement)
+        probe_bundle = None
+        probe_result = None
         target_id = f"{target.url}:{target.param_in}:{target.param}"
+        
+        # Check if probes are enabled for any family
+        families_to_probe = []
+        if plan is None:
+            # Fallback behavior when no plan is provided
+            families_to_probe = ["xss", "sqli", "redirect"]
+            probe_bundle = run_probes(target)
+            probe_result = _confirmed_family(probe_bundle)
+        elif any(probe_enabled(plan, family) for family in ["xss", "sqli", "redirect"]):
+            families_to_probe = ["xss", "sqli", "redirect"]
+            probe_bundle = run_probes(target)
+            probe_result = _confirmed_family(probe_bundle)
+        else:
+            # No probes enabled by strategy - create empty probe bundle
+            # Create proper Mock objects for probe families
+            xss_mock = Mock()
+            xss_mock.reflected = False
+            xss_mock.context = None
+            xss_mock.xss_context = None
+            xss_mock.xss_escaping = None
+            
+            sqli_mock = Mock()
+            sqli_mock.error_based = False
+            sqli_mock.time_based = False
+            sqli_mock.boolean_delta = 0
+            
+            redirect_mock = Mock()
+            redirect_mock.influence = False
+            
+            probe_bundle = Mock()
+            probe_bundle.xss = xss_mock
+            probe_bundle.sqli = sqli_mock
+            probe_bundle.redirect = redirect_mock
+            probe_bundle.error_based = None
+            probe_result = None
+        
+        # Record probe attempts only for families that were actually probed
         if probe_result:
             fam, reason_code = probe_result
-            record_probe_attempt(target_id, fam, True)
-        else:
+            if plan is None or probe_enabled(plan, fam):
+                record_probe_attempt(target_id, fam, True)
+            else:
+                # Strategy violation: probe ran for disabled family
+                logging.warning(f"Strategy violation: {fam} probe ran when disabled by strategy {plan.name}")
+        elif probe_bundle is not None:
             # Record probe attempt for each family that was probed
-            for family in ["xss", "sqli", "redirect"]:
-                if hasattr(probe_bundle, family) and getattr(probe_bundle, family):
+            for family in families_to_probe:
+                if (plan is None or probe_enabled(plan, family)) and hasattr(probe_bundle, family) and getattr(probe_bundle, family):
                     record_probe_attempt(target_id, family, False)
+                elif plan is not None and not probe_enabled(plan, family) and hasattr(probe_bundle, family) and getattr(probe_bundle, family):
+                    # Strategy violation: probe ran for disabled family
+                    logging.warning(f"Strategy violation: {family} probe ran when disabled by strategy {plan.name}")
         
         if probe_result:
             fam, reason_code = probe_result
@@ -221,7 +265,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             
             return _ensure_telemetry_defaults(result_dict)
         
-        # ML payload ranking and injection
+        # ML payload ranking and injection (with strategy enforcement)
         candidates = []
         if gate_candidate_xss(target):
             candidates.append("xss")
@@ -229,6 +273,26 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             candidates.append("sqli")
         if gate_candidate_redirect(target):
             candidates.append("redirect")
+        
+        # Check if injections are enabled by strategy
+        if plan is not None and not injections_enabled(plan):
+            # Strategy disables injections - return abstain
+            return _ensure_telemetry_defaults({
+                "target": target.to_dict(), 
+                "decision": DECISION["ABS"], 
+                "why": ["injections_disabled_by_strategy"],
+                "cvss": None,
+                "rank_source": "none",
+                "ml_role": None,
+                "gated": False,
+                "ml_family": None,
+                "ml_proba": None,
+                "ml_threshold": None,
+                "model_tag": None,
+                "attempt_idx": 0,
+                "top_k_used": 0,
+                "timing_ms": 0
+            })
         
         if not candidates:
             return _ensure_telemetry_defaults({
@@ -487,13 +551,18 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "timing_ms": 0
         })
 
-def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3) -> Dict[str, Any]:
+def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3, strategy: str = "auto") -> Dict[str, Any]:
     """
     Single entrypoint for vulnerability assessment job with parallelization.
     Handles: crawl → probe → ML ranker → evidence sink
     """
+    from backend.modules.strategy import make_plan
+    
     start_time = time.time()
     job_budget_ms = int(os.getenv("ELISE_JOB_BUDGET_MS", "300000"))  # 5 minutes default
+    
+    # Create strategy plan for enforcement
+    plan = make_plan(strategy)
     
     # Step 1: Crawl the target
     crawl_result = crawl_site(
@@ -563,7 +632,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_target = {
-                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time): target
+                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time, plan): target
                 for target in all_targets
             }
             
@@ -674,15 +743,26 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     # Convert to list
     findings_aggregates = list(findings_by_family.values())
     
+    # Get event-based counters from aggregator
+    aggregator = get_aggregator()
+    event_meta = aggregator.get_meta_data(results)
+    
     meta = {
         "endpoints_supplied": endpoints_crawled,
         "targets_enumerated": targets_enumerated,
-        "injections_attempted": injections_attempted,
-        "injections_succeeded": injections_succeeded,
         "budget_ms_used": int((time.time() - start_time) * 1000),
         "errors_by_kind": errors_by_kind,
         "top_k_used": top_k,
-        "rank_source_counts": rank_source_counts
+        "rank_source_counts": rank_source_counts,
+        # Strategy plan information
+        "strategy": plan.name.value,
+        "flags": {
+            "probes_disabled": sorted(list(plan.probes_disabled)),
+            "allow_injections": plan.allow_injections,
+            "force_ctx_inject_on_probe": plan.force_ctx_inject_on_probe
+        },
+        # Event-based counters
+        **event_meta
     }
     
     return {

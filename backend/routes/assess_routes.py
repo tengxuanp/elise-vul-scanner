@@ -11,6 +11,8 @@ from starlette.concurrency import run_in_threadpool
 from backend.app_state import DATA_DIR, USE_ML, REQUIRE_RANKER
 from backend.modules.fuzzer_core import run_job
 from backend.pipeline.workflow import assess_endpoints
+from backend.modules.strategy import parse_strategy, validate_strategy_requirements, ScanStrategy
+from backend.modules.event_aggregator import reset_aggregator
 # from backend.modules.ml.infer_ranker import available_models, using_defaults  # Not used in this file
 from backend.routes.canonical_healthz_routes import get_healthz_data
 
@@ -28,6 +30,7 @@ class AssessRequest(BaseModel):
     
     # Common options
     top_k: Optional[int] = Field(3, description="Number of top payloads to try per family")
+    strategy: Optional[str] = Field(None, description="Scan strategy: auto, probe_only, ml_only, hybrid")
     
     @validator('*', pre=True, always=True)
     def validate_single_pathway(cls, v, values):
@@ -55,6 +58,21 @@ async def assess_vulnerabilities(request: AssessRequest):
     - (C) job_id only: load from persisted endpoints.json
     """
     try:
+        # Parse and validate strategy
+        strategy = parse_strategy(request.strategy)
+        
+        # Get health data to check ML availability
+        health_data = get_healthz_data()
+        ml_available = health_data.get("ml_active", False) and any(
+            model.get("has_model", False) for model in health_data.get("models_available", {}).values()
+        )
+        
+        # Validate strategy requirements
+        strategy_validation = validate_strategy_requirements(strategy, ml_available)
+        
+        # Reset event aggregator for this assessment
+        reset_aggregator()
+        
         # Determine pathway and mode
         mode = None
         endpoints = None
@@ -91,7 +109,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 run_job,
                 target_url=target_url,
                 job_id=request.job_id,
-                top_k=request.top_k or 3
+                top_k=request.top_k or 3,
+                strategy=strategy.value
             )
         else:
             # Use endpoints pathway with deterministic enumeration
@@ -102,7 +121,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 assess_endpoints,
                 endpoints=endpoints,
                 job_id=request.job_id,
-                top_k=request.top_k or 3
+                top_k=request.top_k or 3,
+                strategy=strategy.value
             )
         
         # Handle persist-after-crawl for target_url pathway
@@ -149,6 +169,10 @@ async def assess_vulnerabilities(request: AssessRequest):
         meta = result.get("meta", {})
         if persist_warning:
             meta["persist_warning"] = persist_warning
+        
+        # Add strategy information to meta
+        meta["strategy"] = strategy.value
+        meta["strategy_validation"] = strategy_validation
         
         return AssessResponse(
             job_id=request.job_id,

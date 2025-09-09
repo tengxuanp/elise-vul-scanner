@@ -16,10 +16,27 @@ export default function AssessPage() {
   const [tab, setTab] = useState("positive");
   const [topK, setTopK] = useState(3);
   const [mlMode, setMlMode] = useState("Off");
+  const [strategy, setStrategy] = useState("auto");
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
   const targetUrl = searchParams.get("targetUrl");
+  
+  // Initialize strategy from URL parameter
+  useEffect(() => {
+    const urlStrategy = searchParams.get("strategy");
+    if (urlStrategy && ["auto", "probe_only", "ml_only", "hybrid"].includes(urlStrategy)) {
+      setStrategy(urlStrategy);
+    }
+  }, [searchParams]);
+
+  // Update URL when strategy changes
+  const updateStrategy = (newStrategy) => {
+    setStrategy(newStrategy);
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("strategy", newStrategy);
+    router.replace(`/assess?${params.toString()}`);
+  };
 
   useEffect(() => {
     // Fetch ML mode from healthz
@@ -61,7 +78,8 @@ export default function AssessPage() {
       try {
         result = await assess({
           job_id: jobId,
-          top_k: topK
+          top_k: topK,
+          strategy: strategy
         });
       } catch (err) {
         // If no persisted endpoints, try with target_url
@@ -69,7 +87,8 @@ export default function AssessPage() {
           result = await assess({
             job_id: jobId,
             target_url: targetUrl,
-            top_k: topK
+            top_k: topK,
+            strategy: strategy
           });
         } else {
           throw err;
@@ -208,6 +227,19 @@ export default function AssessPage() {
                   <h2 className="text-xl font-semibold">Step 2: Assessment</h2>
                   <div className="flex gap-2">
                     <div className="flex items-center gap-2">
+                      <label className="text-sm font-medium">Strategy:</label>
+                      <select
+                        value={strategy}
+                        onChange={(e) => updateStrategy(e.target.value)}
+                        className="border rounded px-2 py-1 text-sm"
+                      >
+                        <option value="auto">Auto (recommended)</option>
+                        <option value="probe_only">Probe-only</option>
+                        <option value="ml_only">ML-only</option>
+                        <option value="hybrid">Hybrid (demo)</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <label className="text-sm font-medium">Top-K:</label>
                       <select
                         value={topK}
@@ -268,6 +300,12 @@ export default function AssessPage() {
                     <div className="text-sm font-medium text-green-800 mb-2">
                       Target: {targetUrl}
                     </div>
+                    <div className="text-xs text-green-700 mb-2">
+                      Strategy: {strategy === "auto" ? "Auto (recommended)" : 
+                                strategy === "probe_only" ? "Probe-only" :
+                                strategy === "ml_only" ? "ML-only" :
+                                strategy === "hybrid" ? "Hybrid (demo)" : strategy}
+                    </div>
                     <div className="text-xs text-green-700 space-y-1">
                       <div>
                         Endpoints supplied: {assessmentResult.meta.endpoints_supplied} | 
@@ -289,6 +327,44 @@ export default function AssessPage() {
                       </div>
                     </div>
                   </div>
+                )}
+
+                {/* Strategy hint */}
+                {assessmentResult?.meta?.flags && (
+                  (() => {
+                    const flags = assessmentResult.meta.flags;
+                    const probesDisabled = flags.probes_disabled && flags.probes_disabled.length > 0;
+                    const injectionsDisabled = !flags.allow_injections;
+                    
+                    if (probesDisabled && injectionsDisabled) {
+                      return null; // Both disabled - no hint needed
+                    } else if (probesDisabled) {
+                      return (
+                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                          <div className="text-sm text-yellow-800">
+                            Probes disabled; Top-K injections only.
+                          </div>
+                        </div>
+                      );
+                    } else if (injectionsDisabled) {
+                      return (
+                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                          <div className="text-sm text-yellow-800">
+                            Probes only; injections disabled.
+                          </div>
+                        </div>
+                      );
+                    } else if (flags.force_ctx_inject_on_probe) {
+                      return (
+                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+                          <div className="text-sm text-yellow-800">
+                            Probe + one context-guided injection per XSS hit (demo).
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()
                 )}
 
                 {(() => {
@@ -445,6 +521,7 @@ export default function AssessPage() {
                 assessmentResult={assessmentResult}
                 mlMode={mlMode}
                 jobId={jobId}
+                strategy={strategy}
               />
               <DiagnosticsCard healthz={assessmentResult?.healthz} />
             </div>

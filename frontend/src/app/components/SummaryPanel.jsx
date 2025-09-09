@@ -4,11 +4,16 @@ import React from 'react';
 const SummaryPanel = ({ 
   assessmentResult, 
   mlMode, 
-  jobId 
+  jobId,
+  strategy = "auto"
 }) => {
   if (!assessmentResult) return null;
 
   const { summary, meta } = assessmentResult;
+  
+  // Check for strategy violations
+  const hasViolations = meta?.violations && meta.violations.length > 0;
+  const strategyViolation = meta?.strategy === "ml_only" && (summary?.confirmed_probe > 0 || meta?.probe_attempts > 0);
   
   // Calculate confirmed breakdown using new decision taxonomy
   const confirmedProbe = assessmentResult.results?.filter(r => 
@@ -54,6 +59,38 @@ const SummaryPanel = ({
           ML: {mlMode}
         </span>
       </div>
+
+      {/* Strategy Badge */}
+      <div className="mb-4">
+        <span className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-700">
+          Strategy: {strategy === "auto" ? "Auto" : 
+                    strategy === "probe_only" ? "Probe-only" :
+                    strategy === "ml_only" ? "ML-only" :
+                    strategy === "hybrid" ? "Hybrid" : strategy}
+        </span>
+      </div>
+
+      {/* Strategy Violation Alert */}
+      {(hasViolations || strategyViolation) && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded">
+          <div className="text-sm font-medium text-red-800 mb-1">
+            ⚠️ Strategy Violation
+          </div>
+          <div className="text-xs text-red-700">
+            {strategyViolation && "Probes ran under ML-only strategy"}
+            {hasViolations && meta?.violations && (
+              <div>
+                <div>Violations detected:</div>
+                <ul className="list-disc list-inside ml-2">
+                  {meta.violations.map((violation, index) => (
+                    <li key={index}>{violation}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-4 text-sm">
         <div>

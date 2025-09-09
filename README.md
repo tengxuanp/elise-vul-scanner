@@ -51,6 +51,27 @@ Elise operates in distinct modes with clear semantics:
 | `from_persisted` | Load from saved endpoints | Resume previous crawl |
 | `crawl_then_assess` | Crawl and assess in one call | Direct assessment |
 
+### Scan Strategies
+Elise supports multiple scan strategies to balance speed, accuracy, and resource usage:
+
+| Strategy | Description | Use Case | Probes | Injections |
+|----------|-------------|----------|--------|------------|
+| `auto` (recommended) | Run probes first; if probe-positive, stop. If probe-negative, run ML-ranked injections | Production scanning | ✅ | ✅ (conditional) |
+| `probe_only` | Run oracles only; never run injections | Fast triage, resource-constrained environments | ✅ | ❌ |
+| `ml_only` | Skip probes and go straight to ML-ranked injections | Benchmarking, when probes are disabled | ❌ | ✅ |
+| `hybrid` (demo) | Run probes; even if probe-positive for XSS, execute one context-guided payload | Demo/testing context-aware payloads | ✅ | ✅ (limited) |
+
+**Strategy Selection:**
+- Set via `strategy` parameter in `/api/assess` request body
+- Default: `auto` (can be overridden with `ELISE_DEFAULT_STRATEGY` environment variable)
+- UI provides dropdown selector with strategy hints
+- Strategy is persisted in URL parameters for consistent re-assessment
+
+**ML Requirements:**
+- `ml_only` and `hybrid` strategies require ML models to be available
+- If `ELISE_REQUIRE_RANKER=1` and models are missing, assessment fails with clear error
+- If `ELISE_REQUIRE_RANKER=0` and models are missing, `auto`/`hybrid` fall back to `probe_only`
+
 ### Job Persistence
 All crawl artifacts are stored under `DATA_DIR/jobs/<job_id>/`:
 - `endpoints.json` - Discovered endpoints and parameters

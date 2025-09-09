@@ -1,8 +1,11 @@
 from typing import Any, Dict, List, Optional
 from backend.modules.targets import enumerate_targets, enumerate_targets_from_endpoints, Target
 from backend.modules.fuzzer_core import _process_target, get_event_totals, clear_event_aggregator, DECISION
+from backend.modules.decisions import canonicalize_results, ensure_all_telemetry_defaults
+from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_plan, probe_enabled, injections_enabled
+from backend.modules.event_aggregator import get_aggregator
 
-def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->Dict[str,Any]:
+def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto")->Dict[str,Any]:
     """
     Assess endpoints using deterministic target enumeration.
     This is a simplified version without parallelization for direct endpoint assessment.
@@ -10,11 +13,26 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
     import time
     from threading import Lock
     
+    # Parse strategy and create execution plan
+    try:
+        scan_strategy = ScanStrategy(strategy.lower())
+    except ValueError:
+        scan_strategy = ScanStrategy.AUTO
+    
+    # Create centralized execution plan
+    plan = make_plan(strategy)
+    
+    # Get strategy behavior (for backward compatibility)
+    behavior = get_strategy_behavior(scan_strategy)
+    
     # Start timing
     start_time = time.perf_counter()
     
     # Clear event aggregator for fresh counts
     clear_event_aggregator()
+    
+    # Initialize violation tracking
+    violations = []
     
     # Use deterministic target enumeration
     target_dicts = enumerate_targets_from_endpoints(endpoints)
@@ -40,7 +58,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
         )
         
         # Use the same _process_target function from fuzzer_core
-        result = _process_target(target, job_id, top_k, Lock(), Lock())
+        result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan)
         results.append(result)
         
         # Extract evidence if present
@@ -185,6 +203,15 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
         "probe_successes": probe_successes,
         "ml_inject_attempts": ml_inject_attempts,
         "ml_inject_successes": ml_inject_successes,
+        # Strategy plan information
+        "strategy": plan.name.value,
+        "flags": {
+            "probes_disabled": sorted(list(plan.probes_disabled)),
+            "allow_injections": plan.allow_injections,
+            "force_ctx_inject_on_probe": plan.force_ctx_inject_on_probe
+        },
+        # Violation tracking
+        "violations": violations,
         # XSS context counters
         "xss_reflections_total": xss_reflections_total,
         "xss_rule_high_conf": xss_rule_high_conf,
@@ -210,5 +237,16 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3)->
         "budget_ms_used": processing_ms,  # Use actual processing time
         "errors_by_kind": {}
     }
+    
+    # Apply decision canonicalization and telemetry defaults
+    results = canonicalize_results(results)
+    results = ensure_all_telemetry_defaults(results)
+    
+    # Get event-based counters from aggregator
+    aggregator = get_aggregator()
+    event_meta = aggregator.get_meta_data(results)
+    
+    # Merge event counters into meta
+    meta.update(event_meta)
     
     return {"summary": summary, "results": results, "findings": findings, "job_id": job_id, "meta": meta}
