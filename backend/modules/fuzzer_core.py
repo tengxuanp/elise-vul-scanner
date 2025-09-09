@@ -74,7 +74,7 @@ def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
         why = result.get("why", [])
         if decision == DECISION["POS"] and any("probe" in str(code) for code in why):
             result["rank_source"] = "probe_only"
-        else:
+            else:
             result["rank_source"] = "none"
     
     return result
@@ -114,7 +114,7 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
     fired_family, reason_code = oracle_from_signals(signals)
     return (fired_family, reason_code) if fired_family else None
 
-def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None) -> Dict[str, Any]:
+def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None, ctx_mode: str = "auto", meta: dict = None) -> Dict[str, Any]:
     """Process a single target and return the result."""
     violations = []  # Track strategy violations
     try:
@@ -137,13 +137,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         if plan is None:
             # Fallback behavior when no plan is provided
             families_to_probe = ["xss", "sqli", "redirect"]
-            probe_bundle = run_probes(target, families_to_probe, plan)
+            probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
             probe_result = _confirmed_family(probe_bundle)
-        else:
+            else:
             # Only run probes for enabled families
             families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
             if families_to_probe:
-                probe_bundle = run_probes(target, families_to_probe, plan)
+                probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
                 probe_result = _confirmed_family(probe_bundle)
             else:
                 # No probes enabled by strategy - create empty probe bundle
@@ -224,6 +224,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 ev.result_id = result_id
                 ev.strategy = plan.name.value if plan else "auto"
                 ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                ev.ctx_invoke = ctx_mode
                 
                 # Redact sensitive headers
                 ev.request_headers = redact_sensitive_headers(ev.request_headers)
@@ -332,7 +333,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             # Check if it succeeded (simplified check)
                             if hasattr(inj, "status") and inj.status == 200:
                                 record_inject_attempt(target_id, "xss", True)
-                    except Exception as e:
+                except Exception as e:
                         logging.warning(f"Demo context injection failed: {e}")
             
             # For ml_with_context strategy, we still want to run ML injections
@@ -376,7 +377,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             if "redirect" in candidates:
                 candidates.remove("redirect")
                 violations.append("strategy_violation:redirect_under_ml_with_context")
-        else:
+            else:
             # For other strategies, include redirect
             if gate_candidate_redirect(target):
                 candidates.append("redirect")
@@ -454,7 +455,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         def budget_tight():
             """Check if budget is tight based on elapsed time."""
             if start_ts is None:
-                return False
+        return False
             job_budget_ms = int(os.getenv("ELISE_JOB_BUDGET_MS", "120000"))
             elapsed_ms = (time.time() - start_ts) * 1000.0
             return elapsed_ms >= 0.90 * job_budget_ms
@@ -563,6 +564,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         ev.result_id = result_id
                         ev.strategy = plan.name.value if plan else "auto"
                         ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                        ev.ctx_invoke = ctx_mode
                         
                         # Redact sensitive headers
                         ev.request_headers = redact_sensitive_headers(ev.request_headers)
@@ -664,7 +666,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # If ML ranking fails, continue with next family
                 logging.warning(f"ML ranking failed for family {fam}: {e}")
                 fallback_reason = "ml_unavailable_or_disabled"
-                continue
+                        continue
             except RuntimeError as e:
                 # If ranker fails and REQUIRE_RANKER is set, propagate the error
                 if "ranker" in str(e).lower() and REQUIRE_RANKER:
@@ -694,8 +696,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         clean_attempt_idx = 0
                         break
                 except:
-                    continue
-        
+                        continue
+
         return _ensure_telemetry_defaults({
             "target": target.to_dict(), 
             "decision": DECISION["NEG"], 
@@ -741,7 +743,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "timing_ms": 0
         })
 
-def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3, strategy: str = "auto") -> Dict[str, Any]:
+def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3, strategy: str = "auto", ctx_mode: str = "auto") -> Dict[str, Any]:
     """
     Single entrypoint for vulnerability assessment job with parallelization.
     Handles: crawl → probe → ML ranker → evidence sink
@@ -774,6 +776,9 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     injections_succeeded = 0
     errors_by_kind = {}
     rank_source_counts = {"probe_only": 0, "ml": 0, "ctx_pool": 0, "defaults": 0}
+    
+    # Create meta object for tracking XSS context statistics
+    meta = {}
     
     # Collect all targets for parallel processing
     all_targets = []
@@ -822,7 +827,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_target = {
-                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time, plan): target
+                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time, plan, ctx_mode, meta): target
                 for target in all_targets
             }
             

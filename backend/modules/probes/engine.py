@@ -10,7 +10,7 @@ class ProbeBundle:
     sqli: SqliProbe
     redirect: RedirectProbe
 
-def run_probes(t: Target, families: list = None, plan=None) -> ProbeBundle:
+def run_probes(t: Target, families: list = None, plan=None, ctx_mode: str = "auto", meta: dict = None) -> ProbeBundle:
     """
     Run probes for specified families.
     
@@ -24,7 +24,7 @@ def run_probes(t: Target, families: list = None, plan=None) -> ProbeBundle:
     
     # Create probe results for each family
     if "xss" in families:
-        xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers, plan=plan)
+        xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers, job_id=None, plan=plan, ctx_mode=ctx_mode, meta=meta)
     else:
         # Create mock XSS probe result
         from unittest.mock import Mock

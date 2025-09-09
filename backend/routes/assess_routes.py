@@ -3,8 +3,9 @@ Assessment API routes - handles vulnerability assessment with clear mode semanti
 """
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, validator
-from typing import Optional, List, Dict, Any, Union
+from typing import Optional, List, Dict, Any, Union, Literal
 import json
+import os
 from pathlib import Path
 from starlette.concurrency import run_in_threadpool
 
@@ -31,6 +32,7 @@ class AssessRequest(BaseModel):
     # Common options
     top_k: Optional[int] = Field(3, description="Number of top payloads to try per family")
     strategy: Optional[str] = Field(None, description="Scan strategy: auto, probe_only, ml_only, hybrid")
+    xss_ctx_invoke: Optional[Literal["auto", "always", "never", "force_ml"]] = Field(None, description="XSS context classifier invocation mode")
     
     @validator('*', pre=True, always=True)
     def validate_single_pathway(cls, v, values):
@@ -73,6 +75,9 @@ async def assess_vulnerabilities(request: AssessRequest):
         # Reset event aggregator for this assessment
         reset_aggregator()
         
+        # Get XSS context invoke mode
+        ctx_mode = request.xss_ctx_invoke or os.getenv("ELISE_XSS_CTX_INVOKE", "auto")
+        
         # Determine pathway and mode
         mode = None
         endpoints = None
@@ -110,7 +115,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 target_url=target_url,
                 job_id=request.job_id,
                 top_k=request.top_k or 3,
-                strategy=strategy.value
+                strategy=strategy.value,
+                ctx_mode=ctx_mode
             )
         else:
             # Use endpoints pathway with deterministic enumeration
@@ -122,7 +128,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 endpoints=endpoints,
                 job_id=request.job_id,
                 top_k=request.top_k or 3,
-                strategy=strategy.value
+                strategy=strategy.value,
+                ctx_mode=ctx_mode
             )
         
         # Handle persist-after-crawl for target_url pathway
@@ -173,6 +180,7 @@ async def assess_vulnerabilities(request: AssessRequest):
         # Add strategy information to meta
         meta["strategy"] = strategy.value
         meta["strategy_validation"] = strategy_validation
+        meta["xss_ctx_invoke"] = ctx_mode
         
         return AssessResponse(
             job_id=request.job_id,

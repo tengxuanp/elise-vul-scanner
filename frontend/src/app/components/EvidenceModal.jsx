@@ -306,7 +306,12 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
         <div className="flex items-center gap-4">
           <div>
             <div className="text-xs text-gray-500">Source</div>
-            <div className="text-sm font-medium">{evidence.ranking_source || "unknown"}</div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium">{evidence.ranking_source || "unknown"}</span>
+              <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
+                {evidence?.ranking?.source || evidence?.rank_source || "n/a"}
+              </span>
+            </div>
           </div>
           <div>
             <div className="text-xs text-gray-500">Pool Size</div>
@@ -447,7 +452,14 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
     <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
       <div className="w-full max-w-3xl bg-white rounded-2xl shadow p-4">
         <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-semibold">Evidence</h3>
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-semibold">Evidence</h3>
+            {evidence?.telemetry?.ctx_invoke && (
+              <span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 border">
+                {evidence.telemetry.ctx_invoke}
+              </span>
+            )}
+          </div>
           <button onClick={onClose} className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200">Close</button>
         </div>
         
@@ -600,6 +612,8 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     const isProbeOnly = evidence?.rank_source === "probe_only";
                     const noMLAttempts = meta?.ml_inject_attempts === 0;
                     const hasMLScores = evidence?.score !== undefined || evidence?.p_cal !== undefined;
+                    const rsrc = evidence?.ranking?.source || evidence?.rank_source;
+                    const showRankerBox = rsrc === "ml_ranked";
                     
                     if (isProbeOnly || noMLAttempts) {
                       return (
@@ -610,7 +624,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                           </div>
                         </div>
                       );
-                    } else if (hasMLScores) {
+                    } else if (hasMLScores && showRankerBox) {
                       return (
                         <div className="my-4">
                           <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>

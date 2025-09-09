@@ -45,7 +45,7 @@ def upsert_row(results: List[Dict[str, Any]], key: Tuple[str, str, str, str, str
     results.append(row)
     return row
 
-def create_assessment_response_from_results(results: List[Dict[str, Any]], job_id: str, strategy: str) -> Dict[str, Any]:
+def create_assessment_response_from_results(results: List[Dict[str, Any]], job_id: str, strategy: str, ctx_mode: str = "auto") -> Dict[str, Any]:
     """
     Create assessment response from existing results.
     
@@ -68,6 +68,48 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
     # Calculate confirmed counts from row-derived data
     confirmed_probe = sum(1 for r in results if r.get("decision") == "positive" and r.get("provenance") == "Probe")
     confirmed_ml_inject = sum(1 for r in results if r.get("decision") == "positive" and r.get("provenance") == "Inject")
+    
+    # Calculate XSS context statistics from persisted results
+    xss_reflections_total = 0
+    xss_rule_high_conf = 0
+    xss_ml_invoked = 0
+    xss_final_from_ml = 0
+    xss_context_dist = {}
+    xss_ctx_pool_used = 0
+    xss_first_hit_attempts_ctx = 0
+    xss_first_hit_attempts_baseline = 0
+    
+    for result in results:
+        # Count XSS context statistics
+        if result.get("family") == "xss" and result.get("xss_context"):
+            xss_reflections_total += 1
+            
+            # Count context distribution
+            context = result.get("xss_context", "unknown")
+            xss_context_dist[context] = xss_context_dist.get(context, 0) + 1
+            
+            # Count rule vs ML usage
+            xss_context_source = result.get("xss_context_source")
+            if xss_context_source == "rule":
+                xss_rule_high_conf += 1
+            elif xss_context_source == "ml":
+                xss_ml_invoked += 1
+                xss_final_from_ml += 1
+            
+            # Count context payload pool usage and first-hit attempts
+            rank_source = result.get("rank_source")
+            decision = result.get("decision")
+            
+            if rank_source == "ctx_pool":
+                xss_ctx_pool_used += 1
+                # Count first-hit attempts for context pool
+                attempt_idx = result.get("attempt_idx", 0) or 0
+                if decision == "positive" and attempt_idx == 1:
+                    xss_first_hit_attempts_ctx += 1
+            elif rank_source in ["ml", "defaults"] and decision == "positive":
+                # Count attempts before first positive for baseline
+                attempt_idx = result.get("attempt_idx", 0) or 0
+                xss_first_hit_attempts_baseline += attempt_idx + 1
     
     # Create findings aggregates by family (same structure as fuzzer_core.py)
     findings_by_family = {}
@@ -115,15 +157,16 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
             "flags": []
         },
         "violations": [],
-        "xss_reflections_total": 0,
-        "xss_rule_high_conf": 0,
-        "xss_ml_invoked": 0,
-        "xss_final_from_ml": 0,
-        "xss_context_dist": {},
-        "xss_ctx_pool_used": 0,
-        "xss_first_hit_attempts_ctx": 0,
-        "xss_first_hit_attempts_baseline": 0,
-        "xss_first_hit_attempts_delta": 0,
+        "xss_reflections_total": xss_reflections_total,
+        "xss_rule_high_conf": xss_rule_high_conf,
+        "xss_ml_invoked": xss_ml_invoked,
+        "xss_final_from_ml": xss_final_from_ml,
+        "xss_context_dist": xss_context_dist,
+        "xss_ctx_pool_used": xss_ctx_pool_used,
+        "xss_first_hit_attempts_ctx": xss_first_hit_attempts_ctx,
+        "xss_first_hit_attempts_baseline": xss_first_hit_attempts_baseline,
+        "xss_first_hit_attempts_delta": xss_first_hit_attempts_baseline - xss_first_hit_attempts_ctx if (xss_first_hit_attempts_ctx or 0) > 0 else 0,
+        "xss_ctx_invoke": ctx_mode,
         "counters_consistent": True,
         "injections_attempted": 0,
         "injections_succeeded": confirmed_probe + confirmed_ml_inject,
@@ -170,7 +213,7 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
         }
     }
 
-def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto")->Dict[str,Any]:
+def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto", ctx_mode: str = "auto")->Dict[str,Any]:
     """
     Assess endpoints using deterministic target enumeration.
     This is a simplified version without parallelization for direct endpoint assessment.
@@ -188,7 +231,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         if matching_results:
             print(f"Found {len(matching_results)} existing evidence files for job {job_id} with matching strategy {strategy}")
             # Return matching results instead of re-running assessment
-            return create_assessment_response_from_results(matching_results, job_id, strategy)
+            return create_assessment_response_from_results(matching_results, job_id, strategy, ctx_mode)
         else:
             # Show what strategies are available
             available_strategies = set(r.get("strategy") for r in existing_results)
@@ -264,7 +307,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         )
         
         # Use the same _process_target function from fuzzer_core
-        result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan)
+        result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan, ctx_mode=ctx_mode, meta={})
         raw_results.append(result)
         
         # Extract evidence if present
@@ -419,10 +462,10 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
             # Count context payload pool usage and first-hit attempts
             if rank_source == "ctx_pool":
                 xss_ctx_pool_used += 1
-                # Count attempts before first positive for context pool
+                # Count first-hit attempts for context pool
                 attempt_idx = result.get("attempt_idx", 0) or 0
-                if decision == DECISION["POS"]:
-                    xss_first_hit_attempts_ctx += attempt_idx + 1
+                if decision == DECISION["POS"] and attempt_idx == 1:
+                    xss_first_hit_attempts_ctx += 1
             elif rank_source in ["ml", "defaults"] and decision == DECISION["POS"]:
                 # Count attempts before first positive for baseline
                 attempt_idx = result.get("attempt_idx", 0) or 0
@@ -472,6 +515,8 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "ml_inject_successes": ml_inject_successes,
         # Strategy plan information
         "strategy": plan.name.value,
+        "probes_disabled": sorted(list(plan.probes_disabled)),
+        "canary_attempts": probe_attempts if plan.name.value == "ml_with_context" else 0,
         "flags": {
             "probes_disabled": sorted(list(plan.probes_disabled)),
             "allow_injections": plan.allow_injections,
@@ -491,6 +536,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "xss_first_hit_attempts_ctx": xss_first_hit_attempts_ctx,
         "xss_first_hit_attempts_baseline": xss_first_hit_attempts_baseline,
         "xss_first_hit_attempts_delta": xss_first_hit_attempts_baseline - xss_first_hit_attempts_ctx if (xss_first_hit_attempts_ctx or 0) > 0 else 0,
+        "xss_ctx_invoke": ctx_mode,
         # Counters consistency check
         "counters_consistent": (
             (probe_successes + ml_inject_successes) == (confirmed_probe + confirmed_ml_inject) and

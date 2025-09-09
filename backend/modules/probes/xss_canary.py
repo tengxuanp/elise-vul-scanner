@@ -198,7 +198,7 @@ def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: st
     with open(events_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(event_data) + "\n")
 
-def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None):
+def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None, ctx_mode: str = "auto", meta: dict = None):
     """Run XSS probe with enhanced context and escaping detection."""
     # Check if XSS probes are disabled by the current plan
     if plan and "xss" in plan.probes_disabled:
@@ -225,18 +225,22 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
         context_result = detect_xss_context_with_confidence(text, canary_pos)
         xss_escaping = detect_xss_escaping(text, canary_pos)
         
-        # Check if we should use ML for low-confidence cases
-        rule_conf_threshold = float(os.getenv("XSS_CONTEXT_RULE_CONFIDENCE", "0.9"))
-        use_ml = os.getenv("XSS_CONTEXT_ML_ENABLED", "false").lower() == "true"
+        # Implement proper context resolution logic according to patch
+        RULE_CONF_GATE = float(os.getenv("ELISE_RULE_CONF_GATE", "0.85"))
+        ML_OVERRIDE_GATE = float(os.getenv("ELISE_ML_OVERRIDE_GATE", "0.80"))
         
-        final_context = context_result["pred"]
-        final_escaping = xss_escaping
-        context_rule = context_result
-        context_ml = None
-        escaping_ml = None
+        # 1) Get rule-based predictions
+        r_ctx = context_result["pred"]
+        r_esc = xss_escaping
+        r_conf = context_result["conf"]
         
-        # Use ML if rule confidence is below threshold and ML is enabled
-        if use_ml and context_result["conf"] < rule_conf_threshold:
+        # 2) Decide to call ML
+        call_ml = (ctx_mode in {"always", "force_ml"}) or (ctx_mode == "auto" and r_conf < RULE_CONF_GATE)
+        m_ctx = m_esc = None
+        m_p = 0.0
+        context_ml = escaping_ml = None
+        
+        if call_ml:
             try:
                 from backend.modules.ml.xss_context_infer import predict_xss_context, predict_xss_escaping
                 
@@ -249,15 +253,40 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
                 context_ml = predict_xss_context(text_window, canary_pos - window_start)
                 escaping_ml = predict_xss_escaping(text_window, canary_pos - window_start)
                 
-                # Use ML predictions if available
-                if context_ml and context_ml.get("pred"):
-                    final_context = context_ml["pred"]
-                if escaping_ml and escaping_ml.get("pred"):
-                    final_escaping = escaping_ml["pred"]
+                if context_ml:
+                    m_ctx = context_ml.get("pred")
+                    m_p = context_ml.get("conf", 0.0)
+                if escaping_ml:
+                    m_esc = escaping_ml.get("pred")
+                
+                # Count ML invocation
+                if meta is not None:
+                    meta["xss.ml_invoked"] = meta.get("xss.ml_invoked", 0) + 1
                     
             except ImportError:
                 # ML models not available, use rules
                 pass
+        
+        # 3) Fuse decisions
+        chose_ml = False
+        if ctx_mode == "force_ml" and m_ctx:
+            f_ctx, f_esc, src, conf = m_ctx, m_esc, "ml", m_p
+            chose_ml = True
+        elif m_ctx and (m_p >= ML_OVERRIDE_GATE) and (r_conf < RULE_CONF_GATE):
+            f_ctx, f_esc, src, conf = m_ctx, m_esc, "ml", m_p
+            chose_ml = True
+        else:
+            f_ctx, f_esc, src, conf = r_ctx, r_esc, ("rule_high_conf" if r_conf >= RULE_CONF_GATE else "rule_low_conf"), r_conf
+        
+        # Count final ML decisions
+        if chose_ml and meta is not None:
+            meta["xss.final_from_ml"] = meta.get("xss.final_from_ml", 0) + 1
+        
+        # Set final values
+        final_context = f_ctx
+        final_escaping = f_esc or "unknown"
+        context_rule = context_result
+        escaping_ml = escaping_ml
         
         # Legacy context for backwards compatibility
         ctx = "none"

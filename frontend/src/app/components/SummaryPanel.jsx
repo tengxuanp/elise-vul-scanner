@@ -251,6 +251,10 @@ const SummaryPanel = ({
           <h4 className="font-medium text-sm text-gray-700 mb-3">XSS Context Analysis</h4>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div>
+              <div className="text-gray-600">Context ML mode</div>
+              <div className="font-semibold">{meta?.xss_ctx_invoke || "auto"}</div>
+            </div>
+            <div>
               <div className="text-gray-600">XSS reflections</div>
               <div className="font-semibold">{meta.xss_reflections_total}</div>
             </div>

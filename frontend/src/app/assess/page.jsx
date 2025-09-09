@@ -17,6 +17,22 @@ export default function AssessPage() {
   const [topK, setTopK] = useState(3);
   const [mlMode, setMlMode] = useState("Off");
   const [strategy, setStrategy] = useState("auto");
+  
+  // XSS Context Classifier state
+  const [ctxInvoke, setCtxInvoke] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("elise.ctx_invoke") || "auto";
+    }
+    return "auto";
+  });
+  
+  // XSS Context Classifier options
+  const CTX_OPTIONS = [
+    { value: "auto", label: "Auto", helper: "Call ML only when rule is unsure" },
+    { value: "always", label: "Always", helper: "Always run ML; override on strong ML" },
+    { value: "never", label: "Never", helper: "Disable ML (rules only)" },
+    { value: "force_ml", label: "Force ML", helper: "Demo/benchmark; always use ML output" }
+  ];
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
@@ -29,6 +45,13 @@ export default function AssessPage() {
       setStrategy(urlStrategy);
     }
   }, [searchParams]);
+  
+  // Persist ctxInvoke to localStorage
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("elise.ctx_invoke", ctxInvoke);
+    }
+  }, [ctxInvoke]);
 
   // Update URL when strategy changes
   const updateStrategy = (newStrategy) => {
@@ -79,7 +102,8 @@ export default function AssessPage() {
         result = await assess({
           job_id: jobId,
           top_k: topK,
-          strategy: strategy
+          strategy: strategy,
+          xss_ctx_invoke: ctxInvoke
         });
       } catch (err) {
         // If no persisted endpoints, try with target_url
@@ -88,7 +112,8 @@ export default function AssessPage() {
             job_id: jobId,
             target_url: targetUrl,
             top_k: topK,
-            strategy: strategy
+            strategy: strategy,
+            xss_ctx_invoke: ctxInvoke
           });
         } else {
           throw err;
@@ -262,17 +287,49 @@ export default function AssessPage() {
                         <option value={5}>5</option>
                       </select>
                     </div>
+                    <fieldset className={`rounded-md border p-4 ${strategy !== "ml_with_context" ? "opacity-60 pointer-events-none" : ""}`}>
+                      <legend className="text-sm font-medium text-gray-600 px-2">XSS Context Classifier</legend>
+                      <div className="grid grid-cols-2 gap-3 mt-3">
+                        {CTX_OPTIONS.map(option => (
+                          <div key={option.value} className="flex items-center space-x-3">
+                            <input
+                              type="radio"
+                              id={`ctx-${option.value}`}
+                              name="ctxInvoke"
+                              value={option.value}
+                              checked={ctxInvoke === option.value}
+                              onChange={(e) => setCtxInvoke(e.target.value)}
+                              disabled={strategy !== "ml_with_context"}
+                              className="w-4 h-4"
+                            />
+                            <label htmlFor={`ctx-${option.value}`} className="text-sm font-medium">{option.label}</label>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-500 mt-3 px-1">
+                        {strategy !== "ml_with_context" 
+                          ? "Only available with ML with Context strategy"
+                          : CTX_OPTIONS.find(x => x.value === ctxInvoke)?.helper
+                        }
+                      </p>
+                    </fieldset>
+                  </div>
+                </div>
+
+                {/* Action Buttons Section */}
+                <div className="mt-8 pt-6 border-t border-gray-200">
+                  <div className="flex gap-4">
                     <button
                       onClick={onAssess}
                       disabled={loading}
-                      className="px-4 py-2 rounded bg-blue-600 text-white disabled:opacity-50"
+                      className="px-8 py-4 rounded-lg bg-blue-600 text-white font-semibold text-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm hover:shadow-md"
                     >
                       {loading ? "Assessing..." : (assessmentResult ? "Re-assess" : "Assess")}
                     </button>
                     <button
                       onClick={onExport}
                       disabled={!assessmentResult || loading}
-                      className="px-4 py-2 rounded bg-emerald-600 text-white disabled:opacity-50"
+                      className="px-8 py-4 rounded-lg bg-emerald-600 text-white font-semibold text-lg hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors shadow-sm hover:shadow-md"
                     >
                       Export Report
                     </button>
@@ -340,50 +397,48 @@ export default function AssessPage() {
                 )}
 
                 {/* Strategy hint */}
-                {assessmentResult?.meta?.flags && (
-                  (() => {
-                    const flags = assessmentResult.meta.flags;
-                    const probesDisabled = flags.probes_disabled && flags.probes_disabled.length > 0;
-                    const injectionsDisabled = !flags.allow_injections;
+                {(() => {
+                  const s = assessmentResult?.meta?.strategy || strategy;
+                  let bannerText = "";
+                  let bannerColor = "yellow";
+                  
+                  if (s === "ml_with_context") {
+                    bannerText = "XSS canary for context; Top‑K injections. Redirect/SQLi probes disabled.";
+                    bannerColor = "blue";
+                  } else if (s === "ml_only") {
+                    bannerText = "Probes disabled; Top‑K injections only.";
+                    bannerColor = "yellow";
+                  } else if (s === "probe_only") {
+                    bannerText = "Probes only (no injections).";
+                    bannerColor = "yellow";
+                  } else if (s === "hybrid") {
+                    bannerText = "Probes on; also fire one context‑guided payload even if probe confirms.";
+                    bannerColor = "yellow";
+                  } else {
+                    bannerText = "Auto: Probes first; Top‑K if probe misses.";
+                    bannerColor = "yellow";
+                  }
+                  
+                  if (bannerText) {
+                    const bgColor = bannerColor === "blue" ? "bg-blue-50 border-blue-200" : "bg-yellow-50 border-yellow-200";
+                    const textColor = bannerColor === "blue" ? "text-blue-800" : "text-yellow-800";
                     
-                    if (probesDisabled && injectionsDisabled) {
-                      return null; // Both disabled - no hint needed
-                    } else if (probesDisabled) {
-                      return (
-                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                          <div className="text-sm text-yellow-800">
-                            Probes disabled; Top-K injections only.
-                          </div>
+                    return (
+                      <div className={`mb-4 p-3 ${bgColor} border rounded`}>
+                        <div className={`text-sm ${textColor}`}>
+                          {bannerText}
                         </div>
-                      );
-                    } else if (injectionsDisabled) {
-                      return (
-                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                          <div className="text-sm text-yellow-800">
-                            Probes only; injections disabled.
+                        {/* Optional UI sanity hint for ml_with_context */}
+                        {s === "ml_with_context" && assessmentResult?.meta?.canary_attempts === 0 && (
+                          <div className="text-xs text-amber-600 mt-1">
+                            Heads‑up: no canary attempts were recorded; context may fall back to rules.
                           </div>
-                        </div>
-                      );
-                    } else if (flags.force_ctx_inject_on_probe) {
-                      return (
-                        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                          <div className="text-sm text-yellow-800">
-                            Probe + one context-guided injection per XSS hit (demo).
-                          </div>
-                        </div>
-                      );
-                    } else if (assessmentResult?.meta?.strategy === "ml_with_context") {
-                      return (
-                        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
-                          <div className="text-sm text-blue-800">
-                            XSS canary for context; Top‑K injections. Redirect/SQLi probes disabled.
-                          </div>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()
-                )}
+                        )}
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
 
                 {(() => {
                   const naCount = results.filter(r => r.decision === "not_applicable").length;

@@ -217,7 +217,8 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
                         "score": base_score,
                         "p_cal": p_cal,
                         "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "ml",
-                        "model_tag": model_tag
+                        "model_tag": model_tag,
+                        "family": fam
                     })
 
                 # Sort by p_cal descending
@@ -232,7 +233,7 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
                 pass
 
     # Fallback to default payloads without ML - use score=None, p_cal=0.50 as specified
-    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults", "model_tag": None} for p in default_payloads[:top_k]]
+    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults", "model_tag": None, "family": fam} for p in default_payloads[:top_k]]
 
 
 def available_models() -> Dict[str, Any]:

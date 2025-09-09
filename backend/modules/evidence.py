@@ -38,6 +38,7 @@ class EvidenceRow:
     # Telemetry fields
     attempt_idx: int | None = None  # Attempt index for this payload
     top_k_used: int | None = None   # Number of top-k payloads used
+    ctx_invoke: str | None = None   # XSS context classifier invocation mode
     # Rich evidence fields
     result_id: str | None = None    # Stable UUID per result row
     strategy: str | None = None     # Strategy used for this result
@@ -228,6 +229,11 @@ def write_evidence(job_id: str, ev: EvidenceRow, probe_bundle=None) -> str:
     
     # Prepare evidence data
     evidence_data = asdict(ev)
+    
+    # Add ctx_invoke to telemetry
+    if not evidence_data.get("telemetry"):
+        evidence_data["telemetry"] = {}
+    evidence_data["telemetry"]["ctx_invoke"] = ev.ctx_invoke or "auto"
     
     # Add detailed XSS context data if available
     if ev.family == "xss" and probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss:
