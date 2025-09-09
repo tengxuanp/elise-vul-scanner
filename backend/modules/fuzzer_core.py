@@ -388,9 +388,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         "top_payload": top_payload[:50] + "..." if len(top_payload) > 50 else top_payload,
                         "proba": top_proba
                     })
-            except Exception as e:
-                fallback_reason = "ml_unavailable_or_disabled"
                 
+                # Process ranked payloads for injection
                 for attempt_idx, cand in enumerate(ranked):
                     payload = cand.get("payload")
                     score = cand.get("score")
@@ -479,6 +478,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         
                         return result_dict
                         
+            except Exception as e:
+                # If ML ranking fails, continue with next family
+                fallback_reason = "ml_unavailable_or_disabled"
+                continue
             except RuntimeError as e:
                 # If ranker fails and REQUIRE_RANKER is set, propagate the error
                 if "ranker" in str(e).lower() and REQUIRE_RANKER:
