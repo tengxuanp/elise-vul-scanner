@@ -1,0 +1,23 @@
+{
+  "task": "xss_context_and_escaping",
+  "vectorizer": "char-3-5 tf-idf on \u00b1120 window",
+  "model": "LogReg + sigmoid calibration",
+  "samples": 1000,
+  "labels": {
+    "context": [
+      "html_body",
+      "attr",
+      "js_string",
+      "url",
+      "css",
+      "comment",
+      "json"
+    ],
+    "escaping": [
+      "raw",
+      "html",
+      "url",
+      "js"
+    ]
+  }
+}

@@ -74,7 +74,7 @@ def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
         why = result.get("why", [])
         if decision == DECISION["POS"] and any("probe" in str(code) for code in why):
             result["rank_source"] = "probe_only"
-            else:
+        else:
             result["rank_source"] = "none"
     
     return result
@@ -139,7 +139,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             families_to_probe = ["xss", "sqli", "redirect"]
             probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
             probe_result = _confirmed_family(probe_bundle)
-            else:
+        else:
             # Only run probes for enabled families
             families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
             if families_to_probe:
@@ -333,7 +333,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             # Check if it succeeded (simplified check)
                             if hasattr(inj, "status") and inj.status == 200:
                                 record_inject_attempt(target_id, "xss", True)
-                except Exception as e:
+                    except Exception as e:
                         logging.warning(f"Demo context injection failed: {e}")
             
             # For ml_with_context strategy, we still want to run ML injections
@@ -377,7 +377,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             if "redirect" in candidates:
                 candidates.remove("redirect")
                 violations.append("strategy_violation:redirect_under_ml_with_context")
-            else:
+        else:
             # For other strategies, include redirect
             if gate_candidate_redirect(target):
                 candidates.append("redirect")
@@ -455,7 +455,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         def budget_tight():
             """Check if budget is tight based on elapsed time."""
             if start_ts is None:
-        return False
+                return False
             job_budget_ms = int(os.getenv("ELISE_JOB_BUDGET_MS", "120000"))
             elapsed_ms = (time.time() - start_ts) * 1000.0
             return elapsed_ms >= 0.90 * job_budget_ms
@@ -666,7 +666,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # If ML ranking fails, continue with next family
                 logging.warning(f"ML ranking failed for family {fam}: {e}")
                 fallback_reason = "ml_unavailable_or_disabled"
-                        continue
+                continue
             except RuntimeError as e:
                 # If ranker fails and REQUIRE_RANKER is set, propagate the error
                 if "ranker" in str(e).lower() and REQUIRE_RANKER:

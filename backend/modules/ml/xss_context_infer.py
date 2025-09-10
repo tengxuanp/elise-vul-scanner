@@ -132,14 +132,13 @@ def predict_xss_context(text_window: str, canary_pos: int) -> Optional[Dict[str,
             return None
     
     try:
-        # Extract features
-        text, binary_features = extract_features_for_inference(text_window, canary_pos)
+        from backend.ml.xss_ctx.utils import window
+        
+        # Extract windowed text (same as training)
+        text = window(text_window, "EliseXSSCanary123", 120)
         
         # Transform text
-        tfidf_features = _context_vectorizer.transform([text])
-        
-        # Combine features
-        X = np.hstack([tfidf_features.toarray(), binary_features])
+        X = _context_vectorizer.transform([text])
         
         # Predict
         pred_proba = _context_model.predict_proba(X)[0]
@@ -168,14 +167,13 @@ def predict_xss_escaping(text_window: str, canary_pos: int) -> Optional[Dict[str
             return None
     
     try:
-        # Extract features
-        text, binary_features = extract_features_for_inference(text_window, canary_pos)
+        from backend.ml.xss_ctx.utils import window
+        
+        # Extract windowed text (same as training)
+        text = window(text_window, "EliseXSSCanary123", 120)
         
         # Transform text
-        tfidf_features = _escaping_vectorizer.transform([text])
-        
-        # Combine features
-        X = np.hstack([tfidf_features.toarray(), binary_features])
+        X = _escaping_vectorizer.transform([text])
         
         # Predict
         pred_proba = _escaping_model.predict_proba(X)[0]

@@ -100,8 +100,13 @@ class EvidenceRow:
             # Determine source and ML probability
             xss_context_ml = getattr(p.xss, "xss_context_ml", None)
             xss_context_rule = getattr(p.xss, "xss_context_rule", None)
+            xss_context_source = getattr(p.xss, "xss_context_source", None)
             
-            if xss_context_ml and xss_context_ml.get("pred"):
+            if xss_context_source == "ml":
+                xss_context_ml_proba = xss_context_ml.get("proba") if xss_context_ml else None
+            elif xss_context_source == "rule":
+                pass  # Already set above
+            elif xss_context_ml and xss_context_ml.get("pred"):
                 xss_context_source = "ml"
                 xss_context_ml_proba = xss_context_ml.get("proba")
             elif xss_context_rule:
@@ -160,8 +165,13 @@ class EvidenceRow:
             # Determine source and ML probability
             xss_context_ml = _get(probe_bundle.xss, "xss_context_ml", None)
             xss_context_rule = _get(probe_bundle.xss, "xss_context_rule", None)
+            xss_context_source = _get(probe_bundle.xss, "xss_context_source", None)
             
-            if xss_context_ml and xss_context_ml.get("pred"):
+            if xss_context_source == "ml":
+                xss_context_ml_proba = xss_context_ml.get("proba") if xss_context_ml else None
+            elif xss_context_source == "rule":
+                pass  # Already set above
+            elif xss_context_ml and xss_context_ml.get("pred"):
                 xss_context_source = "ml"
                 xss_context_ml_proba = xss_context_ml.get("proba")
             elif xss_context_rule:

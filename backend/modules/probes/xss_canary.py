@@ -23,6 +23,7 @@ class XssProbe:
     xss_context_rule: Optional[Dict[str, Any]] = None
     xss_context_ml: Optional[Dict[str, Any]] = None
     xss_escaping_ml: Optional[Dict[str, Any]] = None
+    xss_context_source: Optional[str] = None  # "rule" or "ml"
     # Additional fields for evidence
     fragment_left_64: str = ""
     fragment_right_64: str = ""
@@ -333,6 +334,7 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
             xss_context_rule=context_rule,
             xss_context_ml=context_ml,
             xss_escaping_ml=escaping_ml,
+            xss_context_source=src,
             fragment_left_64=fragment_left_64,
             fragment_right_64=fragment_right_64,
             raw_reflection=raw_reflection,
