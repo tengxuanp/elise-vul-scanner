@@ -412,6 +412,25 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
     );
   };
 
+  // Reason text mapping
+  const reasonText = {
+    ctx_guided: "Context-guided injection (payload seeded by ML context).",
+    ml_ranked: "Payload chosen by the ML ranker from the Top-K candidates.",
+    xss_reflection: "Canary reflection observed; context & escaping inferred.",
+  };
+
+  const WhyList = ({ reasons }) => {
+    return (
+      <ul className="space-y-1">
+        {reasons?.map((r) => (
+          <li key={r} className="text-sm text-slate-700">
+            • {reasonText[r] ?? r}
+          </li>
+        ))}
+      </ul>
+    );
+  };
+
   const WhyVulnerableTab = ({ evidence }) => {
     if (!evidence?.vuln_proof) {
       return <div className="text-sm text-gray-500">No vulnerability proof available</div>;
@@ -430,6 +449,13 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
           <div className="text-sm font-medium mb-2">Summary</div>
           <div className="text-sm text-gray-700">{evidence.vuln_proof.summary}</div>
         </div>
+        
+        {evidence.why && evidence.why.length > 0 && (
+          <div>
+            <div className="text-sm font-medium mb-2">Detection Method</div>
+            <WhyList reasons={evidence.why} />
+          </div>
+        )}
         
         {evidence.vuln_proof.details && evidence.vuln_proof.details.length > 0 && (
           <div>

@@ -291,9 +291,7 @@ const SummaryPanel = ({
             
             <div>
               <div className="text-gray-600">Attempts saved</div>
-              <div className="font-semibold text-green-600">
-                {meta.xss_first_hit_attempts_delta > 0 ? `+${meta.xss_first_hit_attempts_delta}` : '0'}
-              </div>
+              <div className="font-semibold text-green-600">{meta.attempts_saved || 0}</div>
             </div>
           </div>
           

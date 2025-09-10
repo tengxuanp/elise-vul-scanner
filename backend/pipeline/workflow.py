@@ -5,6 +5,8 @@ from backend.modules.decisions import canonicalize_results, ensure_all_telemetry
 from backend.modules.strategy import ScanStrategy, get_strategy_behavior, make_plan, probe_enabled, injections_enabled, validate_strategy_requirements
 from backend.modules.event_aggregator import get_aggregator
 from backend.app_state import REQUIRE_RANKER
+from backend.pipeline.reasons import build_why
+from backend.metrics.summary import finalize_xss_context_metrics
 
 def upsert_row(results: List[Dict[str, Any]], key: Tuple[str, str, str, str, str], patch: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -104,12 +106,19 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
                 xss_ctx_pool_used += 1
                 # Count first-hit attempts for context pool
                 attempt_idx = result.get("attempt_idx", 0) or 0
-                if decision == "positive" and attempt_idx == 1:
+                if decision == "positive" and attempt_idx == 0:  # Evidence files use 0-based indexing
                     xss_first_hit_attempts_ctx += 1
-            elif rank_source in ["ml", "defaults"] and decision == "positive":
-                # Count attempts before first positive for baseline
-                attempt_idx = result.get("attempt_idx", 0) or 0
-                xss_first_hit_attempts_baseline += attempt_idx + 1
+            # Count baseline attempts for all XSS positives (including ctx_pool)
+            if result.get("family") == "xss" and decision == "positive":
+                # For ctx_pool, use top_k_used or default to 3; for others, use attempt_idx + 1
+                if rank_source == "ctx_pool":
+                    top_k_used = result.get("top_k_used", 0)
+                    if top_k_used == 0:
+                        top_k_used = 3  # Default top_k for ctx_pool
+                    xss_first_hit_attempts_baseline += top_k_used
+                else:
+                    attempt_idx = result.get("attempt_idx", 0) or 0
+                    xss_first_hit_attempts_baseline += attempt_idx + 1
     
     # Create findings aggregates by family (same structure as fuzzer_core.py)
     findings_by_family = {}
@@ -212,6 +221,11 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
             "failed_checks": []
         }
     }
+    
+    # Finalize XSS context metrics
+    meta = finalize_xss_context_metrics(meta, results, ui_top_k_default=3)
+    
+    return {"summary": summary, "results": results, "findings": findings, "job_id": job_id, "meta": meta}
 
 def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto", ctx_mode: str = "auto")->Dict[str,Any]:
     """
@@ -337,7 +351,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
             patch = {
                 "decision": result.get("decision"),
                 "provenance": provenance,
-                "why": result.get("why", []),
+                "why": build_why(result),
                 "cvss": result.get("cvss"),
                 "evidence_id": result.get("evidence_id"),
                 "rank_source": result.get("rank_source"),
@@ -363,6 +377,27 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
             
             # Upsert the row
             upsert_row(results, key, patch)
+            
+            # ---- FIRST-HIT (CTX) COUNTER ----------------------------------------------
+            # Track ctx_pool hits that succeeded on the very first ML attempt.
+            try:
+                family = result.get("family")
+                rank_source = result.get("rank_source")
+                attempt_idx = int(result.get("attempt_idx") or 0)
+                decision = result.get("decision")
+                
+                if (
+                    family == "xss"
+                    and rank_source == "ctx_pool"
+                    and attempt_idx == 0  # Fresh assessments use 0-based indexing
+                    and decision == "positive"
+                ):
+                    old_count = int(meta.get("xss_first_hit_attempts_ctx", 0))
+                    meta["xss_first_hit_attempts_ctx"] = old_count + 1
+            except Exception:
+                # Never fail the pipeline on telemetry; keep going.
+                pass
+            # ----------------------------------------------------------------------------
         elif result.get("decision") == "not_applicable":
             # Count NA results but don't add them to results array
             na_count += 1
@@ -557,7 +592,17 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     aggregator = get_aggregator()
     event_meta = aggregator.get_meta_data(results)
     
+    # Preserve manually incremented first-hit counter before merging event counters
+    manually_incremented_ctx_counter = meta.get("xss_first_hit_attempts_ctx", 0)
+    
     # Merge event counters into meta
     meta.update(event_meta)
+    
+    # Restore manually incremented counter if it was overwritten
+    if manually_incremented_ctx_counter > 0:
+        meta["xss_first_hit_attempts_ctx"] = manually_incremented_ctx_counter
+    
+    # Finalize XSS context metrics
+    meta = finalize_xss_context_metrics(meta, results, ui_top_k_default=summary.get("top_k"))
     
     return {"summary": summary, "results": results, "findings": findings, "job_id": job_id, "meta": meta}
