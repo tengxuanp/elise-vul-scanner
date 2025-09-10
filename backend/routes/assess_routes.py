@@ -19,6 +19,84 @@ from backend.routes.canonical_healthz_routes import get_healthz_data
 
 router = APIRouter()
 
+class XSSConfig(BaseModel):
+    ml_mode: Literal["auto", "always", "never", "force_ml"] = "auto"
+    tau_ml: float = Field(0.80, ge=0.0, le=1.0)
+    rule_conf_gate: float = Field(0.85, ge=0.0, le=1.0)
+    topk: int = Field(3, ge=1, le=20)
+
+class SQLiConfig(BaseModel):
+    dialect_mode: Literal["rules", "auto_ml"] = "rules"
+    short_circuit: Dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "M": 12, "K": 20})
+    topk: int = Field(6, ge=1, le=20)
+
+class StrategyConfig(BaseModel):
+    strategy: Literal["rules_only", "smart_xss", "full_smart", "exhaustive"] = "smart_xss"
+    families: List[str] = Field(default_factory=lambda: ["xss", "sqli"])
+    xss: XSSConfig = Field(default_factory=XSSConfig)
+    sqli: SQLiConfig = Field(default_factory=SQLiConfig)
+
+def apply_strategy_config(strategy_config: Optional[StrategyConfig]) -> Dict[str, Any]:
+    """
+    Apply strategy configuration to environment variables and return effective settings.
+    
+    Args:
+        strategy_config: Strategy configuration object
+        
+    Returns:
+        Dictionary with effective settings for the assessment
+    """
+    if not strategy_config:
+        # Default to Smart-XSS (Auto) semantics
+        return {
+            "strategy": "auto",
+            "xss_ctx_invoke": "auto",
+            "top_k": 3,
+            "families": ["xss", "sqli"]
+        }
+    
+    # Map new strategy names to legacy strategy values
+    strategy_mapping = {
+        "rules_only": "probe_only",
+        "smart_xss": "auto", 
+        "full_smart": "ml_with_context",
+        "exhaustive": "auto"  # Use auto as base, will be overridden by ML settings
+    }
+    
+    # Map strategy config to internal flags
+    effective_settings = {
+        "strategy": strategy_mapping.get(strategy_config.strategy, "auto"),
+        "families": strategy_config.families
+    }
+    
+    # XSS configuration
+    if strategy_config.xss:
+        effective_settings["xss_ctx_invoke"] = strategy_config.xss.ml_mode
+        effective_settings["top_k"] = strategy_config.xss.topk
+        
+        # Set environment variables for XSS gates
+        os.environ["ELISE_ML_OVERRIDE_GATE"] = str(strategy_config.xss.tau_ml)
+        os.environ["ELISE_RULE_CONF_GATE"] = str(strategy_config.xss.rule_conf_gate)
+    
+    # SQLi configuration
+    if strategy_config.sqli:
+        # Set SQLi short-circuit environment variables
+        if strategy_config.sqli.short_circuit.get("enabled", True):
+            os.environ["ELISE_SQLI_SHORTCIRCUIT_M"] = str(strategy_config.sqli.short_circuit.get("M", 12))
+            os.environ["ELISE_SQLI_SHORTCIRCUIT_K"] = str(strategy_config.sqli.short_circuit.get("K", 20))
+        else:
+            # Disable short-circuit by setting very high values
+            os.environ["ELISE_SQLI_SHORTCIRCUIT_M"] = "999"
+            os.environ["ELISE_SQLI_SHORTCIRCUIT_K"] = "0"
+    
+    # Special handling for exhaustive strategy
+    if strategy_config.strategy == "exhaustive":
+        # Exhaustive should use "always" ML mode and disable short-circuit
+        effective_settings["xss_ctx_invoke"] = "always"
+        # Short-circuit is already disabled by the SQLi config above
+    
+    return effective_settings
+
 class AssessRequest(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     
@@ -33,6 +111,7 @@ class AssessRequest(BaseModel):
     top_k: Optional[int] = Field(3, description="Number of top payloads to try per family")
     strategy: Optional[str] = Field(None, description="Scan strategy: auto, probe_only, ml_only, hybrid")
     xss_ctx_invoke: Optional[Literal["auto", "always", "never", "force_ml"]] = Field(None, description="XSS context classifier invocation mode")
+    strategy_config: Optional[StrategyConfig] = Field(None, description="New strategy configuration object")
     
     @validator('*', pre=True, always=True)
     def validate_single_pathway(cls, v, values):
@@ -60,6 +139,14 @@ async def assess_vulnerabilities(request: AssessRequest):
     - (C) job_id only: load from persisted endpoints.json
     """
     try:
+        # Apply strategy configuration if provided
+        if request.strategy_config:
+            effective_settings = apply_strategy_config(request.strategy_config)
+            # Override request parameters with strategy config values
+            request.strategy = effective_settings.get("strategy", request.strategy)
+            request.xss_ctx_invoke = effective_settings.get("xss_ctx_invoke", request.xss_ctx_invoke)
+            request.top_k = effective_settings.get("top_k", request.top_k)
+        
         # Parse and validate strategy
         strategy = parse_strategy(request.strategy)
         
@@ -77,6 +164,17 @@ async def assess_vulnerabilities(request: AssessRequest):
         
         # Get XSS context invoke mode
         ctx_mode = request.xss_ctx_invoke or os.getenv("ELISE_XSS_CTX_INVOKE", "auto")
+        
+        # Log strategy information
+        if request.strategy_config:
+            xss = request.strategy_config.xss
+            sqli = request.strategy_config.sqli
+            sc_enabled = sqli.short_circuit.get('enabled', True)
+            sc_text = f"on(M={sqli.short_circuit.get('M', 12)}/K={sqli.short_circuit.get('K', 20)})" if sc_enabled else "off"
+            effective_ml_mode = effective_settings.get("xss_ctx_invoke", xss.ml_mode)
+            print(f"ASSESS_STRATEGY preset={request.strategy_config.strategy} legacy_strategy={effective_settings['strategy']} xss.ml={effective_ml_mode} xss.topk={xss.topk} sqli.dialect={sqli.dialect_mode} sqli.topk={sqli.topk} sqli.sc={sc_text}")
+        else:
+            print(f"ASSESS_STRATEGY preset=legacy strategy={strategy.value} xss.ml={ctx_mode} xss.topk={request.top_k or 3}")
         
         # Determine pathway and mode
         mode = None
@@ -177,8 +275,23 @@ async def assess_vulnerabilities(request: AssessRequest):
         if persist_warning:
             meta["persist_warning"] = persist_warning
         
-        # Add strategy information to meta
-        meta["strategy"] = strategy.value
+        # Add strategy and plan information to meta
+        if request.strategy_config:
+            meta["strategy_config"] = request.strategy_config.dict()
+            meta["strategy"] = request.strategy_config.strategy
+            # Generate plan summary
+            xss = request.strategy_config.xss
+            sqli = request.strategy_config.sqli
+            sc_enabled = sqli.short_circuit.get('enabled', True)
+            sc_m = sqli.short_circuit.get('M', 12)
+            sc_k = sqli.short_circuit.get('K', 20)
+            sc_text = f"M={sc_m}/K={sc_k}" if sc_enabled else "OFF"
+            plan_summary = f"XSS={xss.ml_mode} (τ={xss.tau_ml}, rule={xss.rule_conf_gate}), XSS Top-K={xss.topk} • SQLi=dialect {sqli.dialect_mode}, SQLi Top-K={sqli.topk} • Short-circuit {sc_text} • Families: {', '.join(request.strategy_config.families)}"
+            meta["plan_summary"] = plan_summary
+        else:
+            # Fallback to legacy strategy
+            meta["strategy"] = strategy.value
+        
         meta["strategy_validation"] = strategy_validation
         meta["xss_ctx_invoke"] = ctx_mode
         

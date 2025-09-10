@@ -24,6 +24,10 @@ class XssProbe:
     xss_context_ml: Optional[Dict[str, Any]] = None
     xss_escaping_ml: Optional[Dict[str, Any]] = None
     xss_context_source: Optional[str] = None  # "rule" or "ml"
+    # New fields for payload selection
+    xss_context_final: Optional[str] = None  # "html" | "attr" | "js_string" | None
+    xss_context_source_detailed: Optional[str] = None  # "rule" | "ml" | "ml_override"
+    xss_ml_proba: Optional[float] = None  # ML probability if ML was used
     # Additional fields for evidence
     fragment_left_64: str = ""
     fragment_right_64: str = ""
@@ -201,6 +205,7 @@ def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: st
 
 def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None, ctx_mode: str = "auto", meta: dict = None):
     """Run XSS probe with enhanced context and escaping detection."""
+    print(f"XSS_PROBE_START url={url} param={param} ctx_mode={ctx_mode}")
     # Check if XSS probes are disabled by the current plan
     if plan and "xss" in plan.probes_disabled:
         probe = XssProbe()
@@ -215,8 +220,10 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
     r = httpx.request(method, url, params=params, data=data, json=js, headers=headers, timeout=8.0, follow_redirects=True)
     text = r.text or ""
     
+    print(f"XSS_PROBE_CANARY url={url} param={param} canary_found={CANARY in text}")
     if CANARY in text:
         canary_pos = text.find(CANARY)
+        print(f"XSS_PROBE_CANARY_FOUND url={url} param={param} canary_pos={canary_pos}")
         
         # Capture data for ML training if job_id provided
         if job_id:
@@ -254,9 +261,11 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
                 context_ml = predict_xss_context(text_window, canary_pos - window_start)
                 escaping_ml = predict_xss_escaping(text_window, canary_pos - window_start)
                 
+                print(f"XSS_ML_DEBUG ctx_mode={ctx_mode} call_ml={call_ml} context_ml={context_ml} escaping_ml={escaping_ml}")
+                
                 if context_ml:
                     m_ctx = context_ml.get("pred")
-                    m_p = context_ml.get("conf", 0.0)
+                    m_p = context_ml.get("proba", 0.0)  # Use "proba" not "conf"
                 if escaping_ml:
                     m_esc = escaping_ml.get("pred")
                 
@@ -264,8 +273,12 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
                 if meta is not None:
                     meta["xss.ml_invoked"] = meta.get("xss.ml_invoked", 0) + 1
                     
-            except ImportError:
+            except ImportError as e:
                 # ML models not available, use rules
+                print(f"XSS_ML_IMPORT_ERROR: {e}")
+                pass
+            except Exception as e:
+                print(f"XSS_ML_ERROR: {e}")
                 pass
         
         # 3) Fuse decisions
@@ -273,11 +286,14 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
         if ctx_mode == "force_ml" and m_ctx:
             f_ctx, f_esc, src, conf = m_ctx, m_esc, "ml", m_p
             chose_ml = True
+            print(f"XSS_FUSION force_ml: ctx={f_ctx} src={src} conf={conf}")
         elif m_ctx and (m_p >= ML_OVERRIDE_GATE) and (r_conf < RULE_CONF_GATE):
             f_ctx, f_esc, src, conf = m_ctx, m_esc, "ml", m_p
             chose_ml = True
+            print(f"XSS_FUSION ml_override: ctx={f_ctx} src={src} conf={conf} ml_p={m_p} r_conf={r_conf}")
         else:
             f_ctx, f_esc, src, conf = r_ctx, r_esc, ("rule_high_conf" if r_conf >= RULE_CONF_GATE else "rule_low_conf"), r_conf
+            print(f"XSS_FUSION rule: ctx={f_ctx} src={src} conf={conf} r_conf={r_conf} m_ctx={m_ctx} m_p={m_p}")
         
         # Count final ML decisions
         if chose_ml and meta is not None:
@@ -335,6 +351,9 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
             xss_context_ml=context_ml,
             xss_escaping_ml=escaping_ml,
             xss_context_source=src,
+            xss_context_final=final_context,
+            xss_context_source_detailed=src,
+            xss_ml_proba=context_ml.get("proba") if context_ml and src.startswith("ml") else None,
             fragment_left_64=fragment_left_64,
             fragment_right_64=fragment_right_64,
             raw_reflection=raw_reflection,

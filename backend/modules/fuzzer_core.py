@@ -15,6 +15,11 @@ from unittest.mock import Mock
 # Import the new event aggregator
 from backend.modules.event_aggregator import get_aggregator
 
+# Import SQLi dialect and budget modules
+from backend.modules.payloads_sqli import sqli_payload_pool_for, sqli_payload_strings_for
+from backend.modules.sqli_dialect_rules import infer_sqli_dialect_from_text
+from backend.modules.sqli_budget import get_sqli_budget
+
 def record_probe_attempt(target_id: str, family: str, success: bool):
     """Record a probe attempt event."""
     aggregator = get_aggregator()
@@ -142,12 +147,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         else:
             # Only run probes for enabled families
             families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
+            print(f"PROBE_DEBUG plan={plan.name} probes_disabled={plan.probes_disabled} families_to_probe={families_to_probe}")
             if families_to_probe:
                 probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
                 probe_result = _confirmed_family(probe_bundle)
             else:
                 # No probes enabled by strategy - create empty probe bundle
                 families_to_probe = []
+                print(f"PROBE_DEBUG creating mock probe bundle for strategy {plan.name}")
                 # Create proper Mock objects for probe families
                 xss_mock = Mock()
                 xss_mock.reflected = False
@@ -207,111 +214,119 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # Continue to ML injections below
                 pass
             else:
-                # Probe confirmed vulnerability - decision from probe proof, not ML
-                ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
-                ev.cvss = cvss_for(fam, ev)
-                ev.why = unique_merge(ev.why, [reason_code])
-                
-                # Add rich evidence data
-                import uuid
-                from backend.modules.evidence import (
-                    create_rich_evidence_meta, create_xss_marker, create_reflection_details,
-                    create_redirect_details, create_sqli_details, create_vuln_proof,
-                    redact_sensitive_headers, truncate_response_body
-                )
-                
-                result_id = str(uuid.uuid4())
-                ev.result_id = result_id
-                ev.strategy = plan.name.value if plan else "auto"
-                ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                ev.ctx_invoke = ctx_mode
-                
-                # Redact sensitive headers
-                ev.request_headers = redact_sensitive_headers(ev.request_headers)
-                # Truncate response body
-                ev.response_snippet = truncate_response_body(ev.response_snippet)
-                
-                # Add probe signal details
-                if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
-                    xss_probe = probe_bundle.xss
-                    canary = getattr(xss_probe, "raw_reflection", "<probe>")
-                    ev.marker = create_xss_marker(canary)
-                    ev.reflection_details = create_reflection_details(xss_probe)
-                elif fam == "redirect" and hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
-                    ev.redirect_details = create_redirect_details(probe_bundle.redirect)
-                elif fam == "sqli" and hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
-                    ev.sqli_details = create_sqli_details(probe_bundle.sqli)
-                
-                # Add vulnerability proof
-                context = getattr(ev, "xss_context", None)
-                escaping = getattr(ev, "xss_escaping", None)
-                redirect_location = ev.redirect_details.get("location") if ev.redirect_details else None
-                sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
-                ev.vuln_proof = create_vuln_proof(fam, context, escaping, redirect_location, sqli_error)
-                
-                # Add telemetry for probe evidence
-                ev.telemetry = {
-                    "attempt_idx": 0,  # Probes don't have attempt indices
-                    "top_k_used": 0,   # Probes don't use top-k
-                    "rank_source": "probe_only"
-                }
-                
-                evidence_id = write_evidence(job_id, ev, probe_bundle)
-                
-                # Log confirm event
-                logging.info("confirm", extra={
-                    "family": fam,
-                    "rank_source": "probe_only",
-                    "reason_code": reason_code,
-                    "evidence_id": evidence_id
-                })
-
-                result_dict = {
-                    "target": target.to_dict(), 
-                    "family": fam, 
-                    "decision": DECISION["POS"], 
-                    "why": ["probe_proof", reason_code],
-                    "evidence_id": evidence_id,
-                    "cvss": ev.cvss,  # Pass through the CVSS from evidence
-                    "rank_source": "probe_only",  # Decision from probe, not ML
-                    "ml_role": None,
-                    "gated": False,
-                    "ml_family": None,
-                "ml_proba": None,
-                "ml_threshold": None,
-                "model_tag": None,
-                "attempt_idx": None,
-                "top_k_used": None,
-                "timing_ms": 0  # Probe-only results have no injection timing
-                }
-                
-                # Add XSS context fields if this is an XSS finding
-                if fam == "xss":
-                    result_dict.update({
-                        "xss_context": ev.xss_context,
-                        "xss_escaping": ev.xss_escaping,
-                        "xss_context_source": ev.xss_context_source,
-                        "xss_context_ml_proba": ev.xss_context_ml_proba
-                    })
+                # Probe confirmed vulnerability
+                # For XSS with ML context decisions, continue to ML payload selection
+                if fam == "xss" and plan and plan.name == "auto":
+                    print(f"XSS_PROBE_CONFIRMED continuing to ML payload selection for context optimization")
+                    # Store probe result but continue to ML injections for context-optimized payloads
+                    probe_confirmed_family = fam
+                    probe_confirmed_reason = reason_code
+                else:
+                    # Return probe result immediately for non-XSS or non-auto strategies
+                    ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
+                    ev.cvss = cvss_for(fam, ev)
+                    ev.why = unique_merge(ev.why, [reason_code])
                     
-                    # Add param information from XSS probe if available
-                    if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                    # Add rich evidence data
+                    import uuid
+                    from backend.modules.evidence import (
+                        create_rich_evidence_meta, create_xss_marker, create_reflection_details,
+                        create_redirect_details, create_sqli_details, create_vuln_proof,
+                        redact_sensitive_headers, truncate_response_body
+                    )
+                    
+                    result_id = str(uuid.uuid4())
+                    ev.result_id = result_id
+                    ev.strategy = plan.name.value if plan else "auto"
+                    ev.timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    ev.ctx_invoke = ctx_mode
+                    
+                    # Redact sensitive headers
+                    ev.request_headers = redact_sensitive_headers(ev.request_headers)
+                    # Truncate response body
+                    ev.response_snippet = truncate_response_body(ev.response_snippet)
+                    
+                    # Add probe signal details
+                    if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
                         xss_probe = probe_bundle.xss
-                        if hasattr(xss_probe, "param_in") and hasattr(xss_probe, "param"):
-                            result_dict.update({
-                                "param_in": xss_probe.param_in,
-                                "param": xss_probe.param
-                            })
-                
-                # Add param information for redirect findings
-                elif fam == "redirect":
-                    if hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
-                        redirect_probe = probe_bundle.redirect
-                        if hasattr(redirect_probe, "param_in") and hasattr(redirect_probe, "param"):
-                            result_dict.update({
-                                "param_in": redirect_probe.param_in,
-                                "param": redirect_probe.param
-                            })
+                        canary = getattr(xss_probe, "raw_reflection", "<probe>")
+                        ev.marker = create_xss_marker(canary)
+                        ev.reflection_details = create_reflection_details(xss_probe)
+                    elif fam == "redirect" and hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                        ev.redirect_details = create_redirect_details(probe_bundle.redirect)
+                    elif fam == "sqli" and hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
+                        ev.sqli_details = create_sqli_details(probe_bundle.sqli)
+                    
+                    # Add vulnerability proof
+                    context = getattr(ev, "xss_context", None)
+                    escaping = getattr(ev, "xss_escaping", None)
+                    redirect_location = ev.redirect_details.get("location") if ev.redirect_details else None
+                    sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
+                    ev.vuln_proof = create_vuln_proof(fam, context, escaping, redirect_location, sqli_error)
+                    
+                    # Add telemetry for probe evidence
+                    ev.telemetry = {
+                        "attempt_idx": 0,  # Probes don't have attempt indices
+                        "top_k_used": 0,   # Probes don't use top-k
+                        "rank_source": "probe_only"
+                    }
+                    
+                    evidence_id = write_evidence(job_id, ev, probe_bundle)
+                    
+                    # Log confirm event
+                    logging.info("confirm", extra={
+                        "family": fam,
+                        "rank_source": "probe_only",
+                        "reason_code": reason_code,
+                        "evidence_id": evidence_id
+                    })
+
+                    result_dict = {
+                        "target": target.to_dict(), 
+                        "family": fam, 
+                        "decision": DECISION["POS"], 
+                        "why": ["probe_proof", reason_code],
+                        "evidence_id": evidence_id,
+                        "cvss": ev.cvss,  # Pass through the CVSS from evidence
+                        "rank_source": "probe_only",  # Decision from probe, not ML
+                        "ml_role": None,
+                        "gated": False,
+                        "ml_family": None,
+                    "ml_proba": None,
+                    "ml_threshold": None,
+                    "model_tag": None,
+                    "attempt_idx": None,
+                    "top_k_used": None,
+                    "timing_ms": 0  # Probe-only results have no injection timing
+                    }
+                    
+                    # Add XSS context fields if this is an XSS finding
+                    if fam == "xss":
+                        result_dict.update({
+                            "xss_context": ev.xss_context,
+                            "xss_escaping": ev.xss_escaping,
+                            "xss_context_source": ev.xss_context_source,
+                            "xss_context_ml_proba": ev.xss_context_ml_proba
+                        })
+                        
+                        # Add param information from XSS probe if available
+                        if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                            xss_probe = probe_bundle.xss
+                            if hasattr(xss_probe, "param_in") and hasattr(xss_probe, "param"):
+                                result_dict.update({
+                                    "param_in": xss_probe.param_in,
+                                    "param": xss_probe.param
+                                })
+                    
+                    # Add param information for redirect findings
+                    elif fam == "redirect":
+                        if hasattr(probe_bundle, "redirect") and probe_bundle.redirect:
+                            redirect_probe = probe_bundle.redirect
+                            if hasattr(redirect_probe, "param_in") and hasattr(redirect_probe, "param"):
+                                result_dict.update({
+                                    "param_in": redirect_probe.param_in,
+                                    "param": redirect_probe.param
+                                })
             
             # Optional demo flag: force one context injection after XSS reflection
             force_context_inject = os.getenv("XSS_FORCE_CONTEXT_INJECT_ON_REFLECTION", "false").lower() == "true"
@@ -360,16 +375,28 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     "top_k_used": None,
                     "timing_ms": 0
                 }
-            else:
+                
                 # For other strategies, return probe result immediately
                 return _ensure_telemetry_defaults(result_dict)
         
         # ML payload ranking and injection (with strategy enforcement)
         candidates = []
         if gate_candidate_xss(target):
-            candidates.append("xss")
+            # Only add XSS candidate if target actually has XSS reflections
+            if hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                reflected = getattr(probe_bundle.xss, "reflected", False)
+                print(f"CANDIDATE_DEBUG xss probe exists, reflected={reflected}")
+                if reflected:
+                    candidates.append("xss")
+                    print(f"CANDIDATE_DEBUG added xss candidate for target with reflection")
+                else:
+                    print(f"CANDIDATE_DEBUG xss gate passed but no reflection, skipping xss candidate")
+            else:
+                print(f"CANDIDATE_DEBUG xss gate passed but no xss probe, skipping xss candidate")
         if gate_candidate_sqli(target):
             candidates.append("sqli")
+        
+        print(f"CANDIDATE_DEBUG final candidates={candidates}")
         
         # For ml_with_context strategy, exclude redirect family entirely
         if plan and plan.name == "ml_with_context":
@@ -402,6 +429,17 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "timing_ms": 0
             })
         
+        # Check SQLi short-circuit budget
+        sqli_budget = get_sqli_budget()
+        if "sqli" in candidates and sqli_budget.is_paused(target.param):
+            candidates.remove("sqli")
+            violations.append("sqli_short_circuit_paused")
+            logging.info("SQLi short-circuit activated", extra={
+                "param": target.param,
+                "null_streak": sqli_budget.null_streak,
+                "paused_until": sqli_budget.paused_until
+            })
+
         if not candidates:
             return _ensure_telemetry_defaults({
                 "target": target.to_dict(), 
@@ -470,15 +508,76 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # Extract XSS context information if available
                 xss_context = None
                 xss_escaping = None
-                if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
-                    xss_context = getattr(probe_bundle.xss, "xss_context", None)
-                    xss_escaping = getattr(probe_bundle.xss, "xss_escaping", None)
+                xss_context_final = None
+                xss_context_source = None
+                xss_ml_proba = None
+                rank_source = "rule"  # Default rank source
                 
-                ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
+                print(f"XSS_PROBE_DEBUG fam={fam} has_probe_bundle={probe_bundle is not None} has_xss={hasattr(probe_bundle, 'xss') if probe_bundle else False}")
+                if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                    xss_probe = probe_bundle.xss
+                    xss_context = getattr(xss_probe, "xss_context", None)
+                    xss_escaping = getattr(xss_probe, "xss_escaping", None)
+                    xss_context_final = getattr(xss_probe, "xss_context_final", None)
+                    xss_context_source = getattr(xss_probe, "xss_context_source_detailed", None)
+                    xss_ml_proba = getattr(xss_probe, "xss_ml_proba", None)
+                    
+                    print(f"XSS_PROBE_DEBUG xss_context={xss_context} xss_context_final={xss_context_final} xss_context_source={xss_context_source}")
+                    
+                    # Determine rank source based on context source
+                    if xss_context_source and xss_context_source.startswith("ml"):
+                        rank_source = "ml"
+                    else:
+                        rank_source = "rule"
+                
+                # Use context-aware payload selection if ML provided a final context
+                print(f"XSS_PAYLOAD_DEBUG fam={fam} xss_context_final={xss_context_final} xss_escaping={xss_escaping} rank_source={rank_source}")
+                if fam == "xss" and xss_context_final and xss_context_final in ["html", "html_body", "attr", "js_string"]:
+                    # Map context to family and use context-specific payloads
+                    from backend.modules.payloads import payload_pool_for_xss
+                    context_payloads = payload_pool_for_xss(xss_context_final, xss_escaping or "unknown")
+                    print(f"XSS_PAYLOAD_DEBUG context_payloads={len(context_payloads) if context_payloads else 0}")
+                    if context_payloads:
+                        # Use context-specific payloads with strategy Top-K limit
+                        strategy_topk = getattr(plan, "xss_topk", top_k or 3) if hasattr(plan, "xss_topk") else top_k or 3
+                        # Convert context-specific payloads to expected dictionary format
+                        ranked = []
+                        for payload in context_payloads[:strategy_topk]:
+                            ranked.append({
+                                "payload": payload,
+                                "score": None,
+                                "p_cal": 0.8,  # High confidence for context-specific payloads
+                                "rank_source": rank_source,
+                                "context_final": xss_context_final,
+                                "ml_proba": xss_ml_proba,
+                                "model_tag": "context_specific",
+                                "family": "xss"
+                            })
+                        
+                        # Log XSS selection
+                        print(f"XSS_SELECT ctx={xss_context_final} src={rank_source} topk={len(ranked)} ml_proba={xss_ml_proba}")
+                        print(f"RANKED_DEBUG after context payloads: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}")
+                    else:
+                        # Fallback to default ranking
+                        ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
+                        # Override rank_source for fallback
+                        rank_source = "rule"
+                        print(f"XSS_SELECT ctx=fallback src={rank_source} topk={len(ranked)} ml_proba=None")
+                else:
+                    # Use default ranking
+                    ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
+                    # Override rank_source for default
+                    rank_source = "rule"
+                    print(f"XSS_SELECT ctx=None src={rank_source} topk={len(ranked)} ml_proba=None")
+                
                 attempted_by_family[fam] = len(ranked)
                 
-                # Get ML telemetry from first ranked item
-                rank_source = ranked[0].get("rank_source", "defaults") if ranked else "defaults"
+                # Ensure rank_source is set correctly (don't override ML decisions)
+                if not ranked or not ranked[0].get("rank_source"):
+                    # Only set default if not already set by ML logic above
+                    if rank_source == "rule":
+                        for payload in ranked:
+                            payload["rank_source"] = "rule"
                 
                 # Record context pool usage if ctx_pool is used
                 if rank_source == "ctx_pool":
@@ -490,7 +589,49 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # Get threshold for this family
                 threshold = {"xss": tau_xss, "sqli": tau_sqli, "redirect": tau_redirect}.get(fam, 0.5)
                 
+                # SQLi dialect detection and payload pool switching
+                sqli_dialect_hint = None
+                sqli_dialect_signals = []
+                sqli_dialect_confident = False
+                
+                if fam == "sqli" and ranked:
+                    # Try first payload to detect dialect
+                    first_payload = ranked[0].get("payload", "")
+                    if first_payload:
+                        try:
+                            # Inject first payload to detect dialect
+                            inj_start = time.perf_counter()
+                            test_inj = inject_once(target, fam, first_payload)
+                            inj_timing_ms = int((time.perf_counter() - inj_start) * 1000)
+                            
+                            # Detect dialect from response
+                            sqli_dialect_hint, sqli_dialect_signals, sqli_dialect_confident = infer_sqli_dialect_from_text(
+                                test_inj.response_snippet, test_inj.response_headers
+                            )
+                            
+                            # Switch to dialect-specific payloads if confident
+                            if sqli_dialect_confident and sqli_dialect_hint:
+                                dialect_payloads = sqli_payload_strings_for(sqli_dialect_hint)
+                                # Replace ranked payloads with dialect-specific ones
+                                ranked = [{"payload": p, "score": 1.0, "p_cal": 0.8, "rank_source": "dialect"} for p in dialect_payloads[:6]]
+                                logging.info("SQLi dialect detected, switched payload pool", extra={
+                                    "dialect": sqli_dialect_hint,
+                                    "signals": sqli_dialect_signals,
+                                    "confident": sqli_dialect_confident,
+                                    "new_payload_count": len(ranked)
+                                })
+                            
+                            # Record the test injection result in budget
+                            had_signal = "sql_error" in (test_inj.why or [])
+                            sqli_budget.note_result(had_signal, target.param)
+                            
+                        except Exception as e:
+                            logging.warning(f"SQLi dialect detection failed: {e}")
+                            # Record failed attempt
+                            sqli_budget.note_result(False, target.param)
+
                 # Log ML ranker usage (once per family)
+                print(f"RANKED_DEBUG before ML ranker check: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}, rank_source={rank_source}")
                 if rank_source == "ml" and ranked:
                     ml_used = True
                     top_payload = ranked[0].get("payload", "")
@@ -504,7 +645,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     })
                 
                 # Process ranked payloads for injection
+                print(f"RANKED_DEBUG before injection loop: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}")
                 for attempt_idx, cand in enumerate(ranked):
+                    print(f"INJECTION_DEBUG attempt_idx={attempt_idx}, cand={cand is not None}, cand_type={type(cand)}")
                     payload = cand.get("payload")
                     score = cand.get("score")
                     p_cal = cand.get("p_cal")
@@ -516,11 +659,22 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     
                     # Measure injection timing using perf_counter for better precision
                     inj_start = time.perf_counter()
-                    inj = inject_once(target, fam, payload)
+                    print(f"INJECTION_DEBUG before inject_once: target={target.url}, fam={fam}, payload={payload[:50] if payload else 'None'}")
+                    try:
+                        inj = inject_once(target, fam, payload)
+                        print(f"INJECTION_DEBUG after inject_once: inj={inj is not None}, inj_type={type(inj)}")
+                    except Exception as e:
+                        print(f"INJECTION_DEBUG inject_once failed: {e}")
+                        raise
                     inj_timing_ms = int((time.perf_counter() - inj_start) * 1000)
                     
                     # Record injection attempt
                     record_inject_attempt(target_id, fam, False)  # Will be updated to True if successful
+                    
+                    # Record SQLi result in budget (for non-test injections)
+                    if fam == "sqli" and attempt_idx > 0:  # Skip the test injection we already recorded
+                        had_signal = "sql_error" in (getattr(inj, "why", []) or [])
+                        sqli_budget.note_result(had_signal, target.param)
                     
                     # Build comprehensive signals from probes + injection outcome
                     signals = {
@@ -537,15 +691,37 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         # Update injection attempt to success
                         record_inject_attempt(target_id, fam, True)
                         
+                        # Get the actual rank_source from the payload that was used
+                        payload_rank_source = cand.get("rank_source", rank_source)
+                        
                         # Create evidence with ML scores and correct family
+                        print(f"EVIDENCE_DEBUG before from_injection: cand={cand is not None}, cand_type={type(cand)}, cand_keys={list(cand.keys()) if cand and isinstance(cand, dict) else 'N/A'}")
                         ev = EvidenceRow.from_injection(
                             target, fired_family, probe_bundle, cand, inj,
-                            rank_source=rank_source,
+                            rank_source=payload_rank_source,
                             ml_family=fam,
                             ml_proba=p_cal,
                             ml_threshold=threshold,
                             model_tag=model_tag
                         )
+                        
+                        # Add XSS context information if available
+                        if fired_family == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
+                            xss_probe = probe_bundle.xss
+                            if not hasattr(ev, 'telemetry') or ev.telemetry is None:
+                                ev.telemetry = {}
+                            if not isinstance(ev.telemetry, dict):
+                                ev.telemetry = {}
+                            if 'xss' not in ev.telemetry:
+                                ev.telemetry['xss'] = {}
+                            
+                            ev.telemetry['xss'].update({
+                                'context_final': getattr(xss_probe, 'xss_context_final', None),
+                                'context_source': getattr(xss_probe, 'xss_context_source_detailed', None),
+                                'ml_proba': getattr(xss_probe, 'xss_ml_proba', None),
+                                'rank_source': payload_rank_source,
+                                'topk_effective': len(ranked) if ranked else None
+                            })
                         ev.cvss = cvss_for(fired_family, ev)
                         ev.score = score
                         ev.p_cal = p_cal
@@ -613,6 +789,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "rank_source": rank_source
                         }
                         
+                        # Add SQLi dialect metadata if this is a SQLi finding
+                        if fired_family == "sqli":
+                            ev.telemetry.update({
+                                "sqli_dialect_hint": sqli_dialect_hint,
+                                "sqli_dialect_signals": sqli_dialect_signals,
+                                "sqli_dialect_confident": sqli_dialect_confident
+                            })
+                        
                         # Add vulnerability proof
                         context = getattr(ev, "xss_context", None)
                         escaping = getattr(ev, "xss_escaping", None)
@@ -639,16 +823,17 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "why": unique_merge([], ["ml_ranked", reason_code]),
                             "evidence_id": evidence_id,
                             "cvss": ev.cvss,  # Pass through the CVSS from evidence
-                            "rank_source": rank_source,  # "ml" if ML ranked, "defaults" if fallback
-                            "ml_role": "prioritization" if rank_source == "ml" else None,
+                            "rank_source": payload_rank_source,  # Use the actual payload rank_source
+                            "ml_role": "prioritization" if payload_rank_source == "ml" else None,
                             "gated": False,
-                            "ml_family": fam if rank_source == "ml" else None,
-                            "ml_proba": p_cal if rank_source == "ml" else None,
-                            "ml_threshold": threshold if rank_source == "ml" else None,
-                            "model_tag": model_tag if rank_source == "ml" else None,
-                            "attempt_idx": (attempt_idx + 1) if rank_source in ["ml", "ctx_pool"] else None,
-                            "top_k_used": len(ranked) if rank_source in ["ml", "ctx_pool"] else None,
-                            "timing_ms": inj_timing_ms
+                            "ml_family": fam if payload_rank_source == "ml" else None,
+                            "ml_proba": p_cal if payload_rank_source == "ml" else None,
+                            "ml_threshold": threshold if payload_rank_source == "ml" else None,
+                            "model_tag": model_tag if payload_rank_source == "ml" else None,
+                            "attempt_idx": (attempt_idx + 1) if payload_rank_source in ["ml", "ctx_pool"] else None,
+                            "top_k_used": len(ranked) if payload_rank_source in ["ml", "ctx_pool"] else None,
+                            "timing_ms": inj_timing_ms,
+                            "telemetry": ev.telemetry  # Include the full telemetry from evidence
                         }
                         
                         # Add XSS context fields if this is an XSS finding

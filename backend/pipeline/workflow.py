@@ -237,19 +237,32 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     from backend.modules.evidence_reader import read_evidence_files
     
     # Check if evidence files already exist (for from_persisted mode)
-    # Only use existing results if they match the current strategy
+    # Only use existing results if they match the current strategy AND ctx_mode
     existing_results = read_evidence_files(job_id)
     if existing_results:
-        # Filter existing results to only include those with the matching strategy
-        matching_results = [r for r in existing_results if r.get("strategy") == strategy]
+        # Filter existing results to only include those with the matching strategy AND ctx_mode
+        matching_results = []
+        for r in existing_results:
+            if r.get("strategy") == strategy:
+                # Check ctx_mode from telemetry
+                telemetry = r.get("telemetry", {})
+                existing_ctx_mode = telemetry.get("ctx_invoke", "auto")
+                if existing_ctx_mode == ctx_mode:
+                    matching_results.append(r)
+        
         if matching_results:
-            print(f"Found {len(matching_results)} existing evidence files for job {job_id} with matching strategy {strategy}")
+            print(f"Found {len(matching_results)} existing evidence files for job {job_id} with matching strategy {strategy} and ctx_mode {ctx_mode}")
             # Return matching results instead of re-running assessment
             return create_assessment_response_from_results(matching_results, job_id, strategy, ctx_mode)
         else:
-            # Show what strategies are available
+            # Show what strategies and ctx_modes are available
             available_strategies = set(r.get("strategy") for r in existing_results)
-            print(f"Found existing evidence files for job {job_id} with strategies {available_strategies}, but current strategy is {strategy}. Re-running assessment.")
+            available_ctx_modes = set()
+            for r in existing_results:
+                telemetry = r.get("telemetry", {})
+                ctx_mode_from_telemetry = telemetry.get("ctx_invoke", "auto")
+                available_ctx_modes.add(ctx_mode_from_telemetry)
+            print(f"Found existing evidence files for job {job_id} with strategies {available_strategies} and ctx_modes {available_ctx_modes}, but current strategy is {strategy} and ctx_mode is {ctx_mode}. Re-running assessment.")
     
     # Parse strategy and create execution plan
     try:

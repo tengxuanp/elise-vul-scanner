@@ -15,6 +15,8 @@ class EvidenceRow:
     request_headers: Dict[str,Any]
     response_status: int
     response_snippet: str
+    response_headers: Dict[str, str]
+    response_len: int
     probe_signals: Dict[str,Any]
     why: list
     cvss: Dict[str,Any] | None = None
@@ -119,6 +121,7 @@ class EvidenceRow:
         
         return cls(
             family, t.url, t.method, t.param_in, t.param, "<probe>", t.headers or {}, 200, response_snippet,
+            {}, 0,  # response_headers, response_len for probe confirmations
             signals,
             ["probe_proof"],
             validation=cls._create_validation_flags(signals),
@@ -184,6 +187,7 @@ class EvidenceRow:
 
         return cls(
             family, t.url, t.method, t.param_in, t.param, rec["payload"], t.headers or {}, inj.status, response_snippet,
+            getattr(inj, "response_headers", {}), getattr(inj, "response_len", 0),
             signals,
             ["ml_ranked"] + (getattr(inj, "why", []) or []),
             score=rec.get("score"),

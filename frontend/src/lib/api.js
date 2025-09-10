@@ -5,11 +5,11 @@ export async function crawl(body) {
   if (!r.ok) throw new Error(await r.text()); return r.json();
 }
 
-export async function assess({ endpoints, job_id, top_k=3, target_url, strategy, xss_ctx_invoke }) {
+export async function assess({ endpoints, job_id, top_k=3, target_url, strategy, xss_ctx_invoke, strategy_config }) {
   // Support both old format (endpoints) and new format (target_url)
   const body = target_url 
-    ? { target_url, job_id, top_k, strategy, xss_ctx_invoke }
-    : { endpoints, job_id, top_k, strategy, xss_ctx_invoke };
+    ? { target_url, job_id, top_k, strategy, xss_ctx_invoke, strategy_config }
+    : { endpoints, job_id, top_k, strategy, xss_ctx_invoke, strategy_config };
   
   const r = await fetch(`${API_BASE}/assess`, { method:"POST", headers:{ "content-type":"application/json" }, body: JSON.stringify(body) });
   if (!r.ok) throw new Error(await r.text()); return r.json();

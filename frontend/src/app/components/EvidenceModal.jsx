@@ -305,17 +305,21 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
       <div className="space-y-4">
         <div className="flex items-center gap-4">
           <div>
-            <div className="text-xs text-gray-500">Source</div>
+            <div className="text-xs text-gray-500">Rank Source</div>
             <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">{evidence.ranking_source || "unknown"}</span>
+              <span className="text-sm font-medium">{evidence.telemetry?.xss?.rank_source || evidence.ranking_source || "unknown"}</span>
               <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
                 {evidence?.ranking?.source || evidence?.rank_source || "n/a"}
               </span>
             </div>
           </div>
           <div>
-            <div className="text-xs text-gray-500">Pool Size</div>
-            <div className="text-sm font-medium">{evidence.ranking_pool_size || 0}</div>
+            <div className="text-xs text-gray-500">Context (final)</div>
+            <div className="text-sm font-medium">{evidence.telemetry?.xss?.context_final || "none"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-gray-500">Top-K (effective)</div>
+            <div className="text-sm font-medium">{evidence.telemetry?.xss?.topk_effective || evidence.ranking_pool_size || 0}</div>
           </div>
           {evidence.ranking_model && (
             <div>
@@ -485,6 +489,14 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                 {evidence.telemetry.ctx_invoke}
               </span>
             )}
+            {meta?.strategy && (
+              <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700 border">
+                Strategy: {meta.strategy === "rules_only" ? "Rules-Only" :
+                          meta.strategy === "smart_xss" ? "Smart-XSS" :
+                          meta.strategy === "full_smart" ? "Full-Smart" :
+                          meta.strategy === "exhaustive" ? "Exhaustive" : meta.strategy}
+              </span>
+            )}
           </div>
           <button onClick={onClose} className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200">Close</button>
         </div>
@@ -597,6 +609,16 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                       </div>
                     </div>
 
+                    {/* Effective Top-K */}
+                    {evidence?.telemetry?.top_k_used && (
+                      <div>
+                        <div className="text-xs text-zinc-500 mb-1">Effective Top-K</div>
+                        <span className="px-2 py-0.5 rounded bg-green-100 text-green-700 text-xs">
+                          {evidence.telemetry.top_k_used} payloads used
+                        </span>
+                      </div>
+                    )}
+
                     {/* XSS Context/Escaping or SQLi Dialect */}
                     {(evidence?.xss_context || evidence?.xss_escaping) && (
                       <div>
@@ -664,6 +686,32 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     }
                     return null;
                   })()}
+                  
+                  {/* Response Headers and Length */}
+                  {(evidence?.response_headers || evidence?.response_len) && (
+                    <div className="my-4">
+                      <div className="text-xs text-zinc-500 mb-2">Response Information</div>
+                      <div className="bg-zinc-50 border rounded p-3 text-xs">
+                        {evidence?.response_len && (
+                          <div className="mb-2">
+                            <span className="font-semibold">Length:</span> {evidence.response_len.toLocaleString()} bytes
+                          </div>
+                        )}
+                        {evidence?.response_headers && Object.keys(evidence.response_headers).length > 0 && (
+                          <div>
+                            <span className="font-semibold">Headers:</span>
+                            <div className="mt-1 space-y-1">
+                              {Object.entries(evidence.response_headers).map(([key, value]) => (
+                                <div key={key} className="font-mono">
+                                  <span className="text-blue-600">{key}:</span> {value}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   
                   <div className="text-xs text-zinc-500 my-2 flex items-center justify-between">
                     <span>Response snippet</span>

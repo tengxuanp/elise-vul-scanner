@@ -7,6 +7,7 @@ import EvidenceModal from "../components/EvidenceModal";
 import SummaryPanel from "../components/SummaryPanel";
 import DiagnosticsCard from "../components/DiagnosticsCard";
 import Stepbar from "../components/Stepbar";
+import StrategySelector from "../components/StrategySelector";
 import { humanizeWhyCodes } from "../../lib/microcopy";
 
 export default function AssessPage() {
@@ -14,55 +15,55 @@ export default function AssessPage() {
   const [assessmentResult, setAssessmentResult] = useState(null);
   const [view, setView] = useState(null);
   const [tab, setTab] = useState("positive");
-  const [topK, setTopK] = useState(3);
   const [mlMode, setMlMode] = useState("Off");
-  const [strategy, setStrategy] = useState("auto");
-  
-  // XSS Context Classifier state
-  const [ctxInvoke, setCtxInvoke] = useState(() => {
-    if (typeof window !== "undefined") {
-      return localStorage.getItem("elise.ctx_invoke") || "auto";
+  // Default strategy configuration (Smart-XSS)
+  const defaultStrategyConfig = {
+    strategy: "smart_xss",
+    families: ["xss", "sqli"],
+    xss: {
+      ml_mode: "auto",
+      tau_ml: 0.80,
+      rule_conf_gate: 0.85,
+      topk: 3
+    },
+    sqli: {
+      dialect_mode: "rules",
+      short_circuit: { enabled: true, M: 12, K: 20 },
+      topk: 6
     }
-    return "auto";
-  });
+  };
   
-  // XSS Context Classifier options
-  const CTX_OPTIONS = [
-    { value: "auto", label: "Auto", helper: "Call ML only when rule is unsure" },
-    { value: "always", label: "Always", helper: "Always run ML; override on strong ML" },
-    { value: "never", label: "Never", helper: "Disable ML (rules only)" },
-    { value: "force_ml", label: "Force ML", helper: "Demo/benchmark; always use ML output" }
-  ];
+  const [strategyConfig, setStrategyConfig] = useState(defaultStrategyConfig);
+  const [sqliDialectMLAvailable, setSqliDialectMLAvailable] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
   const jobId = searchParams.get("jobId");
   const targetUrl = searchParams.get("targetUrl");
   
-  // Initialize strategy from URL parameter
+  // Initialize strategy config from URL parameter (backward compatibility)
   useEffect(() => {
     const urlStrategy = searchParams.get("strategy");
     if (urlStrategy && ["auto", "probe_only", "ml_only", "ml_with_context", "hybrid"].includes(urlStrategy)) {
-      setStrategy(urlStrategy);
+      // Convert old strategy to new config format, using default as base
+      const legacyConfig = {
+        ...defaultStrategyConfig,
+        strategy: urlStrategy === "auto" ? "smart_xss" : 
+                 urlStrategy === "probe_only" ? "rules_only" :
+                 urlStrategy === "ml_only" ? "smart_xss" :
+                 urlStrategy === "ml_with_context" ? "smart_xss" :
+                 urlStrategy === "hybrid" ? "smart_xss" : "smart_xss",
+        xss: {
+          ...defaultStrategyConfig.xss,
+          ml_mode: urlStrategy === "ml_with_context" ? "auto" : 
+                  urlStrategy === "probe_only" ? "never" : "auto"
+        }
+      };
+      setStrategyConfig(legacyConfig);
     }
   }, [searchParams]);
-  
-  // Persist ctxInvoke to localStorage
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      localStorage.setItem("elise.ctx_invoke", ctxInvoke);
-    }
-  }, [ctxInvoke]);
-
-  // Update URL when strategy changes
-  const updateStrategy = (newStrategy) => {
-    setStrategy(newStrategy);
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("strategy", newStrategy);
-    router.replace(`/assess?${params.toString()}`);
-  };
 
   useEffect(() => {
-    // Fetch ML mode from healthz
+    // Fetch ML mode and SQLi dialect ML availability from healthz
     const fetchMLMode = async () => {
       try {
         const healthResponse = await health();
@@ -80,9 +81,13 @@ export default function AssessPage() {
         } else {
           setMlMode("Off");
         }
+        
+        // Check SQLi dialect ML availability (placeholder for now)
+        setSqliDialectMLAvailable(false); // Will be true when SQLi dialect ML is implemented
       } catch (error) {
         console.error("Failed to fetch ML mode:", error);
         setMlMode("Off");
+        setSqliDialectMLAvailable(false);
       }
     };
 
@@ -92,18 +97,20 @@ export default function AssessPage() {
   // Removed auto-assessment - user must click "Assess" button manually
 
   async function onAssess() {
-    if (!jobId) return;
+    console.log("onAssess called:", { jobId, strategyConfig });
+    if (!jobId || !strategyConfig) {
+      console.log("Early return:", { jobId: !!jobId, strategyConfig: !!strategyConfig });
+      return;
+    }
     
     setLoading(true);
     try {
-      // Use new API contract - try job_id only first (from persisted endpoints)
+      // Use new API contract with strategyConfig
       let result;
       try {
         result = await assess({
           job_id: jobId,
-          top_k: topK,
-          strategy: strategy,
-          xss_ctx_invoke: ctxInvoke
+          strategy_config: strategyConfig
         });
       } catch (err) {
         // If no persisted endpoints, try with target_url
@@ -111,9 +118,7 @@ export default function AssessPage() {
           result = await assess({
             job_id: jobId,
             target_url: targetUrl,
-            top_k: topK,
-            strategy: strategy,
-            xss_ctx_invoke: ctxInvoke
+            strategy_config: strategyConfig
           });
         } else {
           throw err;
@@ -256,64 +261,15 @@ export default function AssessPage() {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             <div className="lg:col-span-2">
               <div className="bg-white rounded-lg shadow p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-semibold">Step 2: Assessment</h2>
-                  <div className="flex gap-2">
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm font-medium">Strategy:</label>
-                      <select
-                        value={strategy}
-                        onChange={(e) => updateStrategy(e.target.value)}
-                        className="border rounded px-2 py-1 text-sm"
-                      >
-                        <option value="auto">Auto (recommended)</option>
-                        <option value="probe_only">Probe-only</option>
-                        <option value="ml_only">ML-only</option>
-                        <option value="ml_with_context">ML with Context</option>
-                        <option value="hybrid">Hybrid (demo)</option>
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <label className="text-sm font-medium">Top-K:</label>
-                      <select
-                        value={topK}
-                        onChange={(e) => setTopK(parseInt(e.target.value))}
-                        className="border rounded px-2 py-1 text-sm"
-                      >
-                        <option value={1}>1</option>
-                        <option value={2}>2</option>
-                        <option value={3}>3</option>
-                        <option value={4}>4</option>
-                        <option value={5}>5</option>
-                      </select>
-                    </div>
-                    <fieldset className={`rounded-md border p-4 ${strategy !== "ml_with_context" ? "opacity-60 pointer-events-none" : ""}`}>
-                      <legend className="text-sm font-medium text-gray-600 px-2">XSS Context Classifier</legend>
-                      <div className="grid grid-cols-2 gap-3 mt-3">
-                        {CTX_OPTIONS.map(option => (
-                          <div key={option.value} className="flex items-center space-x-3">
-                            <input
-                              type="radio"
-                              id={`ctx-${option.value}`}
-                              name="ctxInvoke"
-                              value={option.value}
-                              checked={ctxInvoke === option.value}
-                              onChange={(e) => setCtxInvoke(e.target.value)}
-                              disabled={strategy !== "ml_with_context"}
-                              className="w-4 h-4"
-                            />
-                            <label htmlFor={`ctx-${option.value}`} className="text-sm font-medium">{option.label}</label>
-                          </div>
-                        ))}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-3 px-1">
-                        {strategy !== "ml_with_context" 
-                          ? "Only available with ML with Context strategy"
-                          : CTX_OPTIONS.find(x => x.value === ctxInvoke)?.helper
-                        }
-                      </p>
-                    </fieldset>
-                  </div>
+                <div className="mb-6">
+                  <h2 className="text-xl font-semibold mb-4">Step 2: Assessment</h2>
+                  <StrategySelector
+                    initialConfig={strategyConfig}
+                    onConfigChange={(newConfig) => {
+                      setStrategyConfig(newConfig);
+                    }}
+                    sqliDialectMLAvailable={sqliDialectMLAvailable}
+                  />
                 </div>
 
                 {/* Action Buttons Section */}
@@ -367,11 +323,11 @@ export default function AssessPage() {
                       Target: {targetUrl}
                     </div>
                     <div className="text-xs text-green-700 mb-2">
-                      Strategy: {strategy === "auto" ? "Auto (recommended)" : 
-                                strategy === "probe_only" ? "Probe-only" :
-                                strategy === "ml_only" ? "ML-only" :
-                                strategy === "ml_with_context" ? "ML with Context" :
-                                strategy === "hybrid" ? "Hybrid (demo)" : strategy}
+                      Strategy: {strategyConfig?.strategy === "rules_only" ? "Rules-Only" :
+                                strategyConfig?.strategy === "smart_xss" ? "Smart-XSS (Auto)" :
+                                strategyConfig?.strategy === "full_smart" ? "Full-Smart (Auto)" :
+                                strategyConfig?.strategy === "exhaustive" ? "Exhaustive" :
+                                "Unknown"}
                     </div>
                     <div className="text-xs text-green-700 space-y-1">
                       <div>
@@ -398,24 +354,21 @@ export default function AssessPage() {
 
                 {/* Strategy hint */}
                 {(() => {
-                  const s = assessmentResult?.meta?.strategy || strategy;
+                  const s = strategyConfig?.strategy;
                   let bannerText = "";
                   let bannerColor = "yellow";
                   
-                  if (s === "ml_with_context") {
-                    bannerText = "XSS canary for context; Top‑K injections. Redirect/SQLi probes disabled.";
+                  if (s === "rules_only") {
+                    bannerText = "Traditional probes only; no ML injections.";
+                    bannerColor = "yellow";
+                  } else if (s === "smart_xss") {
+                    bannerText = "XSS ML with auto mode; SQLi rules-based with short-circuit.";
                     bannerColor = "blue";
-                  } else if (s === "ml_only") {
-                    bannerText = "Probes disabled; Top‑K injections only.";
+                  } else if (s === "full_smart") {
+                    bannerText = "XSS + SQLi ML (beta - SQLi ML not yet available).";
                     bannerColor = "yellow";
-                  } else if (s === "probe_only") {
-                    bannerText = "Probes only (no injections).";
-                    bannerColor = "yellow";
-                  } else if (s === "hybrid") {
-                    bannerText = "Probes on; also fire one context‑guided payload even if probe confirms.";
-                    bannerColor = "yellow";
-                  } else {
-                    bannerText = "Auto: Probes first; Top‑K if probe misses.";
+                  } else if (s === "exhaustive") {
+                    bannerText = "Heavy hunting with high Top-K; no short-circuit.";
                     bannerColor = "yellow";
                   }
                   
@@ -428,12 +381,6 @@ export default function AssessPage() {
                         <div className={`text-sm ${textColor}`}>
                           {bannerText}
                         </div>
-                        {/* Optional UI sanity hint for ml_with_context */}
-                        {s === "ml_with_context" && assessmentResult?.meta?.canary_attempts === 0 && (
-                          <div className="text-xs text-amber-600 mt-1">
-                            Heads‑up: no canary attempts were recorded; context may fall back to rules.
-                          </div>
-                        )}
                       </div>
                     );
                   }
@@ -610,7 +557,7 @@ export default function AssessPage() {
                 assessmentResult={assessmentResult}
                 mlMode={mlMode}
                 jobId={jobId}
-                strategy={strategy}
+                strategyConfig={strategyConfig}
               />
               <DiagnosticsCard healthz={assessmentResult?.healthz} />
             </div>

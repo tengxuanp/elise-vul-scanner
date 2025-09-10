@@ -5,7 +5,7 @@ const SummaryPanel = ({
   assessmentResult, 
   mlMode, 
   jobId,
-  strategy = "auto"
+  strategyConfig
 }) => {
   if (!assessmentResult) return null;
 
@@ -47,6 +47,26 @@ const SummaryPanel = ({
     return `${seconds}s`;
   };
 
+  // Generate plan summary string
+  const generatePlanSummary = () => {
+    if (!strategyConfig) return "No strategy configured";
+    
+    const xssMode = strategyConfig.xss.ml_mode;
+    const xssTau = strategyConfig.xss.tau_ml;
+    const xssRule = strategyConfig.xss.rule_conf_gate;
+    const xssTopk = strategyConfig.xss.topk;
+    
+    const sqliDialect = strategyConfig.sqli.dialect_mode;
+    const sqliTopk = strategyConfig.sqli.topk;
+    const sqliSC = strategyConfig.sqli.short_circuit.enabled;
+    const sqliM = strategyConfig.sqli.short_circuit.M;
+    const sqliK = strategyConfig.sqli.short_circuit.K;
+    
+    const families = strategyConfig.families.join(", ");
+    
+    return `XSS=${xssMode} (τ=${xssTau}, rule=${xssRule}), XSS Top-K=${xssTopk} • SQLi=dialect ${sqliDialect}, SQLi Top-K=${sqliTopk} • Short-circuit ${sqliSC ? `M=${sqliM}/K=${sqliK}` : 'OFF'} • Families: ${families}`;
+  };
+
   return (
     <div className="card p-6">
       <h3 className="font-semibold mb-4">Summary</h3>
@@ -61,11 +81,20 @@ const SummaryPanel = ({
       {/* Strategy Badge */}
       <div className="mb-4">
         <span className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-700">
-          Strategy: {strategy === "auto" ? "Auto" : 
-                    strategy === "probe_only" ? "Probe-only" :
-                    strategy === "ml_only" ? "ML-only" :
-                    strategy === "hybrid" ? "Hybrid" : strategy}
+          Strategy: {strategyConfig?.strategy === "rules_only" ? "Rules-Only" :
+                    strategyConfig?.strategy === "smart_xss" ? "Smart-XSS (Auto)" :
+                    strategyConfig?.strategy === "full_smart" ? "Full-Smart (Auto)" :
+                    strategyConfig?.strategy === "exhaustive" ? "Exhaustive" :
+                    "Unknown"}
         </span>
+      </div>
+
+      {/* Plan Summary */}
+      <div className="mb-4">
+        <div className="text-xs text-gray-600 mb-1">Plan:</div>
+        <div className="text-xs text-gray-700 font-mono bg-gray-50 p-2 rounded">
+          {generatePlanSummary()}
+        </div>
       </div>
 
       {/* Strategy Violation Alert */}
@@ -203,6 +232,57 @@ const SummaryPanel = ({
           <div className="font-mono text-xs">{jobId || "-"}</div>
         </div>
       </div>
+      
+      {/* Strategy Telemetry */}
+      {meta && (
+        <div className="mt-6 pt-4 border-t">
+          <h4 className="font-medium text-sm text-gray-700 mb-3">Strategy Telemetry</h4>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            {meta.xss_ml_invoked !== undefined && (
+              <div>
+                <div className="text-gray-600">XSS ML invoked</div>
+                <div className="font-semibold">{meta.xss_ml_invoked}</div>
+              </div>
+            )}
+            {meta.xss_final_from_ml !== undefined && (
+              <div>
+                <div className="text-gray-600">XSS ML final</div>
+                <div className="font-semibold">{meta.xss_final_from_ml}</div>
+              </div>
+            )}
+            {meta.xss_rank_source_ml !== undefined && (
+              <div>
+                <div className="text-gray-600">XSS rank_source=ml</div>
+                <div className="font-semibold">{meta.xss_rank_source_ml}</div>
+              </div>
+            )}
+            {meta.xss_context_pool_used !== undefined && (
+              <div>
+                <div className="text-gray-600">Context pool used</div>
+                <div className="font-semibold">{meta.xss_context_pool_used}</div>
+              </div>
+            )}
+            {meta.attempts_saved !== undefined && (
+              <div>
+                <div className="text-gray-600">Attempts saved</div>
+                <div className="font-semibold">{meta.attempts_saved}</div>
+              </div>
+            )}
+            {meta.sqli_short_circuit !== undefined && (
+              <div>
+                <div className="text-gray-600">SQLi short-circuit</div>
+                <div className="font-semibold">{meta.sqli_short_circuit ? "on" : "off"}</div>
+              </div>
+            )}
+            {meta.sqli_dialect_ml !== undefined && (
+              <div>
+                <div className="text-gray-600">SQLi dialect ML</div>
+                <div className="font-semibold">{meta.sqli_dialect_ml ? "on" : "off"}</div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       
       {/* Top Payload Families */}
       {assessmentResult.results && assessmentResult.results.length > 0 && (

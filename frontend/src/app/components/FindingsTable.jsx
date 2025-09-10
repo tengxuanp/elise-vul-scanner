@@ -97,6 +97,41 @@ const MLChip = ({ rank_source, ml_proba }) => {
   return null;
 };
 
+// SQLi dialect badge
+const SQLiDialectBadge = ({ family, telemetry }) => {
+  if (family !== "sqli") return null;
+  
+  if (!telemetry?.sqli_dialect_hint) {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700" title="No SQLi dialect detected">
+        none
+      </span>
+    );
+  }
+  
+  const dialect = telemetry.sqli_dialect_hint;
+  const confident = telemetry.sqli_dialect_confident;
+  
+  const dialectColors = {
+    "mysql": "bg-blue-100 text-blue-700",
+    "postgres": "bg-green-100 text-green-700", 
+    "mssql": "bg-red-100 text-red-700",
+    "sqlite": "bg-yellow-100 text-yellow-700"
+  };
+  
+  const colorClass = dialectColors[dialect] || "bg-gray-100 text-gray-700";
+  const confidenceIcon = confident ? "✓" : "?";
+  
+  return (
+    <span 
+      className={`px-2 py-0.5 rounded text-xs ${colorClass}`}
+      title={`SQLi dialect: ${dialect} (${confident ? 'confident' : 'uncertain'})`}
+    >
+      {dialect} {confidenceIcon}
+    </span>
+  );
+};
+
 // XSS Context/Escaping chips
 const XSSContextChips = ({ family, xss_context, xss_escaping, xss_context_source, xss_context_ml_proba }) => {
   if (family !== "xss" || !xss_context || !xss_escaping) return null;
@@ -139,12 +174,23 @@ const XSSContextChips = ({ family, xss_context, xss_escaping, xss_context_source
 };
 
 // SQLi Dialect chip
-const SQLiDialectChip = ({ family, dialect, dialect_confident }) => {
-  if (family !== "sqli" || !dialect || dialect === "unknown") return null;
+const SQLiDialectChip = ({ family, telemetry }) => {
+  if (family !== "sqli") return null;
+  
+  if (!telemetry?.sqli_dialect_hint) {
+    return (
+      <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-700" title="No SQLi dialect detected">
+        none
+      </span>
+    );
+  }
+  
+  const dialect = telemetry.sqli_dialect_hint;
+  const confident = telemetry.sqli_dialect_confident;
   
   const dialectMap = {
     "mysql": "MySQL",
-    "postgresql": "PostgreSQL", 
+    "postgres": "PostgreSQL", 
     "mssql": "SQL Server",
     "sqlite": "SQLite"
   };
@@ -152,11 +198,11 @@ const SQLiDialectChip = ({ family, dialect, dialect_confident }) => {
   return (
     <span 
       className={`px-2 py-0.5 rounded text-xs font-mono ${
-        dialect_confident 
+        confident 
           ? "bg-green-100 text-green-700" 
           : "bg-yellow-100 text-yellow-700"
       }`}
-      title={`Detected Dialect: ${dialect}${dialect_confident ? " (confident)" : " (weak signal)"}`}
+      title={`Detected Dialect: ${dialect}${confident ? " (confident)" : " (weak signal)"}`}
     >
       {dialectMap[dialect] || dialect}
     </span>
@@ -246,18 +292,22 @@ export default function FindingsTable({ results=[], onView }) {
           />
           <SQLiDialectChip 
             family={result.family} 
-            dialect={result.dialect} 
-            dialect_confident={result.dialect_confident} 
+            telemetry={result.telemetry}
           />
         </div>
       </td>
       <td className="p-2">
-        <RankSourceBadge rank_source={result.rank_source} />
+        <RankSourceBadge rank_source={result.telemetry?.xss?.rank_source || result.rank_source} />
       </td>
       <td className="p-2">
-        {(result.provenance === "Inject" && result.rank_source && ["ml", "ml_ranked", "ctx_pool"].includes(result.rank_source) && result.ml_proba != null) 
-          ? result.ml_proba.toFixed(2) 
-          : "—"}
+        {(result.telemetry?.xss?.ml_proba != null) 
+          ? result.telemetry.xss.ml_proba.toFixed(2) 
+          : (result.telemetry?.xss?.rank_source === "ml" && result.ml_proba != null) 
+            ? result.ml_proba.toFixed(2) 
+            : "—"}
+      </td>
+      <td className="p-2">
+        <SQLiDialectBadge family={result.family} telemetry={result.telemetry} />
       </td>
       <td className="p-2 font-semibold">
         {result.cvss?.base ?? "—"}
@@ -298,6 +348,7 @@ export default function FindingsTable({ results=[], onView }) {
                   <th className="p-2">Decision</th>
                   <th className="p-2">Rank Source</th>
                   <th className="p-2">ML Proba</th>
+                  <th className="p-2">SQLi Dialect</th>
                   <th className="p-2">CVSS</th>
                   <th className="p-2"></th>
                 </tr>

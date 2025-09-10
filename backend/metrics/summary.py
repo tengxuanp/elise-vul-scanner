@@ -15,6 +15,10 @@ def finalize_xss_context_metrics(meta: dict, rows: list[dict], *, ui_top_k_defau
       - baseline: sum of Top-K we *would* try for each ctx_pool positive
       - used:     sum of actual attempts used (attempt_idx if present, else 1 per hit)
       - attempts_saved = baseline - used (>= 0)
+      - xss_rank_source_ml: number of attempts where evidence.xss.rank_source == "ml"
+      - xss_context_pool_used: same as above (dedup by endpoint if needed)
+      - xss_first_hit_ctx: count endpoints where first executed payload belonged to predicted context family
+      - xss_first_hit_baseline: count endpoints where first payload was a baseline family
     Also preserves xss_first_hit_attempts_ctx counted during row writes.
     """
     meta = dict(meta or {})
@@ -39,10 +43,43 @@ def finalize_xss_context_metrics(meta: dict, rows: list[dict], *, ui_top_k_defau
 
     saved = max(0, baseline - used)
 
+    # New telemetry counters
+    xss_rank_source_ml = 0
+    xss_context_pool_used = 0
+    xss_first_hit_ctx = 0
+    xss_first_hit_baseline = 0
+    
+    # Count ML rank source and context pool usage
+    for r in rows:
+        if r.get("family") == "xss":
+            # Check if rank_source is "ml" from telemetry
+            telemetry = r.get("telemetry", {})
+            xss_telemetry = telemetry.get("xss", {})
+            if xss_telemetry.get("rank_source") == "ml":
+                xss_rank_source_ml += 1
+                xss_context_pool_used += 1
+            
+            # Check first hit context vs baseline
+            attempt_idx = r.get("attempt_idx", 0)
+            if attempt_idx == 1:  # First attempt
+                if xss_telemetry.get("context_final") in ["html", "attr", "js_string"]:
+                    xss_first_hit_ctx += 1
+                else:
+                    xss_first_hit_baseline += 1
+
     meta["xss_first_hit_attempts_baseline"] = baseline
     meta["xss_first_hit_attempts_used"] = used
     # keep previously counted ctx counter
     meta["xss_first_hit_attempts_ctx"] = _to_int(meta.get("xss_first_hit_attempts_ctx"), 0)
     meta["attempts_saved"] = saved
+    
+    # Add new telemetry counters
+    meta["xss_rank_source_ml"] = xss_rank_source_ml
+    meta["xss_context_pool_used"] = xss_context_pool_used
+    meta["xss_first_hit_ctx"] = xss_first_hit_ctx
+    meta["xss_first_hit_baseline"] = xss_first_hit_baseline
+    
+    # Log telemetry summary
+    print(f"XSS_TELEMETRY ml_final={meta.get('xss_final_from_ml', 0)} rs_ml={xss_rank_source_ml} used={xss_context_pool_used} saved={saved}")
     
     return meta
