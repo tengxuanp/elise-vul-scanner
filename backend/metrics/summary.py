@@ -9,6 +9,10 @@ def _to_int(x, default=0):
     except Exception:
         return default
 
+def _i(x, d=0):
+    try: return int(x)
+    except: return d
+
 def compute_totals_from_rows(rows: list[dict]) -> dict:
     """Compute totals from rows for consistency checking."""
     t = {"positive": 0, "suspected": 0, "abstain": 0, "clean": 0, "na": 0, "error": 0}
@@ -45,8 +49,16 @@ def finalize_xss_context_metrics_robust(meta: dict, rows: list[dict], *, xss_top
 
 def finalize_summary(job, summary: dict, rows: list[dict]) -> dict:
     """Finalize summary with consistency checks and XSS context metrics."""
-    # 1) Counters from the row table = source of truth
-    table_totals = compute_totals_from_rows(rows)
+    # 1) Sanitize rows: don't allow XSS keys on SQL rows
+    clean_rows = []
+    for r in rows:
+        if r.get('family') == 'sqli':
+            for k in ('xss_context','xss_reflection','ctx_hint','escaping'):
+                r.pop(k, None)
+        clean_rows.append(r)
+    
+    # 2) Counters from the row table = source of truth
+    table_totals = compute_totals_from_rows(clean_rows)
     summary["totals_from_rows"] = table_totals
     summary["counters_consistent"] = (table_totals.get("total") == summary.get("total"))
 

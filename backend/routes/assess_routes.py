@@ -139,6 +139,16 @@ async def assess_vulnerabilities(request: AssessRequest):
     - (C) job_id only: load from persisted endpoints.json
     """
     try:
+        # FAMILY ENFORCEMENT: Validate strategy_config.families at API boundary
+        if request.strategy_config and request.strategy_config.families:
+            valid_families = {"xss", "sqli", "redirect"}
+            invalid_families = set(request.strategy_config.families) - valid_families
+            if invalid_families:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid families in strategy_config: {list(invalid_families)}. Must be one of: {list(valid_families)}"
+                )
+        
         # Apply strategy configuration if provided
         if request.strategy_config:
             effective_settings = apply_strategy_config(request.strategy_config)

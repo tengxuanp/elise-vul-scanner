@@ -50,8 +50,8 @@ const SummaryPanel = ({
   // Check if we're in context mode
   const isCtxMode = (summary?.strategy || "").startsWith("ml_with_context") || meta?.xss_ctx_invoke === "force_ml";
   
-  // Helper to show "—" instead of 0 for non-applicable counters
-  const showNA = (v, applicable) => (applicable ? v : "—");
+  // Helper to show "—" instead of "0" for non-applicable metrics
+  const showNA = (value, applicable) => (applicable ? value : "—");
 
   // Generate plan summary string
   const generatePlanSummary = () => {
@@ -266,6 +266,18 @@ const SummaryPanel = ({
               <div>
                 <div className="text-gray-600">Context pool used</div>
                 <div className="font-semibold">{meta.xss_context_pool_used}</div>
+              </div>
+            )}
+            {meta.xss_first_hit_attempts_ctx !== undefined && (
+              <div>
+                <div className="text-gray-600">First-hit attempts (ctx)</div>
+                <div className="font-semibold">{meta.xss_first_hit_attempts_ctx}</div>
+              </div>
+            )}
+            {meta.xss_first_hit_attempts_baseline !== undefined && (
+              <div>
+                <div className="text-gray-600">First-hit attempts (baseline)</div>
+                <div className="font-semibold">{meta.xss_first_hit_attempts_baseline}</div>
               </div>
             )}
             {meta.attempts_saved !== undefined && (

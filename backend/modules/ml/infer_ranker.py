@@ -60,7 +60,7 @@ def _load_model(family: str) -> Optional[Any]:
     
     if not model_path.exists():
         return None
-    
+
     try:
         import joblib
         model = joblib.load(model_path)
@@ -113,18 +113,14 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
     Never raise for unknown family—fallback gracefully.
     """
     fam = family.lower()
+    print(f"RANK_PAYLOADS_CALLED fam={fam} xss_context={xss_context} xss_escaping={xss_escaping}")
 
     # Get default payloads from manifest first, or use context-aware for XSS
-    if fam == "xss" and xss_context and xss_escaping:
-        # Use context-aware payload selection for XSS
-        try:
-            from backend.modules.payloads import payload_pool_for_xss
-            default_payloads = payload_pool_for_xss(xss_context, xss_escaping)
-        except ImportError:
-            # Fallback to manifest defaults
-            default_payloads = _get_default_payloads(fam)
-    else:
-        default_payloads = _get_default_payloads(fam)
+    print(f"RANK_PAYLOADS_LOGIC fam={fam} xss_context={xss_context} xss_escaping={xss_escaping}")
+    
+    # HARD RULE: Never use ML for family classification - always use defaults
+    print(f"RANK_PAYLOADS_FORCE_DEFAULTS for family: {fam} (ML family classification disabled)")
+    default_payloads = _get_default_payloads(fam)
     
     if not default_payloads:
         # Hardcoded fallback
@@ -148,11 +144,14 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
         base_score = 0.5  # Default score for all payloads within a family
         p_cal = base_score  # No calibration needed for default scoring
 
+        # HARD RULE: Always use defaults since ML family classification is disabled
+        rank_source_final = "defaults"
+            
         results.append({
             "payload": payload,
             "score": base_score,
             "p_cal": p_cal,
-            "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults",
+            "rank_source": rank_source_final,
             "model_tag": model_tag,
             "family": fam
         })

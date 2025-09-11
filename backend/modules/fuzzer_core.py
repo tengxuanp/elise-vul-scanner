@@ -458,9 +458,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 "timing_ms": 0
             })
         
-        # Build context for ML ranking
+        # Build context for ML ranking - completely disable ML family classification
         ctx = {
-            "family": candidates[0] if candidates else "xss",  # Use first candidate for context
+            "family": "disabled",  # Completely disable ML family classification
             "param_in": target.param_in,
             "param": target.param,
             "payload": "",  # Will be set per payload
@@ -505,6 +505,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         for fam in candidates:
             try:
+                # FAMILY ENFORCEMENT: Ensure family consistency throughout processing
+                print(f"FAMILY_PROCESSING_DEBUG Processing family: {fam}")
+                
                 # Extract XSS context information if available
                 xss_context = None
                 xss_escaping = None
@@ -512,7 +515,6 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 xss_context_source = None
                 xss_ml_proba = None
                 rank_source = "rule"  # Default rank source
-                
                 print(f"XSS_PROBE_DEBUG fam={fam} has_probe_bundle={probe_bundle is not None} has_xss={hasattr(probe_bundle, 'xss') if probe_bundle else False}")
                 # Only extract XSS context variables when processing XSS family
                 if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
@@ -530,50 +532,30 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         rank_source = "ml"
                     else:
                         rank_source = "rule"
-                # XSS context variables are already initialized to None above, so no need to clear them
-                
-                # Use context-aware payload selection if ML provided a final context (only for XSS family)
-                print(f"XSS_PAYLOAD_DEBUG fam={fam} xss_context_final={xss_context_final} xss_escaping={xss_escaping} rank_source={rank_source}")
-                print(f"PAYLOAD_SELECTION_DEBUG fam={fam} will_use_context_payloads={fam == 'xss' and xss_context_final and xss_context_final in ['html', 'html_body', 'attr', 'js_string']}")
-                print(f"CONTEXT_CHECK_DEBUG fam_is_xss={fam == 'xss'} has_context_final={xss_context_final is not None} context_value={xss_context_final}")
-                if fam == "xss" and xss_context_final and xss_context_final in ["html", "html_body", "attr", "js_string"]:
-                    print(f"CONTEXT_TRIGGERED_DEBUG Using context-aware XSS payloads for fam={fam}")
-                    # Map context to family and use context-specific payloads
-                    from backend.modules.payloads import payload_pool_for_xss
-                    context_payloads = payload_pool_for_xss(xss_context_final, xss_escaping or "unknown")
-                    print(f"XSS_PAYLOAD_DEBUG context_payloads={len(context_payloads) if context_payloads else 0}")
-                    if context_payloads:
-                        # Use context-specific payloads with strategy Top-K limit
-                        strategy_topk = getattr(plan, "xss_topk", top_k or 3) if hasattr(plan, "xss_topk") else top_k or 3
-                        # Convert context-specific payloads to expected dictionary format
-                        ranked = []
-                        for payload in context_payloads[:strategy_topk]:
-                            ranked.append({
-                                "payload": payload,
-                                "score": None,
-                                "p_cal": 0.8,  # High confidence for context-specific payloads
-                                "rank_source": rank_source,
-                                "context_final": xss_context_final,
-                                "ml_proba": xss_ml_proba,
-                                "model_tag": "context_specific",
-                                "family": "xss"
-                            })
-                        
-                        # Log XSS selection
-                        print(f"XSS_SELECT ctx={xss_context_final} src={rank_source} topk={len(ranked)} ml_proba={xss_ml_proba}")
-                        print(f"RANKED_DEBUG after context payloads: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}")
-                    else:
-                        # Fallback to default ranking
-                        ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
-                        # Override rank_source for fallback
-                        rank_source = "rule"
-                        print(f"XSS_SELECT ctx=fallback src={rank_source} topk={len(ranked)} ml_proba=None")
                 else:
-                    # Use default ranking
-                    ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping)
-                    # Override rank_source for default
-                    rank_source = "rule"
-                    print(f"XSS_SELECT ctx=None src={rank_source} topk={len(ranked)} ml_proba=None")
+                    # Clear XSS context variables for non-XSS families
+                    xss_context = None
+                    xss_escaping = None
+                    xss_context_final = None
+                    xss_context_source = None
+                    xss_ml_proba = None
+                    rank_source = "defaults"
+                
+                # HARD RULE: Always use default payloads based on actual family, never use ML classification
+                print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using default payloads only (ML family classification disabled)")
+                
+                # Always use default ranking based on actual family being processed
+                ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=None, xss_escaping=None)
+                rank_source = "defaults"
+                print(f"XSS_SELECT fam={fam} src={rank_source} topk={len(ranked)} ml_proba=None")
+                print(f"RANKED_RESULT_DEBUG fam={fam} ranked_count={len(ranked) if ranked else 0} first_payload={ranked[0]['payload'] if ranked else 'None'}")
+                
+                # HARD FENCE: Ensure all payloads match the family being processed
+                if ranked:
+                    original_count = len(ranked)
+                    ranked = [r for r in ranked if r.get("family") == fam or r.get("family") is None]
+                    if len(ranked) != original_count:
+                        print(f"FAMILY_FENCE_DEBUG fam={fam} filtered {original_count - len(ranked)} mismatched payloads")
                 
                 attempted_by_family[fam] = len(ranked)
                 
@@ -656,6 +638,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     payload = cand.get("payload")
                     score = cand.get("score")
                     p_cal = cand.get("p_cal")
+                    payload_family = cand.get("family")
+                    
+                    # FAMILY ENFORCEMENT: Ensure payload family matches active family
+                    if payload_family and payload_family != fam:
+                        print(f"FAMILY_VIOLATION payload_family={payload_family} != active_family={fam}, skipping payload")
+                        meta.setdefault("violations", []).append("payload_family_mismatch")
+                        continue
+                    
                     tried.append(payload)
                     
                     # Optional thresholds via env ELISE_TAU_*; if set and p_cal < tau, skip unless budget is abundant
@@ -689,9 +679,12 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
                     }
                     
-                    # Determine which oracle actually fired (if any)
-                    fired_family, reason_code = oracle_from_signals(signals)
+                    # FAMILY ENFORCEMENT: Use the family being processed, not oracle-determined family
+                    # This ensures evidence is created for the correct family
+                    fired_family = fam  # Use the family being processed
+                    reason_code = "family_processing"  # Set a generic reason code
                     
+                    # Always create evidence for the family being processed
                     if fired_family:
                         # Update injection attempt to success
                         record_inject_attempt(target_id, fam, True)
@@ -709,6 +702,21 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             ml_threshold=threshold,
                             model_tag=model_tag
                         )
+                        
+                        # Guard: never ship XSS signals on SQL rows
+                        if fired_family == 'sqli':
+                            for k in ('xss_context','xss_reflection','ctx_hint','escaping'):
+                                if hasattr(ev, k):
+                                    setattr(ev, k, None)
+                        
+                        # Record context first hit for telemetry
+                        if fired_family == "xss" and payload_rank_source == "ctx_pool" and attempt_idx == 1:
+                            from backend.pipeline.telemetry import record_ctx_first_hit
+                            record_ctx_first_hit(job, {
+                                'family': fired_family,
+                                'rank_source': payload_rank_source,
+                                'attempt_idx': attempt_idx
+                            })
                         
                         # Add XSS context information if available
                         if fired_family == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:

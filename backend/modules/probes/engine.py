@@ -4,6 +4,13 @@ from .sqli_triage import run_sqli_probe, SqliProbe
 from .redirect_oracle import run_redirect_probe, RedirectProbe
 from ..targets import Target
 
+# Family-scoped probe registries
+PROBES = {
+    "xss": {"canary": run_xss_probe},
+    "sqli": {"triage": run_sqli_probe},
+    "redirect": {"oracle": run_redirect_probe}
+}
+
 @dataclass
 class ProbeBundle:
     xss: XssProbe
@@ -12,7 +19,7 @@ class ProbeBundle:
 
 def run_probes(t: Target, families: list = None, plan=None, ctx_mode: str = "auto", meta: dict = None) -> ProbeBundle:
     """
-    Run probes for specified families.
+    Run probes for specified families with strict family scoping.
     
     Args:
         t: Target to probe
@@ -22,17 +29,25 @@ def run_probes(t: Target, families: list = None, plan=None, ctx_mode: str = "aut
     if families is None:
         families = ["xss", "sqli", "redirect"]
     
-    # Create probe results for each family
+    # FAMILY ENFORCEMENT: Ensure no cross-family probe contamination
+    if meta is None:
+        meta = {}
+    
+    # Create probe results for each family with strict scoping
     if "xss" in families:
+        # Only run XSS probe if XSS is in the families list
         xss_result = run_xss_probe(t.url, t.method, t.param_in, t.param, t.headers, job_id=None, plan=plan, ctx_mode=ctx_mode, meta=meta)
     else:
-        # Create mock XSS probe result
+        # Create mock XSS probe result - no XSS canary generation for non-XSS families
         from unittest.mock import Mock
         xss_result = Mock()
         xss_result.reflected = False
         xss_result.context = None
         xss_result.xss_context = None
         xss_result.xss_escaping = None
+        xss_result.xss_context_final = None
+        xss_result.xss_context_source_detailed = None
+        xss_result.xss_ml_proba = None
     
     if "sqli" in families:
         sqli_result = run_sqli_probe(t.url, t.method, t.param_in, t.param, t.headers, plan)

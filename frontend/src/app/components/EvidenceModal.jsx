@@ -149,12 +149,37 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
   };
 
   // Probe signals as pills
-  const ProbeSignalsPills = ({ probe_signals }) => {
+  const ProbeSignalsPills = ({ probe_signals, family }) => {
     if (!probe_signals || Object.keys(probe_signals).length === 0) return null;
+    
+    // Filter signals based on family
+    const filteredSignals = {};
+    if (family === 'sqli') {
+      // Only show SQL-related signals for SQLi
+      Object.entries(probe_signals).forEach(([key, value]) => {
+        if (key.includes('sql') || key.includes('sqli') || key.includes('boolean') || key.includes('error')) {
+          filteredSignals[key] = value;
+        }
+      });
+    } else if (family === 'xss') {
+      // Only show XSS-related signals for XSS
+      Object.entries(probe_signals).forEach(([key, value]) => {
+        if (key.includes('xss') || key.includes('context') || key.includes('reflection') || key.includes('escaping')) {
+          filteredSignals[key] = value;
+        }
+      });
+    } else {
+      // Show all signals for other families
+      Object.assign(filteredSignals, probe_signals);
+    }
+    
+    if (Object.keys(filteredSignals).length === 0) {
+      return <div className="text-xs text-slate-600">No relevant signals for {family} family</div>;
+    }
     
     return (
       <div className="flex flex-wrap gap-1">
-        {Object.entries(probe_signals).map(([key, value]) => (
+        {Object.entries(filteredSignals).map(([key, value]) => (
           <span key={key} className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">
             {key}={String(value)}
           </span>
@@ -184,8 +209,8 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
 
     return (
       <div className="space-y-4">
-        {/* XSS Marker */}
-        {evidence?.marker && (
+        {/* XSS Marker - Only show for XSS family */}
+        {evidence?.family === 'xss' && evidence?.marker && (
           <div>
             <div className="text-sm font-medium mb-2">XSS Marker</div>
             <div className="space-y-2">
@@ -331,21 +356,46 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
 
         <div>
           <div className="text-sm font-medium mb-2">Top-K Payloads</div>
-          <div className="space-y-2">
-            {topkArray?.map((payload, idx) => (
-              <div key={idx} className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                <div className="flex-1">
-                  <div className="text-sm font-mono">{payload.payload_id}</div>
-                  <div className="text-xs text-gray-500">{payload.family}</div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="text-sm font-medium">{payload.score.toFixed(3)}</div>
-                  {idx === 0 && (
-                    <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">✓ Used</span>
-                  )}
-                </div>
+          
+          {/* Family Mismatch Banner */}
+          {evidence?.probe_signals?.family_mismatch && (
+            <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded">
+              <div className="text-sm font-medium text-yellow-800">
+                ⚠️ Family Mismatch Detected
               </div>
-            ))}
+              <div className="text-xs text-yellow-700 mt-1">
+                {evidence.probe_signals.family_mismatch.banner}
+              </div>
+            </div>
+          )}
+          
+          <div className="space-y-2">
+            {topkArray?.map((payload, idx) => {
+              const isMismatch = evidence?.family && payload.family && evidence.family !== payload.family;
+              return (
+                <div key={idx} className={`flex items-center justify-between p-3 rounded ${
+                  isMismatch ? 'bg-gray-100 opacity-60' : 'bg-gray-50'
+                }`}>
+                  <div className="flex-1">
+                    <div className="text-sm font-mono">{payload.payload_id}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-xs text-gray-500">{payload.family}</div>
+                      {isMismatch && (
+                        <span className="px-2 py-0.5 bg-yellow-100 text-yellow-700 text-xs rounded">
+                          Mismatch
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-medium">{payload.score.toFixed(3)}</div>
+                    {idx === 0 && (
+                      <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">✓ Used</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -590,7 +640,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     {/* Probe Signals */}
                     <div>
                       <div className="text-xs text-zinc-500 mb-1">Probe signals</div>
-                      <ProbeSignalsPills probe_signals={evidence?.probe_signals} />
+                      <ProbeSignalsPills probe_signals={evidence?.probe_signals} family={evidence?.family} />
                     </div>
 
                     {/* Telemetry */}

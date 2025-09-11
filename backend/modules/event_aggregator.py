@@ -22,6 +22,14 @@ class AssessAggregator:
         self.xss_first_hit_attempts_ctx = 0
         self.xss_first_hit_attempts_baseline = 0
         
+        # FAMILY TRACKING: Store attempt_family, payload_family, classified_family
+        self.family_stats = {
+            "attempt_families": {},  # family -> count
+            "payload_families": {},  # family -> count  
+            "classified_families": {},  # family -> count
+            "family_mismatches": 0  # count of mismatches
+        }
+        
     def record_probe_attempt(self, success: bool) -> None:
         """
         Record a probe attempt.
@@ -47,6 +55,32 @@ class AssessAggregator:
     def record_context_pool_usage(self) -> None:
         """Record usage of context pool."""
         self.xss_context_pool_used += 1
+    
+    def record_family_attempt(self, attempt_family: str, payload_family: str = None, classified_family: str = None) -> None:
+        """
+        Record family information for an attempt.
+        
+        Args:
+            attempt_family: The family being attempted
+            payload_family: The family of the payload used
+            classified_family: The family the ML model classified this as
+        """
+        # Track attempt family
+        self.family_stats["attempt_families"][attempt_family] = self.family_stats["attempt_families"].get(attempt_family, 0) + 1
+        
+        # Track payload family if provided
+        if payload_family:
+            self.family_stats["payload_families"][payload_family] = self.family_stats["payload_families"].get(payload_family, 0) + 1
+        
+        # Track classified family if provided
+        if classified_family:
+            self.family_stats["classified_families"][classified_family] = self.family_stats["classified_families"].get(classified_family, 0) + 1
+        
+        # Track mismatches
+        if payload_family and attempt_family != payload_family:
+            self.family_stats["family_mismatches"] += 1
+        if classified_family and attempt_family != classified_family:
+            self.family_stats["family_mismatches"] += 1
     
     def record_first_hit_attempt(self, context_guided: bool) -> None:
         """

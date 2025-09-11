@@ -148,12 +148,42 @@ class EvidenceRow:
             except Exception: 
                 return default
 
-        signals = {
-            "xss_context": _get(_get(probe_bundle, "xss"), "context", None),
-            "sql_boolean_delta": _get(_get(probe_bundle, "sqli"), "boolean_delta", None),
-            "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
-            "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location","")).startswith(("http://","https://"))),
-        }
+        # NAMESPACED PROBE SIGNALS: Emit signals as family.* to prevent cross-family contamination
+        signals = {}
+        
+        # XSS signals (only for XSS family)
+        if family == "xss":
+            signals.update({
+                "xss.context": _get(_get(probe_bundle, "xss"), "context", None),
+                "xss.reflected": _get(_get(probe_bundle, "xss"), "reflected", None),
+                "xss.context_final": _get(_get(probe_bundle, "xss"), "xss_context_final", None),
+                "xss.escaping": _get(_get(probe_bundle, "xss"), "xss_escaping", None),
+                "xss.context_source": _get(_get(probe_bundle, "xss"), "xss_context_source_detailed", None),
+                "xss.ml_proba": _get(_get(probe_bundle, "xss"), "xss_ml_proba", None),
+            })
+        
+        # SQLi signals (only for SQLi family)
+        if family == "sqli":
+            signals.update({
+                "sqli.boolean_delta": _get(_get(probe_bundle, "sqli"), "boolean_delta", None),
+                "sqli.error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
+                "sqli.timing_based": _get(_get(probe_bundle, "sqli"), "time_based", None),
+            })
+        
+        # Redirect signals (only for redirect family)
+        if family == "redirect":
+            signals.update({
+                "redirect.influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location","")).startswith(("http://","https://"))),
+                "redirect.location": _get(inj, "redirect_location", None),
+            })
+        
+        # Legacy signals for backward compatibility (but namespaced)
+        signals.update({
+            "xss_context": _get(_get(probe_bundle, "xss"), "context", None) if family == "xss" else None,
+            "sql_boolean_delta": _get(_get(probe_bundle, "sqli"), "boolean_delta", None) if family == "sqli" else None,
+            "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])) if family == "sqli" else None,
+            "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location","")).startswith(("http://","https://"))) if family == "redirect" else None,
+        })
 
         # Extract XSS context information
         xss_context = None
@@ -179,6 +209,24 @@ class EvidenceRow:
                 xss_context_ml_proba = xss_context_ml.get("proba")
             elif xss_context_rule:
                 xss_context_source = "rule"
+
+        # FAMILY MISMATCH DETECTION: Check if attempt_family != classified_family
+        attempt_family = family  # The family we're attempting to test
+        classified_family = ml_family  # The family the ML model classified this as
+        
+        # Add mismatch detection to signals
+        if classified_family and attempt_family != classified_family:
+            signals["family_mismatch"] = {
+                "attempted": attempt_family,
+                "classified": classified_family,
+                "banner": f"attempted: {attempt_family.upper()} → classified: {classified_family.upper()}"
+            }
+            # Filter out foreign namespace signals
+            filtered_signals = {}
+            for key, value in signals.items():
+                if key.startswith(f"{attempt_family}.") or not key.startswith(("xss.", "sqli.", "redirect.")):
+                    filtered_signals[key] = value
+            signals = filtered_signals
 
         # Sanitize response snippet
         response_snippet = getattr(inj, "response_snippet", "")
