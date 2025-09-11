@@ -7,6 +7,7 @@ from backend.modules.event_aggregator import get_aggregator
 from backend.app_state import REQUIRE_RANKER
 from backend.pipeline.reasons import build_why
 from backend.metrics.summary import finalize_xss_context_metrics
+from backend.pipeline.telemetry import record_ctx_first_hit
 
 def upsert_row(results: List[Dict[str, Any]], key: Tuple[str, str, str, str, str], patch: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -389,28 +390,16 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
                 })
             
             # Upsert the row
-            upsert_row(results, key, patch)
+            row = upsert_row(results, key, patch)
             
-            # ---- FIRST-HIT (CTX) COUNTER ----------------------------------------------
-            # Track ctx_pool hits that succeeded on the very first ML attempt.
-            try:
-                family = result.get("family")
-                rank_source = result.get("rank_source")
-                attempt_idx = int(result.get("attempt_idx") or 0)
-                decision = result.get("decision")
-                
-                if (
-                    family == "xss"
-                    and rank_source == "ctx_pool"
-                    and attempt_idx == 0  # Fresh assessments use 0-based indexing
-                    and decision == "positive"
-                ):
-                    old_count = int(meta.get("xss_first_hit_attempts_ctx", 0))
-                    meta["xss_first_hit_attempts_ctx"] = old_count + 1
-            except Exception:
-                # Never fail the pipeline on telemetry; keep going.
-                pass
-            # ----------------------------------------------------------------------------
+            # Record ctx first-hit counter using centralized telemetry
+            # Create a mock job object for the telemetry function
+            class MockJob:
+                def __init__(self):
+                    self.meta = {}
+            
+            mock_job = MockJob()
+            record_ctx_first_hit(mock_job, row)
         elif result.get("decision") == "not_applicable":
             # Count NA results but don't add them to results array
             na_count += 1

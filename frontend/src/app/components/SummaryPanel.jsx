@@ -47,6 +47,12 @@ const SummaryPanel = ({
     return `${seconds}s`;
   };
 
+  // Check if we're in context mode
+  const isCtxMode = (summary?.strategy || "").startsWith("ml_with_context") || meta?.xss_ctx_invoke === "force_ml";
+  
+  // Helper to show "—" instead of 0 for non-applicable counters
+  const showNA = (v, applicable) => (applicable ? v : "—");
+
   // Generate plan summary string
   const generatePlanSummary = () => {
     if (!strategyConfig) return "No strategy configured";
@@ -341,7 +347,7 @@ const SummaryPanel = ({
             
             <div>
               <div className="text-gray-600">Rule high-conf</div>
-              <div className="font-semibold text-green-600">{meta.xss_rule_high_conf || 0}</div>
+              <div className="font-semibold text-green-600">{showNA(meta.xss_rule_high_conf ?? 0, !isCtxMode)}</div>
             </div>
             
             <div>

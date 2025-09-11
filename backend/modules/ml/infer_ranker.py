@@ -138,102 +138,28 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
     if REQUIRE_RANKER and not default_payloads:
         raise RuntimeError(f"Ranker required but no model or defaults found for family: {fam}")
 
-    # Try to use ML model if available and USE_ML is enabled
-    if USE_ML:
-        model = _load_model(fam)
-        calibration = _load_calibration(fam)
+    # Use default payloads for the family being processed, regardless of ML classification
+    # ML models are trained for family classification, not payload ranking within a family
+    results = []
+    model_tag = None
+    
+    for i, payload in enumerate(default_payloads[:top_k]):
+        # Use default scoring for payloads within the family
+        base_score = 0.5  # Default score for all payloads within a family
+        p_cal = base_score  # No calibration needed for default scoring
 
-        if model is not None:
-            try:
-                results = []
-                model_tag = f"family_{fam}.joblib"
-                
-                for i, payload in enumerate(default_payloads[:top_k]):
-                    # Create payload-specific features
-                    payload_features = features.copy()
-                    payload_features['payload'] = payload
-                    payload_features['payload_len'] = len(payload)
-                    
-                    # Use actual model prediction if available
-                    try:
-                        # Convert features to model input format
-                        # For now, use a simplified approach - in production this would use proper feature vectorization
-                        feature_vector = []
-                        for key in sorted(payload_features.keys()):
-                            val = payload_features[key]
-                            if isinstance(val, (int, float)):
-                                feature_vector.append(val)
-                            elif isinstance(val, bool):
-                                feature_vector.append(1.0 if val else 0.0)
-                            elif isinstance(val, str):
-                                feature_vector.append(len(val))
-                            else:
-                                feature_vector.append(0.0)
-                        
-                        # Pad or truncate to expected feature count (models expect fixed feature count)
-                        expected_features = 20  # Adjust based on actual model training
-                        while len(feature_vector) < expected_features:
-                            feature_vector.append(0.0)
-                        feature_vector = feature_vector[:expected_features]
-                        
-                        # Get model prediction
-                        if hasattr(model, 'predict_proba'):
-                            proba = model.predict_proba([feature_vector])
-                            base_score = float(proba[0][1]) if len(proba[0]) > 1 else float(proba[0][0])
-                        else:
-                            base_score = float(model.predict([feature_vector])[0])
-                            
-                    except Exception:
-                        # Fallback to heuristic scoring if model prediction fails
-                        base_score = 0.5
-                        
-                        # Boost score based on relevant features
-                        if fam == 'xss':
-                            if payload_features.get('has_script_tag', 0):
-                                base_score += 0.2
-                            if payload_features.get('has_event_handler', 0):
-                                base_score += 0.15
-                            if payload_features.get('probe_reflection_html', 0):
-                                base_score += 0.1
-                        elif fam == 'sqli':
-                            if payload_features.get('sql_kw_hits', 0) > 0:
-                                base_score += 0.2
-                            if payload_features.get('probe_sql_error', 0):
-                                base_score += 0.15
-                            if payload_features.get('has_comment_seq', 0):
-                                base_score += 0.1
-                        elif fam == 'redirect':
-                            if payload_features.get('probe_redirect_location_reflects', 0):
-                                base_score += 0.2
-                    
-                    # Apply calibration if available
-                    if calibration and "a" in calibration and "b" in calibration:
-                        p_cal = _apply_platt_calibration(base_score, calibration["a"], calibration["b"])
-                    else:
-                        p_cal = base_score
+        results.append({
+            "payload": payload,
+            "score": base_score,
+            "p_cal": p_cal,
+            "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults",
+            "model_tag": model_tag,
+            "family": fam
+        })
 
-                    results.append({
-                        "payload": payload,
-                        "score": base_score,
-                        "p_cal": p_cal,
-                        "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "ml",
-                        "model_tag": model_tag,
-                        "family": fam
-                    })
-
-                # Sort by p_cal descending
-                results.sort(key=lambda x: x["p_cal"], reverse=True)
-                return results
-
-            except Exception as e:
-                # If ML model fails and REQUIRE_RANKER is set, fail the request
-                if REQUIRE_RANKER:
-                    raise RuntimeError(f"ML ranker failed for family {fam}: {str(e)}")
-                # Otherwise fall back to defaults
-                pass
-
-    # Fallback to default payloads without ML - use score=None, p_cal=0.50 as specified
-    return [{"payload": p, "score": None, "p_cal": 0.50, "rank_source": "ctx_pool" if (fam == "xss" and xss_context and xss_escaping) else "defaults", "model_tag": None, "family": fam} for p in default_payloads[:top_k]]
+    # Sort by p_cal descending
+    results.sort(key=lambda x: x["p_cal"], reverse=True)
+    return results
 
 
 def available_models() -> Dict[str, Any]:

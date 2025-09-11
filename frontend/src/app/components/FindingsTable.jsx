@@ -104,7 +104,7 @@ const SQLiDialectBadge = ({ family, telemetry }) => {
   if (!telemetry?.sqli_dialect_hint) {
     return (
       <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700" title="No SQLi dialect detected">
-        none
+        —
       </span>
     );
   }
@@ -180,7 +180,7 @@ const SQLiDialectChip = ({ family, telemetry }) => {
   if (!telemetry?.sqli_dialect_hint) {
     return (
       <span className="px-2 py-0.5 rounded text-xs font-mono bg-gray-100 text-gray-700" title="No SQLi dialect detected">
-        none
+        —
       </span>
     );
   }
@@ -299,12 +299,8 @@ export default function FindingsTable({ results=[], onView }) {
       <td className="p-2">
         <RankSourceBadge rank_source={result.telemetry?.xss?.rank_source || result.rank_source} />
       </td>
-      <td className="p-2">
-        {(result.telemetry?.xss?.ml_proba != null) 
-          ? result.telemetry.xss.ml_proba.toFixed(2) 
-          : (result.telemetry?.xss?.rank_source === "ml" && result.ml_proba != null) 
-            ? result.ml_proba.toFixed(2) 
-            : "—"}
+      <td className="p-2 text-right tabular-nums">
+        {result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
       </td>
       <td className="p-2">
         <SQLiDialectBadge family={result.family} telemetry={result.telemetry} />

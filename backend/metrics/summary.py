@@ -9,6 +9,55 @@ def _to_int(x, default=0):
     except Exception:
         return default
 
+def compute_totals_from_rows(rows: list[dict]) -> dict:
+    """Compute totals from rows for consistency checking."""
+    t = {"positive": 0, "suspected": 0, "abstain": 0, "clean": 0, "na": 0, "error": 0}
+    for r in rows:
+        key = (r.get("decision") or "").lower()
+        if key in t:
+            t[key] += 1
+    t["total"] = sum(t.values())
+    return t
+
+def finalize_xss_context_metrics_robust(meta: dict, rows: list[dict], *, xss_top_k_default: int) -> dict:
+    """Robust version of XSS context metrics finalization."""
+    meta = dict(meta or {})
+    ctx_hits = [r for r in rows if r.get("family") == "xss" and r.get("rank_source") == "ctx_pool"]
+
+    # Baseline: sum Top-K per hit (prefer per-row top_k_used, fallback to run default)
+    baseline = sum(_to_int(r.get("top_k_used"), xss_top_k_default) for r in ctx_hits)
+
+    # Used: attempts actually consumed (prefer attempt_idx, else assume first-hit=1)
+    used = 0
+    for r in ctx_hits:
+        used += max(1, _to_int(r.get("attempt_idx"), 1))
+    if used == 0:  # safety net if attempt_idx not persisted
+        used = _to_int(meta.get("xss_first_hit_attempts_ctx"), 0)
+
+    saved = max(0, baseline - used)
+
+    meta["xss_first_hit_attempts_baseline"] = baseline
+    meta["xss_first_hit_attempts_used"] = used
+    meta["attempts_saved"] = saved
+    # keep the rolling counter updated elsewhere
+    meta["xss_first_hit_attempts_ctx"] = _to_int(meta.get("xss_first_hit_attempts_ctx"), 0)
+    return meta
+
+def finalize_summary(job, summary: dict, rows: list[dict]) -> dict:
+    """Finalize summary with consistency checks and XSS context metrics."""
+    # 1) Counters from the row table = source of truth
+    table_totals = compute_totals_from_rows(rows)
+    summary["totals_from_rows"] = table_totals
+    summary["counters_consistent"] = (table_totals.get("total") == summary.get("total"))
+
+    # 2) XSS context metrics with correct Top-K
+    plan_top_k = summary.get("top_k") or (job.meta or {}).get("xss_top_k") or 0
+    summary["meta"] = finalize_xss_context_metrics_robust(job.meta or {}, rows, xss_top_k_default=_to_int(plan_top_k, 0))
+
+    # Optionally persist meta back to job
+    job.meta = summary["meta"]
+    return summary
+
 def finalize_xss_context_metrics(meta: dict, rows: list[dict], *, ui_top_k_default: int | None = None) -> dict:
     """
     Compute:

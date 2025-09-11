@@ -514,6 +514,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 rank_source = "rule"  # Default rank source
                 
                 print(f"XSS_PROBE_DEBUG fam={fam} has_probe_bundle={probe_bundle is not None} has_xss={hasattr(probe_bundle, 'xss') if probe_bundle else False}")
+                # Only extract XSS context variables when processing XSS family
                 if fam == "xss" and hasattr(probe_bundle, "xss") and probe_bundle.xss:
                     xss_probe = probe_bundle.xss
                     xss_context = getattr(xss_probe, "xss_context", None)
@@ -529,10 +530,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         rank_source = "ml"
                     else:
                         rank_source = "rule"
+                # XSS context variables are already initialized to None above, so no need to clear them
                 
-                # Use context-aware payload selection if ML provided a final context
+                # Use context-aware payload selection if ML provided a final context (only for XSS family)
                 print(f"XSS_PAYLOAD_DEBUG fam={fam} xss_context_final={xss_context_final} xss_escaping={xss_escaping} rank_source={rank_source}")
+                print(f"PAYLOAD_SELECTION_DEBUG fam={fam} will_use_context_payloads={fam == 'xss' and xss_context_final and xss_context_final in ['html', 'html_body', 'attr', 'js_string']}")
+                print(f"CONTEXT_CHECK_DEBUG fam_is_xss={fam == 'xss'} has_context_final={xss_context_final is not None} context_value={xss_context_final}")
                 if fam == "xss" and xss_context_final and xss_context_final in ["html", "html_body", "attr", "js_string"]:
+                    print(f"CONTEXT_TRIGGERED_DEBUG Using context-aware XSS payloads for fam={fam}")
                     # Map context to family and use context-specific payloads
                     from backend.modules.payloads import payload_pool_for_xss
                     context_payloads = payload_pool_for_xss(xss_context_final, xss_escaping or "unknown")
@@ -827,7 +832,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "ml_role": "prioritization" if payload_rank_source == "ml" else None,
                             "gated": False,
                             "ml_family": fam if payload_rank_source == "ml" else None,
-                            "ml_proba": p_cal if payload_rank_source == "ml" else None,
+                            "ml_proba": xss_ml_proba if payload_rank_source == "ml" and fam == "xss" and xss_ml_proba is not None else (p_cal if payload_rank_source == "ml" else None),
                             "ml_threshold": threshold if payload_rank_source == "ml" else None,
                             "model_tag": model_tag if payload_rank_source == "ml" else None,
                             "attempt_idx": (attempt_idx + 1) if payload_rank_source in ["ml", "ctx_pool"] else None,
