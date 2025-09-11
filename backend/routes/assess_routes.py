@@ -124,7 +124,7 @@ class AssessRequest(BaseModel):
 class AssessResponse(BaseModel):
     job_id: str
     mode: str  # "direct" | "from_persisted" | "crawl_then_assess"
-    summary: Dict[str, int]
+    summary: Dict[str, Any]  # Changed from Dict[str, int] to Dict[str, Any] to support nested structure
     results: List[Dict[str, Any]]
     findings: List[Dict[str, Any]]
     meta: Dict[str, Any]
@@ -196,25 +196,27 @@ async def assess_vulnerabilities(request: AssessRequest):
             # Pathway A: Explicit endpoints
             mode = "direct"
             endpoints = request.endpoints
-        elif request.target_url is not None:
-            # Pathway B: Direct target URL
-            mode = "crawl_then_assess" if request.persist_after_crawl else "direct"
-            target_url = request.target_url
         else:
-            # Pathway C: Load from persisted endpoints
-            mode = "from_persisted"
+            # Check for persisted endpoints first (Pathway C)
             endpoints_path = DATA_DIR / "jobs" / request.job_id / "endpoints.json"
             
-            if not endpoints_path.exists():
+            if endpoints_path.exists():
+                # Pathway C: Load from persisted endpoints (preferred for Re-Assess)
+                mode = "from_persisted"
+                with open(endpoints_path, 'r') as f:
+                    persisted_data = json.load(f)
+                    endpoints = persisted_data.get("endpoints", [])
+                    target_url = persisted_data.get("target_url")
+            elif request.target_url is not None:
+                # Pathway B: Direct target URL (fallback when no persisted endpoints)
+                mode = "crawl_then_assess" if request.persist_after_crawl else "direct"
+                target_url = request.target_url
+            else:
+                # No endpoints or target_url provided
                 raise HTTPException(
                     status_code=422, 
                     detail=f"No persisted endpoints found for job_id: {request.job_id}. Run /api/crawl first or provide endpoints/target_url."
                 )
-            
-            with open(endpoints_path, 'r') as f:
-                persisted_data = json.load(f)
-                endpoints = persisted_data.get("endpoints", [])
-                target_url = persisted_data.get("target_url")
         
         # Run assessment
         if target_url and mode != "from_persisted":

@@ -88,9 +88,16 @@ def detect_xss_context_with_confidence(text: str, canary_pos: int) -> Dict[str, 
         if attr in window:
             return {"pred": "url", "conf": 0.90}  # High confidence
     
-    # Check for HTML attribute context
-    if ('"' in window or "'" in window) and ('=' in window):
-        return {"pred": "attr", "conf": 0.80}  # Medium-high confidence
+    # Check for HTML attribute context - more specific detection
+    # Look for attribute patterns where the canary is actually inside the attribute value
+    attr_patterns = [
+        r'\w+\s*=\s*["\'][^"\']*' + re.escape(CANARY) + r'[^"\']*["\']',  # Standard attributes
+        r'style\s*=\s*["\'][^"\']*' + re.escape(CANARY) + r'[^"\']*["\']',  # Style attributes
+    ]
+    
+    for pattern in attr_patterns:
+        if re.search(pattern, window, re.IGNORECASE):
+            return {"pred": "attr", "conf": 0.90}  # High confidence for actual attribute context
     
     # Check for HTML body context
     if '<' in window and '>' in window:

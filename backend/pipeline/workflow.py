@@ -236,6 +236,11 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     import time
     from threading import Lock
     from backend.modules.evidence_reader import read_evidence_files
+    from backend.modules.event_aggregator import set_current_job, reset_aggregator
+    
+    # Set up job context for aggregator
+    set_current_job(job_id)
+    reset_aggregator()  # Clear any previous state
     
     # Check if evidence files already exist (for from_persisted mode)
     # Only use existing results if they match the current strategy AND ctx_mode

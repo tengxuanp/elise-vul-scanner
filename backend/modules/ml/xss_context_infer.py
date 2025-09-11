@@ -8,6 +8,7 @@ Used by the hybrid rule-ML approach in xss_canary.py.
 import numpy as np
 import re
 from typing import Dict, Any, Optional, Tuple
+from threading import Lock
 from pathlib import Path
 import joblib
 
@@ -61,58 +62,77 @@ class MockVectorizer:
         return np.random.rand(n_samples, 100)  # Random 100-dimensional vectors
 
 
-# Global model cache
+# Global model cache with thread synchronization
 _context_model = None
 _context_vectorizer = None
 _escaping_model = None
 _escaping_vectorizer = None
+_model_loading_lock = Lock()
 
 def load_models() -> Tuple[bool, bool]:
-    """Load ML models if available."""
-    global _context_model, _context_vectorizer, _escaping_model, _escaping_vectorizer
+    """Load ML models if available with thread synchronization."""
+    global _context_model, _context_vectorizer, _escaping_model, _escaping_vectorizer, _model_loading_lock
     
-    context_loaded = False
-    escaping_loaded = False
+    # Check if models are already loaded
+    if _context_model is not None and _context_vectorizer is not None and _escaping_model is not None and _escaping_vectorizer is not None:
+        return True, True
     
-    try:
-        # Load context model
-        context_model_path = MODEL_DIR / "xss_context_model.joblib"
-        context_vectorizer_path = MODEL_DIR / "xss_context_vectorizer.joblib"
+    # Use lock to prevent race conditions during model loading
+    with _model_loading_lock:
+        # Double-check after acquiring lock
+        if _context_model is not None and _context_vectorizer is not None and _escaping_model is not None and _escaping_vectorizer is not None:
+            return True, True
         
-        if context_model_path.exists() and context_vectorizer_path.exists():
-            _context_model = joblib.load(context_model_path)
-            _context_vectorizer = joblib.load(context_vectorizer_path)
+        context_loaded = False
+        escaping_loaded = False
+        
+        try:
+            # Load context model
+            context_model_path = MODEL_DIR / "xss_context_model.joblib"
+            context_vectorizer_path = MODEL_DIR / "xss_context_vectorizer.joblib"
+            
+            if context_model_path.exists() and context_vectorizer_path.exists():
+                # Try loading with compatibility options for numpy 2.x
+                _context_model = joblib.load(context_model_path, mmap_mode=None)
+                _context_vectorizer = joblib.load(context_vectorizer_path, mmap_mode=None)
+                context_loaded = True
+                print("Context model loaded successfully")
+                
+        except Exception as e:
+            print(f"Failed to load context model: {e}")
+            print(f"Context model path exists: {(MODEL_DIR / 'xss_context_model.joblib').exists()}")
+            print(f"Context vectorizer path exists: {(MODEL_DIR / 'xss_context_vectorizer.joblib').exists()}")
+            # Use mock model as fallback
+            _context_model = MockContextModel()
+            _context_vectorizer = MockVectorizer()
             context_loaded = True
-            
-    except Exception as e:
-        print(f"Failed to load context model: {e}")
-        # Use mock model as fallback
-        _context_model = MockContextModel()
-        _context_vectorizer = MockVectorizer()
-        context_loaded = True
-        print("Using mock context model")
-        print(f"Mock context model classes: {_context_model.classes_}")
-    
-    try:
-        # Load escaping model
-        escaping_model_path = MODEL_DIR / "xss_escaping_model.joblib"
-        escaping_vectorizer_path = MODEL_DIR / "xss_escaping_vectorizer.joblib"
+            print("Using mock context model")
+            print(f"Mock context model classes: {_context_model.classes_}")
         
-        if escaping_model_path.exists() and escaping_vectorizer_path.exists():
-            _escaping_model = joblib.load(escaping_model_path)
-            _escaping_vectorizer = joblib.load(escaping_vectorizer_path)
-            escaping_loaded = True
+        try:
+            # Load escaping model
+            escaping_model_path = MODEL_DIR / "xss_escaping_model.joblib"
+            escaping_vectorizer_path = MODEL_DIR / "xss_escaping_vectorizer.joblib"
             
-    except Exception as e:
-        print(f"Failed to load escaping model: {e}")
-        # Use mock model as fallback
-        _escaping_model = MockEscapingModel()
-        _escaping_vectorizer = MockVectorizer()
-        escaping_loaded = True
-        print("Using mock escaping model")
-        print(f"Mock escaping model classes: {_escaping_model.classes_}")
-    
-    return context_loaded, escaping_loaded
+            if escaping_model_path.exists() and escaping_vectorizer_path.exists():
+                # Try loading with compatibility options for numpy 2.x
+                _escaping_model = joblib.load(escaping_model_path, mmap_mode=None)
+                _escaping_vectorizer = joblib.load(escaping_vectorizer_path, mmap_mode=None)
+                escaping_loaded = True
+                print("Escaping model loaded successfully")
+                
+        except Exception as e:
+            print(f"Failed to load escaping model: {e}")
+            print(f"Escaping model path exists: {(MODEL_DIR / 'xss_escaping_model.joblib').exists()}")
+            print(f"Escaping vectorizer path exists: {(MODEL_DIR / 'xss_escaping_vectorizer.joblib').exists()}")
+            # Use mock model as fallback
+            _escaping_model = MockEscapingModel()
+            _escaping_vectorizer = MockVectorizer()
+            escaping_loaded = True
+            print("Using mock escaping model")
+            print(f"Mock escaping model classes: {_escaping_model.classes_}")
+        
+        return context_loaded, escaping_loaded
 
 def extract_features_for_inference(text_window: str, canary_pos: int) -> Tuple[np.ndarray, np.ndarray]:
     """Extract features for ML inference."""
@@ -181,6 +201,81 @@ def extract_features_for_inference(text_window: str, canary_pos: int) -> Tuple[n
     
     return text, binary_features
 
+def _extract_features(text_window: str) -> Tuple[str, np.ndarray]:
+    """Extract features using the same method as training."""
+    # Extract binary features (same as training)
+    has_script_tag = '<script' in text_window.lower()
+    has_style_tag = '<style' in text_window.lower() or 'style=' in text_window.lower()
+    has_quotes = '"' in text_window or "'" in text_window
+    has_equals = '=' in text_window
+    has_angle_brackets = '<' in text_window and '>' in text_window
+    has_url_attrs = any(attr in text_window.lower() for attr in ['href=', 'src=', 'action=', 'formaction='])
+    has_style_attr = 'style=' in text_window.lower()
+    
+    # Quote type
+    quote_type = ""
+    if '"' in text_window:
+        quote_type = "double"
+    elif "'" in text_window:
+        quote_type = "single"
+    elif '`' in text_window:
+        quote_type = "backtick"
+    else:
+        quote_type = "none"
+    
+    # Attribute name
+    attr_name = ""
+    attr_match = re.search(r'(\w+)=["\']([^"\']*EliseXSSCanary123[^"\']*)["\']', text_window)
+    if attr_match:
+        attr_name = attr_match.group(1)
+    
+    # Content type (not available in inference, use defaults)
+    content_type = "text/html"
+    
+    # Binary features (matching training script)
+    feature_row = [
+        int(has_script_tag),
+        int(has_style_tag),
+        int(has_quotes),
+        int(has_equals),
+        int(has_angle_brackets),
+        int(has_url_attrs),
+        int(has_style_attr),
+    ]
+    
+    # One-hot encode quote type
+    quote_types = ['single', 'double', 'backtick', 'none']
+    for qt in quote_types:
+        feature_row.append(int(quote_type == qt))
+    
+    # One-hot encode attr name feature
+    attr_names = ['src', 'href', 'value', 'onclick', 'style', 'class', 'id', 'other', 'none']
+    for an in attr_names:
+        feature_row.append(int(attr_name == an))
+    
+    binary_features = np.array([feature_row])
+    
+    # Text features (same as training)
+    text = text_window
+    if has_script_tag:
+        text += " SCRIPT_TAG"
+    if has_style_tag:
+        text += " STYLE_TAG"
+    if has_quotes:
+        text += f" QUOTES_{quote_type}"
+    if has_equals:
+        text += " EQUALS"
+    if has_angle_brackets:
+        text += " ANGLE_BRACKETS"
+    if has_url_attrs:
+        text += " URL_ATTRS"
+    if has_style_attr:
+        text += " STYLE_ATTR"
+    if attr_name:
+        text += f" ATTR_{attr_name}"
+    
+    return text, binary_features
+
 def predict_xss_context(text_window: str, canary_pos: int) -> Optional[Dict[str, Any]]:
     """Predict XSS context using ML model."""
     global _context_model, _context_vectorizer
@@ -192,11 +287,14 @@ def predict_xss_context(text_window: str, canary_pos: int) -> Optional[Dict[str,
             return None
     
     try:
-        # Use the text window directly (simplified for mock models)
-        text = text_window
+        # Extract features using the same method as training
+        text, binary_features = _extract_features(text_window)
         
         # Transform text
-        X = _context_vectorizer.transform([text])
+        X_text = _context_vectorizer.transform([text])
+        
+        # Combine text and binary features
+        X = np.hstack([X_text.toarray(), binary_features])
         
         # Predict
         pred_proba = _context_model.predict_proba(X)[0]
@@ -225,11 +323,14 @@ def predict_xss_escaping(text_window: str, canary_pos: int) -> Optional[Dict[str
             return None
     
     try:
-        # Use the text window directly (simplified for mock models)
-        text = text_window
+        # Extract features using the same method as training
+        text, binary_features = _extract_features(text_window)
         
         # Transform text
-        X = _escaping_vectorizer.transform([text])
+        X_text = _escaping_vectorizer.transform([text])
+        
+        # Combine text and binary features
+        X = np.hstack([X_text.toarray(), binary_features])
         
         # Predict
         pred_proba = _escaping_model.predict_proba(X)[0]

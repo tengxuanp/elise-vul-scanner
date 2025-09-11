@@ -432,7 +432,9 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="text-sm font-medium">{payload.score.toFixed(3)}</div>
+                    <div className="text-sm font-medium">
+                      {payload.score != null ? payload.score.toFixed(3) : "—"}
+                    </div>
                     {idx === 0 && (
                       <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">✓ Used</span>
                     )}

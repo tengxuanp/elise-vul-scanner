@@ -76,6 +76,7 @@ const MLChip = ({ rank_source, ml_proba, ml }) => {
   const rankerActive = ml?.ranker_active ?? (rank_source === "ml");
   const classifierUsed = ml?.classifier_used ?? (rank_source === "ml" && ml_proba != null);
   
+  // Only show p_cal when classifier actually ran
   if (rankerActive && classifierUsed && ml_proba != null) {
     return (
       <span 
@@ -92,6 +93,16 @@ const MLChip = ({ rank_source, ml_proba, ml }) => {
         title="ML ranker inactive; using default payloads."
       >
         Rank: defaults • ML inactive
+      </span>
+    );
+  } else if (rankerActive && !classifierUsed) {
+    // Ranker active but classifier didn't run - don't show p_cal
+    return (
+      <span 
+        className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700"
+        title="ML ranker active but classifier not used."
+      >
+        Rank: model
       </span>
     );
   }
@@ -313,7 +324,7 @@ export default function FindingsTable({ results=[], onView }) {
         <RankSourceBadge rank_source={result.telemetry?.xss?.rank_source || result.rank_source} />
       </td>
       <td className="p-2 text-right tabular-nums">
-        {result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
+        {result.ml?.classifier_used && result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
       </td>
       <td className="p-2">
         <SQLiDialectBadge family={result.family} telemetry={result.telemetry} />

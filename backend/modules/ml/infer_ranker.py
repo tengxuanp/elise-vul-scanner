@@ -84,14 +84,14 @@ def _apply_calibration(family: str, scores: np.ndarray) -> np.ndarray:
 def _features_to_vector(features: Dict[str, Any]) -> Optional[np.ndarray]:
     """Convert feature dictionary to numpy vector for ML model."""
     try:
-        # Extract numeric features in a consistent order to match trained model (45 features)
+        # Extract numeric features in a consistent order to match trained model
         feature_vector = []
         
-        # Basic features (4)
-        feature_vector.append(features.get("param_length", 0))
-        feature_vector.append(features.get("url_length", 0))
-        feature_vector.append(features.get("path_depth", 0))
-        feature_vector.append(features.get("entropy", 0.0))
+        # Basic features (4) - use actual features from build_features
+        feature_vector.append(features.get("param_len", 0))  # param_length -> param_len
+        feature_vector.append(0)  # url_length not available, use 0
+        feature_vector.append(0)  # path_depth not available, use 0
+        feature_vector.append(features.get("shannon_entropy", 0.0))  # entropy -> shannon_entropy
         
         # Family indicators (3)
         feature_vector.append(features.get("family_xss", 0))
@@ -103,20 +103,20 @@ def _features_to_vector(features: Dict[str, Any]) -> Optional[np.ndarray]:
         feature_vector.append(features.get("param_in_form", 0))
         feature_vector.append(features.get("param_in_json", 0))
         
-        # Probe features (6)
+        # Probe features (6) - use actual features from build_features
         feature_vector.append(features.get("probe_sql_error", 0))
         feature_vector.append(features.get("probe_timing_delta_gt2s", 0))
         feature_vector.append(features.get("probe_reflection_html", 0))
-        feature_vector.append(features.get("probe_reflection_attr", 0))
+        feature_vector.append(0)  # probe_reflection_attr not available, use 0
         feature_vector.append(features.get("probe_reflection_js", 0))
-        feature_vector.append(features.get("probe_redirect_influence", 0))
+        feature_vector.append(features.get("probe_redirect_location_reflects", 0))  # probe_redirect_influence -> probe_redirect_location_reflects
         
         # Status class indicators (5)
         feature_vector.append(features.get("status_class_2", 0))
         feature_vector.append(features.get("status_class_3", 0))
         feature_vector.append(features.get("status_class_4", 0))
         feature_vector.append(features.get("status_class_5", 0))
-        feature_vector.append(features.get("status_class_other", 0))
+        feature_vector.append(0)  # status_class_other not available, use 0
         
         # Content type indicators (2)
         feature_vector.append(features.get("content_type_html", 0))
@@ -148,9 +148,9 @@ def _features_to_vector(features: Dict[str, Any]) -> Optional[np.ndarray]:
         
         # Additional features to reach 45 (4 more)
         feature_vector.append(features.get("has_comment_seq", 0))
-        feature_vector.append(features.get("payload_has_script", 0))
-        feature_vector.append(features.get("payload_has_svg", 0))
-        feature_vector.append(features.get("payload_has_img", 0))
+        feature_vector.append(0)  # payload_has_script not available, use 0
+        feature_vector.append(0)  # payload_has_svg not available, use 0
+        feature_vector.append(0)  # payload_has_img not available, use 0
         
         # Ensure we have exactly 45 features
         while len(feature_vector) < 45:
@@ -240,13 +240,13 @@ def _apply_platt_calibration(raw_score: float, a: float, b: float) -> float:
 
 def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_context: Optional[str] = None, xss_escaping: Optional[str] = None, ml_mode: str = "auto") -> List[Dict[str, Any]]:
     """
-    Return sorted list: [{"payload": str, "score": float|None, "p_cal": float|None, "rank_source": str, "model_tag": str|None}]
+    Return sorted list: [{"payload": str, "score": float|None, "p_cal": float|None, "rank_source": str, "model_tag": str|None, "skip_reason": str|None}]
     If models present & ELISE_USE_ML=1: use model + calibration.
-    Else: fall back to manifest defaults ordering with score=None, p_cal=0.50.
+    Else: fall back to manifest defaults ordering with score=None, p_cal=None.
     Never raise for unknown family—fallback gracefully.
     """
     fam = family.lower()
-    print(f"RANK_PAYLOADS_CALLED fam={fam} xss_context={xss_context} xss_escaping={xss_escaping}")
+    print(f"RANK_PAYLOADS_CALLED fam={fam} xss_context={xss_context} xss_escaping={xss_escaping} ml_mode={ml_mode}")
 
     # Try to use ML ranking if available and enabled
     if USE_ML and ml_mode in {"auto", "always", "force_ml"}:
@@ -292,7 +292,8 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
                                 "p_cal": p_cal,
                                 "rank_source": "ml",
                                 "model_tag": f"{fam}_ranker",
-                                "family": fam
+                                "family": fam,
+                                "skip_reason": None
                             })
                         
                         # Sort by p_cal descending
@@ -301,14 +302,19 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
                         return results
                     else:
                         print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={fam}")
+                        skip_reason = "features_missing"
                 else:
                     print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={fam}")
+                    skip_reason = "features_missing"
             except Exception as e:
                 print(f"RANK_PAYLOADS_ML_ERROR fam={fam} error={e}")
+                skip_reason = "model_unavailable"
         else:
             print(f"RANK_PAYLOADS_ML_NO_MODEL fam={fam}")
+            skip_reason = "model_unavailable"
     else:
         print(f"RANK_PAYLOADS_ML_DISABLED fam={fam}")
+        skip_reason = "model_unavailable"
 
     # Fallback to defaults
     print(f"RANK_PAYLOADS_FALLBACK_DEFAULTS fam={fam}")
@@ -341,7 +347,8 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
             "p_cal": p_cal,
             "rank_source": "defaults",
             "model_tag": model_tag,
-            "family": fam
+            "family": fam,
+            "skip_reason": skip_reason if 'skip_reason' in locals() else "model_unavailable"
         })
 
     # Sort by score descending

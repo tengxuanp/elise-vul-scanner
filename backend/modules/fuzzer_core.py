@@ -859,24 +859,28 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         }
                         
                         # Add honest ML state per attempt
+                        # Get skip_reason from the payload that was used
+                        payload_skip_reason = cand.get("skip_reason")
+                        
                         ml_state = {
                             "rank_source": rank_source,
                             "ranker_active": rank_source in ["ml", "ctx_pool"],
                             "classifier_used": rank_source in ["ml", "ctx_pool"] and p_cal is not None,
                             "p_cal": p_cal if rank_source in ["ml", "ctx_pool"] and p_cal is not None else None,
-                            "skip_reason": None
+                            "skip_reason": payload_skip_reason
                         }
                         
-                        # Determine skip reason if applicable
-                        if rank_source == "defaults":
-                            if not ranked:
-                                ml_state["skip_reason"] = "model_unavailable"
-                            elif not ml_state["ranker_active"]:
-                                ml_state["skip_reason"] = "model_unavailable"
-                            else:
-                                ml_state["skip_reason"] = "threshold_blocked"
-                        elif rank_source == "probe_only":
-                            ml_state["skip_reason"] = "context_override"
+                        # Determine skip reason if not already set
+                        if not ml_state["skip_reason"]:
+                            if rank_source == "defaults":
+                                if not ranked:
+                                    ml_state["skip_reason"] = "model_unavailable"
+                                elif not ml_state["ranker_active"]:
+                                    ml_state["skip_reason"] = "model_unavailable"
+                                else:
+                                    ml_state["skip_reason"] = "threshold_blocked"
+                            elif rank_source == "probe_only":
+                                ml_state["skip_reason"] = "context_override"
                         
                         ev.telemetry["ml"] = ml_state
                         
@@ -1057,9 +1061,14 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     Handles: crawl → probe → ML ranker → evidence sink
     """
     from backend.modules.strategy import make_plan
+    from backend.modules.event_aggregator import set_current_job, reset_aggregator
     
     start_time = time.time()
     job_budget_ms = int(os.getenv("ELISE_JOB_BUDGET_MS", "300000"))  # 5 minutes default
+    
+    # Set up job context for aggregator
+    set_current_job(job_id)
+    reset_aggregator()  # Clear any previous state
     
     # Create strategy plan for enforcement
     plan = make_plan(strategy)

@@ -99,8 +99,9 @@ export default function CrawlPage() {
         throw new Error(errorData.detail || 'Assessment failed');
       }
 
-      // Navigate to assess page with job_id
-      router.push(`/assess?jobId=${result.job_id}`);
+      // Navigate to assess page with job_id and target_url
+      const targetUrl = encodeURIComponent(formData.target_url);
+      router.push(`/assess?jobId=${result.job_id}&targetUrl=${targetUrl}`);
     } catch (err) {
       setError(err.message);
     } finally {
