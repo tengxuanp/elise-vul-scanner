@@ -50,7 +50,7 @@ def inject_once(t: Target, family: str, payload: str) -> InjectionResult:
         if payload in text: confirmed=True; why.append("reflection")
     elif family=="sqli":
         low = text.lower()
-        if any(tok in low for tok in ("sql syntax","sqlite error","warning: mysql","psql:")): confirmed=True; why.append("sql_error")
+        if any(tok in low for tok in ("sql syntax","sqlite error","warning: mysql","psql:","sql error","unrecognized token","syntax error","database error")): confirmed=True; why.append("sql_error")
     elif family=="redirect":
         loc = r.headers.get("location","")
         if 300<=r.status_code<400 and loc.startswith(("http://","https://")): confirmed=True; why.append("open_redirect")

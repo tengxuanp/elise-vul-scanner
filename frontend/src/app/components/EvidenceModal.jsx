@@ -238,8 +238,8 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
           </div>
         )}
 
-        {/* Reflection Details */}
-        {evidence?.reflection_details && (
+        {/* Reflection Details - Only show for XSS family */}
+        {evidence?.family === 'xss' && evidence?.reflection_details && (
           <div>
             <div className="text-sm font-medium mb-2">Reflection Context</div>
             <div className="grid grid-cols-2 gap-4 text-sm">
@@ -297,18 +297,62 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
           </div>
         )}
 
-        {/* SQLi Details */}
-        {evidence?.sqli_details && (
+        {/* SQLi Probe Signals */}
+        {evidence?.family === 'sqli' && (
           <div>
-            <div className="text-sm font-medium mb-2">SQL Error</div>
-            <div className="space-y-2">
-              <div>
-                <div className="text-xs text-gray-500">Error Excerpt</div>
-                <code className="block bg-red-50 p-2 rounded text-xs font-mono text-red-800">{evidence.sqli_details.error_excerpt}</code>
-              </div>
-              <div>
-                <div className="text-xs text-gray-500">Dialect Hint</div>
-                <div className="font-mono">{evidence.sqli_details.dialect_hint}</div>
+            <div className="text-sm font-medium mb-2">SQLi Probe Signals</div>
+            <div className="bg-gray-50 p-3 rounded">
+              <div className="text-sm space-y-2">
+                {/* Error Based */}
+                <div className="flex justify-between">
+                  <span className="font-medium">Error Based:</span>
+                  <span className={evidence.sqli_details?.error_based ? 'text-red-600' : 'text-gray-500'}>
+                    {evidence.sqli_details?.error_based ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                
+                {/* Boolean Delta */}
+                {evidence.sqli_details?.boolean_delta !== undefined && (
+                  <div className="flex justify-between">
+                    <span className="font-medium">Boolean Delta:</span>
+                    <span className={Math.abs(evidence.sqli_details.boolean_delta) > 0.1 ? 'text-yellow-600' : 'text-gray-500'}>
+                      {evidence.sqli_details.boolean_delta.toFixed(3)}
+                    </span>
+                  </div>
+                )}
+                
+                {/* Timing Based */}
+                <div className="flex justify-between">
+                  <span className="font-medium">Timing Based:</span>
+                  <span className={evidence.sqli_details?.timing_based ? 'text-orange-600' : 'text-gray-500'}>
+                    {evidence.sqli_details?.timing_based ? 'Yes' : 'No'}
+                  </span>
+                </div>
+                
+                {/* Dialect Hint */}
+                {evidence.sqli_details?.dialect_hint && (
+                  <div className="flex justify-between">
+                    <span className="font-medium">Dialect:</span>
+                    <span className="text-blue-600">{evidence.sqli_details.dialect_hint}</span>
+                  </div>
+                )}
+                
+                {/* Error Excerpt */}
+                {evidence.sqli_details?.error_excerpt && (
+                  <div>
+                    <div className="text-xs text-gray-500 mb-1">Error Excerpt</div>
+                    <code className="block bg-red-50 p-2 rounded text-xs font-mono text-red-800">{evidence.sqli_details.error_excerpt}</code>
+                  </div>
+                )}
+                
+                {/* Show message if no signals */}
+                {!evidence.sqli_details?.error_based && 
+                 !evidence.sqli_details?.boolean_delta && 
+                 !evidence.sqli_details?.timing_based && (
+                  <div className="text-gray-500 italic">
+                    No SQLi probe signals — decision from error signature.
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -407,8 +451,81 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
       return <div className="text-sm text-gray-500">No attempt timeline available</div>;
     }
 
+    // Get decision reason and confirm stats for SQLi
+    const decision = evidence?.telemetry?.decision;
+    const confirmStats = evidence?.telemetry?.confirm_stats;
+
     return (
       <div className="space-y-3">
+        {/* SQLi Decision Header Card */}
+        {evidence?.family === 'sqli' && decision && (
+          <div className="border rounded p-4 bg-blue-50">
+            <div className="text-lg font-semibold mb-3">SQLi Decision: {decision.label}</div>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Reason</div>
+                <div className="font-mono text-sm font-medium">{decision.reason}</div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Confidence</div>
+                <div className={`font-medium ${
+                  decision.label === 'positive' ? 'text-green-700' : 
+                  decision.label === 'suspected' ? 'text-yellow-700' : 'text-gray-700'
+                }`}>
+                  {decision.label === 'positive' ? 'High' : decision.label === 'suspected' ? 'Medium' : 'Low'}
+                </div>
+              </div>
+            </div>
+            
+            {/* Error Signature Display */}
+            {decision.reason === 'error_signature' && evidence?.telemetry?.decision?.error_signature && (
+              <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded">
+                <div className="text-xs text-red-600 font-medium mb-1">SQL Error Signature</div>
+                <div className="text-xs text-red-800">
+                  <div>Pattern: {evidence.telemetry.decision.error_signature.pattern_id}</div>
+                  <div>DBMS: {evidence.telemetry.decision.error_signature.dbms_guess}</div>
+                  <div>Snippet: {evidence.telemetry.decision.error_signature.match_snippet}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Decision Reason and Confirm Stats for SQLi */}
+        {evidence?.family === 'sqli' && decision && (
+          <div className="border rounded p-3 bg-blue-50">
+            <div className="text-sm font-medium mb-2">SQLi Decision Details</div>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <div className="text-xs text-gray-500">Decision</div>
+                <div className={`font-medium ${
+                  decision.label === 'positive' ? 'text-green-700' : 
+                  decision.label === 'suspected' ? 'text-yellow-700' : 'text-gray-700'
+                }`}>
+                  {decision.label}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-gray-500">Reason</div>
+                <div className="font-mono text-xs">{decision.reason}</div>
+              </div>
+            </div>
+            
+            {/* Confirm Stats for confirmed decisions */}
+            {confirmStats && (decision.reason === 'boolean_confirmed' || decision.reason === 'time_based_confirmed') && (
+              <div className="mt-3">
+                <div className="text-xs text-gray-500 mb-2">Confirmation Trials</div>
+                <div className="text-xs space-y-1">
+                  <div>Attack avg: {confirmStats.attack_avg_latency?.toFixed(1)}ms, {confirmStats.attack_avg_length} bytes</div>
+                  <div>Control avg: {confirmStats.control_avg_latency?.toFixed(1)}ms, {confirmStats.control_avg_length} bytes</div>
+                  <div>Delta: {confirmStats.delta_latency?.toFixed(1)}ms, {confirmStats.delta_length} bytes</div>
+                  <div>Consistent: {confirmStats.consistent ? '✓' : '✗'}</div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         {evidence.attempts_timeline.map((attempt, idx) => (
           <div key={idx} className="border rounded p-3">
             <div className="flex items-center justify-between mb-2">
@@ -437,7 +554,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
               <div>
                 <div className="text-xs text-gray-500">Response</div>
                 <div className="font-mono text-xs">
-                  {attempt.response?.status || attempt.status} ({attempt.response?.latency_ms || attempt.latency_ms}ms)
+                  Status {attempt.response?.status || attempt.status} • {attempt.response?.latency_ms || attempt.latency_ms} ms
                 </div>
               </div>
               <div>
@@ -621,7 +738,36 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     <div className="flex items-center gap-4">
                       <div>
                         <div className="text-xs text-zinc-500">CVSS</div>
-                        <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
+                        {(() => {
+                          // CVSS gating for SQLi based on decision reason
+                          if (evidence?.family === 'sqli') {
+                            const decision = evidence?.telemetry?.decision;
+                            const validReasons = ['error_signature', 'boolean_confirmed', 'time_based_confirmed'];
+                            const showCvss = decision && validReasons.includes(decision.reason);
+                            const lowConfidence = evidence?.p_cal != null && evidence.p_cal < 0.65;
+                            
+                            if (!showCvss) {
+                              return <div className="font-semibold text-gray-400">-</div>;
+                            }
+                            
+                            return (
+                              <div className="flex items-center gap-2">
+                                <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>
+                                {lowConfidence && (
+                                  <span 
+                                    className="text-xs text-yellow-600 cursor-help" 
+                                    title="Low model confidence"
+                                  >
+                                    ⚠️
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          }
+                          
+                          // Default CVSS display for non-SQLi
+                          return <div className="font-semibold">{evidence?.cvss?.base ?? "-"}</div>;
+                        })()}
                       </div>
                       {evidence?.p_cal != null && (
                         <div>
@@ -705,13 +851,11 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                     )}
                   </div>
                   
-                  {/* ML Scores */}
+                  {/* ML State Rendering */}
                   {(() => {
+                    const mlState = evidence?.telemetry?.ml;
                     const isProbeOnly = evidence?.rank_source === "probe_only";
                     const noMLAttempts = meta?.ml_inject_attempts === 0;
-                    const hasMLScores = evidence?.score !== undefined || evidence?.p_cal !== undefined;
-                    const rsrc = evidence?.ranking?.source || evidence?.rank_source;
-                    const showRankerBox = rsrc === "ml_ranked";
                     
                     if (isProbeOnly || noMLAttempts) {
                       return (
@@ -722,18 +866,48 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
                           </div>
                         </div>
                       );
-                    } else if (hasMLScores && showRankerBox) {
+                    }
+                    
+                    if (mlState) {
+                      const { rank_source, ranker_active, classifier_used, p_cal, skip_reason } = mlState;
+                      
                       return (
                         <div className="my-4">
-                          <div className="text-xs text-zinc-500 mb-2">ML Ranking</div>
-                          <MLScoreDisplay 
-                            score={evidence?.score}
-                            p_cal={evidence?.p_cal}
-                            family={evidence?.family}
-                          />
+                          <div className="text-xs text-zinc-500 mb-2">ML State</div>
+                          
+                          {/* Ranker Status */}
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`px-2 py-1 rounded text-xs ${
+                              ranker_active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+                            }`}>
+                              Rank: {rank_source} • ML {ranker_active ? 'active' : 'inactive'}
+                            </span>
+                            {skip_reason && (
+                              <span className="text-xs text-gray-500">
+                                ({skip_reason})
+                              </span>
+                            )}
+                          </div>
+                          
+                          {/* ML Scores - only show when classifier was used */}
+                          {classifier_used && p_cal !== null && (
+                            <MLScoreDisplay 
+                              score={evidence?.score}
+                              p_cal={p_cal}
+                              family={evidence?.family}
+                            />
+                          )}
+                          
+                          {/* Low confidence warning */}
+                          {classifier_used && p_cal !== null && p_cal < 0.65 && (
+                            <div className="mt-2 text-xs text-yellow-600">
+                              ⚠️ Low model confidence; CVSS for reference only.
+                            </div>
+                          )}
                         </div>
                       );
                     }
+                    
                     return null;
                   })()}
                   

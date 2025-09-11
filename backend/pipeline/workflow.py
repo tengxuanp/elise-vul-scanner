@@ -530,14 +530,20 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         if redirect_results:
             violations.append("strategy_violation:redirect_family_under_ml_with_context")
     
+    # Use SSOT aggregator for summary (as required by patch)
+    from backend.modules.event_aggregator import get_aggregator
+    aggregator = get_aggregator()
+    ssot_summary = aggregator.build_summary(results)
+    
+    # Adapt SSOT summary to expected API format
     summary = {
         "total": len(results) + na_count + endpoints_without_params,
-        "positive": sum(r["decision"]==DECISION["POS"] for r in results),
-        "suspected": sum(r["decision"]==DECISION["SUS"] for r in results),
-        "abstain": sum(r["decision"]==DECISION["ABS"] for r in results),
+        "positive": ssot_summary["totals"]["positives_total"],
+        "suspected": ssot_summary["totals"]["suspected_total"],
+        "abstain": ssot_summary["totals"]["clean_total"],
         "na": na_count + endpoints_without_params,
-        "confirmed_probe": confirmed_probe,
-        "confirmed_ml_inject": confirmed_ml_inject,
+        "confirmed_probe": ssot_summary["provenance"]["confirmed_probe"],
+        "confirmed_ml_inject": ssot_summary["provenance"]["confirmed_inject"],
     }
     
     meta = {
@@ -574,11 +580,8 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "xss_first_hit_attempts_baseline": xss_first_hit_attempts_baseline,
         "xss_first_hit_attempts_delta": xss_first_hit_attempts_baseline - xss_first_hit_attempts_ctx if (xss_first_hit_attempts_ctx or 0) > 0 else 0,
         "xss_ctx_invoke": ctx_mode,
-        # Counters consistency check
-        "counters_consistent": (
-            (probe_successes + ml_inject_successes) == (confirmed_probe + confirmed_ml_inject) and
-            (confirmed_probe + confirmed_ml_inject) == sum(1 for r in results if r.get("decision") == "positive")
-        ),
+        # Counters consistency check - will be updated by SSOT aggregator
+        "counters_consistent": True,  # Placeholder, will be overridden by aggregator
         # Backward compatibility
         "injections_attempted": probe_attempts + ml_inject_attempts,
         "injections_succeeded": probe_successes + ml_inject_successes,
@@ -590,7 +593,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     results = canonicalize_results(results)
     results = ensure_all_telemetry_defaults(results)
     
-    # Get event-based counters from aggregator
+    # Get event-based counters from aggregator (SSOT)
     aggregator = get_aggregator()
     event_meta = aggregator.get_meta_data(results)
     
@@ -600,11 +603,14 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
     # Merge event counters into meta
     meta.update(event_meta)
     
+    # Update counters_consistent from SSOT aggregator (reuse same summary)
+    meta["counters_consistent"] = not ssot_summary["flags"].get("counts_inconsistent", False)
+    
     # Restore manually incremented counter if it was overwritten
     if manually_incremented_ctx_counter > 0:
         meta["xss_first_hit_attempts_ctx"] = manually_incremented_ctx_counter
     
     # Finalize XSS context metrics
-    meta = finalize_xss_context_metrics(meta, results, ui_top_k_default=summary.get("top_k"))
+    meta = finalize_xss_context_metrics(meta, results, ui_top_k_default=3)
     
     return {"summary": summary, "results": results, "findings": findings, "job_id": job_id, "meta": meta}

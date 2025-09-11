@@ -10,7 +10,37 @@ def gate_candidate_xss(t: Target) -> bool:
     return t.param_in in ("query", "form", "json")
 
 def gate_candidate_sqli(t: Target) -> bool:
-    return t.param_in in ("query","form","json")
+    """
+    Gate for SQLi candidates with URL-param suppression.
+    
+    URL-like parameters are suppressed for SQLi unless hard SQL error evidence exists.
+    This prevents false positives from redirect parameters like /go?url=.
+    """
+    # Basic parameter type check
+    if t.param_in not in ("query", "form", "json"):
+        return False
+    
+    # URL-param suppression check
+    from backend.triage.sqli_decider import should_suppress_sqli_for_param
+    
+    # Check if this parameter should be suppressed
+    # Extract parameter value from URL if possible
+    param_value = ''
+    try:
+        from urllib.parse import urlparse, parse_qs
+        parsed = urlparse(t.url)
+        if t.param_in == 'query' and parsed.query:
+            query_params = parse_qs(parsed.query)
+            if t.param in query_params:
+                param_value = query_params[t.param][0] if query_params[t.param] else ''
+    except:
+        pass
+    
+    if should_suppress_sqli_for_param(t.param, param_value, has_error_evidence=False):
+        print(f"SQLI_SUPPRESSED URL-like param {t.param} suppressed for SQLi")
+        return False
+    
+    return True
 
 def gate_candidate_redirect(t: Target) -> bool:
     return t.param.lower() in {"next","url","return","redirect","target","goto","dest","destination"}

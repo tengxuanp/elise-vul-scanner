@@ -56,6 +56,7 @@ from .evidence import EvidenceRow, write_evidence
 from .cvss_rules import cvss_for
 from .playwright_crawler import crawl_site
 from .confirmers import confirm_xss, confirm_sqli, confirm_redirect, oracle_from_signals
+from backend.triage.sqli_decider import decide_sqli, confirm_helper
 from backend.app_state import DATA_DIR
 
 def _ensure_telemetry_defaults(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -671,20 +672,47 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         had_signal = "sql_error" in (getattr(inj, "why", []) or [])
                         sqli_budget.note_result(had_signal, target.param)
                     
-                    # Build comprehensive signals from probes + injection outcome
-                    signals = {
-                        "xss_context": getattr(probe_bundle.xss, "xss_context", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
-                        "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
-                        "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
-                        "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
-                    }
+                    # Build family-scoped signals from probes + injection outcome
+                    # STRICT: Only include signals for the family being processed
+                    signals = {}
                     
-                    # FAMILY ENFORCEMENT: Use the family being processed, not oracle-determined family
-                    # This ensures evidence is created for the correct family
-                    fired_family = fam  # Use the family being processed
-                    reason_code = "family_processing"  # Set a generic reason code
+                    if fam == "xss":
+                        # XSS signals only
+                        signals.update({
+                            "xss.context": getattr(probe_bundle.xss, "xss_context", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
+                            "xss.reflected": getattr(probe_bundle.xss, "reflected", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
+                        })
+                    elif fam == "sqli":
+                        # SQLi signals only - NO XSS/REFLECTION SIGNALS
+                        signals.update({
+                            "sqli.boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
+                            "sqli.error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
+                            "sqli.timing_based": getattr(probe_bundle.sqli, "time_based", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
+                        })
+                    elif fam == "redirect":
+                        # Redirect signals only
+                        signals.update({
+                            "redirect.influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location", "")).startswith(("http://","https://"))),
+                        })
                     
-                    # Always create evidence for the family being processed
+                    # NO LEGACY SIGNALS - Family purity enforced
+                    
+                    # STRICT SQLI DECISION: Use strict decider for SQLi, family enforcement for others
+                    if fam == "sqli":
+                        # Use strict SQLi decider with confirmation trials
+                        decision, reason_code, extras = decide_sqli(
+                            signals, payload, target, confirm_helper
+                        )
+                        fired_family = fam if decision in ["positive", "suspected"] else None
+                        print(f"SQLI_STRICT_DECISION decision={decision} reason={reason_code} fired={fired_family}")
+                    else:
+                        # FAMILY ENFORCEMENT: Use the family being processed for non-SQLi
+                        fired_family = fam  # Use the family being processed
+                        reason_code = "family_processing"  # Set a generic reason code
+                        decision = "positive"  # Assume positive for non-SQLi families
+                        extras = {}
+                    
+                    # Create evidence only if family fired
                     if fired_family:
                         # Update injection attempt to success
                         record_inject_attempt(target_id, fam, True)
@@ -781,6 +809,20 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         # Add attempt timeline (current attempt)
                         from urllib.parse import urlparse
                         parsed_url = urlparse(target.url)
+                        # Use proper decision reason instead of generic "reflection+payload"
+                        attempt_why = []
+                        if fired_family == "sqli":
+                            # SQLi uses canonical decision reason
+                            attempt_why = [reason_code] if reason_code else []
+                        elif fired_family == "xss":
+                            # XSS can use reflection+payload
+                            attempt_why = ["signal:reflection+payload"]
+                        elif fired_family == "redirect":
+                            # Redirect uses specific reason
+                            attempt_why = ["signal:redirect"] if reason_code else []
+                        else:
+                            attempt_why = ["signal:generic"]
+                        
                         attempt_data = {
                             "payload": cand.get("payload", ""),
                             "method": target.method,
@@ -790,7 +832,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "status": inj.status,
                             "latency_ms": getattr(inj, "latency_ms", 0),
                             "hit": True,
-                            "why": ["signal:reflection+payload"],
+                            "why": attempt_why,
                             "rank_source": rank_source
                         }
                         ev.attempts_timeline = create_attempt_timeline([attempt_data])
@@ -802,12 +844,49 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "rank_source": rank_source
                         }
                         
+                        # Add honest ML state per attempt
+                        ml_state = {
+                            "rank_source": rank_source,
+                            "ranker_active": rank_source in ["ml", "ctx_pool"],
+                            "classifier_used": rank_source in ["ml", "ctx_pool"] and p_cal is not None,
+                            "p_cal": p_cal if rank_source in ["ml", "ctx_pool"] and p_cal is not None else None,
+                            "skip_reason": None
+                        }
+                        
+                        # Determine skip reason if applicable
+                        if rank_source == "defaults":
+                            if not ranked:
+                                ml_state["skip_reason"] = "model_unavailable"
+                            else:
+                                ml_state["skip_reason"] = "threshold_blocked"
+                        elif rank_source == "probe_only":
+                            ml_state["skip_reason"] = "context_override"
+                        
+                        ev.telemetry["ml"] = ml_state
+                        
+                        # Record ML state in aggregator for require_ranker tracking
+                        from backend.modules.event_aggregator import get_aggregator
+                        aggregator = get_aggregator()
+                        aggregator.record_ml_state(
+                            ranker_active=ml_state["ranker_active"],
+                            require_ranker=getattr(plan, "require_ranker", False) if plan else False
+                        )
+                        
                         # Add SQLi dialect metadata if this is a SQLi finding
                         if fired_family == "sqli":
                             ev.telemetry.update({
                                 "sqli_dialect_hint": sqli_dialect_hint,
                                 "sqli_dialect_signals": sqli_dialect_signals,
                                 "sqli_dialect_confident": sqli_dialect_confident
+                            })
+                            
+                            # Add strict SQLi decision and confirmation stats
+                            ev.telemetry.update({
+                                "decision": {
+                                    "label": decision,
+                                    "reason": reason_code
+                                },
+                                "confirm_stats": extras.get("confirm_stats")
                             })
                         
                         # Add vulnerability proof
@@ -829,11 +908,25 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "attempt_idx": attempt_idx if rank_source == "ml" else None
                         })
                         
+                        # Use strict decision for SQLi, standard decision for others
+                        if fired_family == "sqli":
+                            # Map strict SQLi decision to standard decision codes
+                            decision_map = {
+                                "positive": DECISION["POS"],
+                                "suspected": DECISION["SUS"], 
+                                "clean": DECISION["NEG"]
+                            }
+                            final_decision = decision_map.get(decision, DECISION["NEG"])
+                            why_reasons = [reason_code] if decision in ["positive", "suspected"] else []
+                        else:
+                            final_decision = DECISION["POS"]
+                            why_reasons = unique_merge([], ["ml_ranked", reason_code])
+                        
                         result_dict = {
                             "target": target.to_dict(), 
                             "family": fired_family, 
-                            "decision": DECISION["POS"], 
-                            "why": unique_merge([], ["ml_ranked", reason_code]),
+                            "decision": final_decision,
+                            "why": why_reasons,
                             "evidence_id": evidence_id,
                             "cvss": ev.cvss,  # Pass through the CVSS from evidence
                             "rank_source": payload_rank_source,  # Use the actual payload rank_source
@@ -1140,8 +1233,9 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     # Convert to list
     findings_aggregates = list(findings_by_family.values())
     
-    # Get event-based counters from aggregator
+    # Get SSOT summary from aggregator
     aggregator = get_aggregator()
+    summary = aggregator.build_summary(results)
     event_meta = aggregator.get_meta_data(results)
     
     meta = {
@@ -1170,6 +1264,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
             return {
                 "results": results, 
                 "findings": findings_aggregates, 
+                "summary": summary,
                 "job_id": job_id, 
                 "meta": meta
             }
@@ -1179,6 +1274,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     return {
         "results": results, 
         "findings": findings_aggregates, 
+        "summary": summary,
         "job_id": job_id, 
         "meta": meta
     }

@@ -243,6 +243,51 @@ const SummaryPanel = ({
       {meta && (
         <div className="mt-6 pt-4 border-t">
           <h4 className="font-medium text-sm text-gray-700 mb-3">Strategy Telemetry</h4>
+          
+          {/* ML Usage Split */}
+          {meta.ml_stats && (
+            <div className="mb-4 p-3 bg-gray-50 rounded">
+              <div className="text-xs font-medium text-gray-700 mb-2">ML Usage Split</div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <div className="text-gray-600">rank_source=model</div>
+                  <div className="font-semibold text-green-700">{meta.ml_stats.ranker_active_count}</div>
+                </div>
+                <div>
+                  <div className="text-gray-600">rank_source=defaults</div>
+                  <div className="font-semibold text-gray-700">{meta.ml_stats.ranker_inactive_count}</div>
+                </div>
+              </div>
+              
+              {/* Require Ranker Violation Warning */}
+              {meta.ml_stats.require_ranker_violated && (
+                <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
+                  <div className="text-xs text-red-600 font-medium">⚠️ Require Ranker Violation</div>
+                  <div className="text-xs text-red-800">{meta.ml_stats.require_ranker_message}</div>
+                </div>
+              )}
+            </div>
+          )}
+          
+          {/* Family Statistics */}
+          {meta.family_stats && (
+            <div className="mb-4 p-3 bg-gray-50 rounded">
+              <div className="text-xs font-medium text-gray-700 mb-2">Family Statistics</div>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <div className="text-gray-600">Family Mismatches</div>
+                  <div className={`font-semibold ${meta.family_stats.family_mismatches > 0 ? 'text-red-700' : 'text-green-700'}`}>
+                    {meta.family_stats.family_mismatches}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-gray-600">Attempt Families</div>
+                  <div className="font-semibold">{Object.keys(meta.family_stats.attempt_families).length}</div>
+                </div>
+              </div>
+            </div>
+          )}
+          
           <div className="grid grid-cols-2 gap-3 text-xs">
             {meta.xss_ml_invoked !== undefined && (
               <div>

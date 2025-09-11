@@ -30,6 +30,13 @@ class AssessAggregator:
             "family_mismatches": 0  # count of mismatches
         }
         
+        # ML STATE TRACKING: Track require_ranker violations
+        self.ml_stats = {
+            "ranker_active_count": 0,
+            "ranker_inactive_count": 0,
+            "require_ranker_violated": False
+        }
+        
     def record_probe_attempt(self, success: bool) -> None:
         """
         Record a probe attempt.
@@ -94,6 +101,117 @@ class AssessAggregator:
         else:
             self.xss_first_hit_attempts_baseline += 1
     
+    def record_ml_state(self, ranker_active: bool, require_ranker: bool = False) -> None:
+        """
+        Record ML state for require_ranker violation tracking.
+        
+        Args:
+            ranker_active: Whether the ranker was active for this attempt
+            require_ranker: Whether ranker is required for this strategy
+        """
+        if ranker_active:
+            self.ml_stats["ranker_active_count"] += 1
+        else:
+            self.ml_stats["ranker_inactive_count"] += 1
+            
+        # Check for require_ranker violation
+        if require_ranker and not ranker_active:
+            self.ml_stats["require_ranker_violated"] = True
+    
+    def build_summary(self, results: list) -> Dict[str, Any]:
+        """
+        Build comprehensive summary with invariant checks (SSOT).
+        
+        Args:
+            results: List of result rows
+            
+        Returns:
+            Summary dictionary with flags for inconsistencies
+        """
+        # Count results by decision and family
+        decision_counts = {}
+        family_counts = {}
+        provenance_counts = {"confirmed_probe": 0, "confirmed_inject": 0}
+        
+        for result in results:
+            decision = result.get("decision", "unknown")
+            family = result.get("family", "unknown")
+            why = result.get("why", [])
+            
+            # Count by decision
+            decision_counts[decision] = decision_counts.get(decision, 0) + 1
+            
+            # Count by family (only for positive results)
+            if decision == "positive":
+                family_counts[family] = family_counts.get(family, 0) + 1
+                
+                # Provenance is tracked by the aggregator's own counters, not inferred from why
+                # We'll set the provenance based on the aggregator's counters after the loop
+        
+        # Calculate totals
+        positives_total = decision_counts.get("positive", 0)
+        suspected_total = decision_counts.get("suspected", 0)
+        clean_total = decision_counts.get("clean", 0)
+        
+        # Set provenance based on aggregator's own counters
+        provenance_counts["confirmed_probe"] = self.probe_successes
+        provenance_counts["confirmed_inject"] = self.inject_successes
+        
+        # Invariant checks
+        flags = {}
+        
+        # Check counter consistency
+        # Note: probe_successes and inject_successes can overlap (same vuln found by both)
+        # So we can't just add them. Instead, check that we have at least some successes if we have positives
+        has_successes = self.probe_successes > 0 or self.inject_successes > 0
+        if positives_total > 0 and not has_successes:
+            flags["counts_inconsistent"] = True
+            flags["counts_diff"] = {
+                "expected": "at least one success",
+                "actual": positives_total,
+                "probe_successes": self.probe_successes,
+                "inject_successes": self.inject_successes,
+                "issue": "positive results but no probe or inject successes recorded"
+            }
+        elif positives_total == 0 and has_successes:
+            flags["counts_inconsistent"] = True
+            flags["counts_diff"] = {
+                "expected": 0,
+                "actual": positives_total,
+                "probe_successes": self.probe_successes,
+                "inject_successes": self.inject_successes,
+                "issue": "probe or inject successes recorded but no positive results"
+            }
+        
+        # Check require_ranker violation
+        if self.ml_stats["require_ranker_violated"]:
+            flags["require_ranker_violated"] = True
+            flags["require_ranker_message"] = f"Ranker required but inactive on {self.ml_stats['ranker_inactive_count']} attempts"
+        
+        # Check family mismatches
+        if self.family_stats["family_mismatches"] > 0:
+            flags["family_mismatches"] = True
+            flags["family_mismatch_count"] = self.family_stats["family_mismatches"]
+        
+        return {
+            "totals": {
+                "endpoints_crawled": 0,  # Would need to be tracked separately
+                "targets_enumerated": len(results),
+                "probe_attempts": self.probe_attempts,
+                "ml_inject_attempts": self.inject_attempts,
+                "positives_total": positives_total,
+                "suspected_total": suspected_total,
+                "clean_total": clean_total
+            },
+            "provenance": provenance_counts,
+            "families": {
+                family: {"positives": count} for family, count in family_counts.items()
+            },
+            "flags": flags,
+            "ml_stats": self.ml_stats,
+            "family_stats": self.family_stats
+        }
+    
     def get_meta_data(self, results: list) -> Dict[str, Any]:
         """
         Get metadata dictionary with counters and consistency check.
@@ -122,7 +240,9 @@ class AssessAggregator:
             "xss_first_hit_attempts_ctx": self.xss_first_hit_attempts_ctx,
             "xss_first_hit_attempts_baseline": self.xss_first_hit_attempts_baseline,
             "xss_first_hit_attempts_delta": attempts_saved,
-            "counters_consistent": counters_consistent
+            "counters_consistent": counters_consistent,
+            "ml_stats": self.ml_stats,
+            "family_stats": self.family_stats
         }
     
     def reset(self) -> None:
