@@ -1,6 +1,6 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 import json, time, re, os, base64, html
 from backend.app_state import DATA_DIR
 
@@ -19,48 +19,48 @@ class EvidenceRow:
     response_len: int
     probe_signals: Dict[str,Any]
     why: list
-    cvss: Dict[str,Any] | None = None
-    score: float | None = None
-    p_cal: float | None = None
-    validation: Dict[str,bool] | None = None
+    cvss: Optional[Dict[str,Any]] = None
+    score: Optional[float] = None
+    p_cal: Optional[float] = None
+    validation: Optional[Dict[str,bool]] = None
     # New ML telemetry fields
-    rank_source: str | None = None  # "ml" | "probe_only" | "defaults"
-    ml_family: str | None = None    # "xss" | "sqli" | "redirect" | null
-    ml_proba: float | None = None   # ML probability score
-    ml_threshold: float | None = None  # Threshold used for this family
-    model_tag: str | None = None    # Model filename or version
+    rank_source: Optional[str] = None  # "ml" | "probe_only" | "defaults"
+    ml_family: Optional[str] = None    # "xss" | "sqli" | "redirect" | null
+    ml_proba: Optional[float] = None   # ML probability score
+    ml_threshold: Optional[float] = None  # Threshold used for this family
+    model_tag: Optional[str] = None    # Model filename or version
     # New response snippet fields
-    response_snippet_text: str | None = None  # HTML-escaped safe text
-    response_snippet_raw: str | None = None   # base64 encoded raw bytes
+    response_snippet_text: Optional[str] = None  # HTML-escaped safe text
+    response_snippet_raw: Optional[str] = None   # base64 encoded raw bytes
     # XSS Context fields
-    xss_context: str | None = None  # "html_body|attr|js_string|url|css"
-    xss_escaping: str | None = None  # "raw|html|url|js|unknown"
-    xss_context_source: str | None = None  # "rule|ml"
-    xss_context_ml_proba: float | None = None  # ML probability when source="ml"
+    xss_context: Optional[str] = None  # "html_body|attr|js_string|url|css"
+    xss_escaping: Optional[str] = None  # "raw|html|url|js|unknown"
+    xss_context_source: Optional[str] = None  # "rule|ml"
+    xss_context_ml_proba: Optional[float] = None  # ML probability when source="ml"
     # Telemetry fields
-    attempt_idx: int | None = None  # Attempt index for this payload
-    top_k_used: int | None = None   # Number of top-k payloads used
-    ctx_invoke: str | None = None   # XSS context classifier invocation mode
+    attempt_idx: Optional[int] = None  # Attempt index for this payload
+    top_k_used: Optional[int] = None   # Number of top-k payloads used
+    ctx_invoke: Optional[str] = None   # XSS context classifier invocation mode
     # Rich evidence fields
-    result_id: str | None = None    # Stable UUID per result row
-    strategy: str | None = None     # Strategy used for this result
-    timestamp: str | None = None    # ISO timestamp
+    result_id: Optional[str] = None    # Stable UUID per result row
+    strategy: Optional[str] = None     # Strategy used for this result
+    timestamp: Optional[str] = None    # ISO timestamp
     # Probe signal details
-    marker: Dict[str,str] | None = None  # XSS canary marker variants
-    reflection_details: Dict[str,Any] | None = None  # Detailed reflection info
-    redirect_details: Dict[str,Any] | None = None    # Redirect oracle proof
-    sqli_details: Dict[str,Any] | None = None        # SQLi error details
+    marker: Optional[Dict[str,str]] = None  # XSS canary marker variants
+    reflection_details: Optional[Dict[str,Any]] = None  # Detailed reflection info
+    redirect_details: Optional[Dict[str,Any]] = None    # Redirect oracle proof
+    sqli_details: Optional[Dict[str,Any]] = None        # SQLi error details
     # Ranking information
-    ranking_topk: list | None = None     # Top-K payloads with scores
-    ranking_source: str | None = None    # "ml_ranked|ctx_pool|manual"
-    ranking_pool_size: int | None = None # Pool size for this ranking
-    ranking_model: Dict[str,Any] | None = None  # Model info
+    ranking_topk: Optional[list] = None     # Top-K payloads with scores
+    ranking_source: Optional[str] = None    # "ml_ranked|ctx_pool|manual"
+    ranking_pool_size: Optional[int] = None # Pool size for this ranking
+    ranking_model: Optional[Dict[str,Any]] = None  # Model info
     # Attempt timeline
-    attempts_timeline: list | None = None  # Detailed attempt history
+    attempts_timeline: Optional[list] = None  # Detailed attempt history
     # Telemetry
-    telemetry: Dict[str,Any] | None = None  # Header telemetry matching attempt timeline
+    telemetry: Optional[Dict[str,Any]] = None  # Header telemetry matching attempt timeline
     # Vulnerability proof
-    vuln_proof: Dict[str,Any] | None = None  # Why vulnerable rationale
+    vuln_proof: Optional[Dict[str,Any]] = None  # Why vulnerable rationale
 
     @staticmethod
     def _create_validation_flags(signals: Dict[str,Any]) -> Dict[str,bool]:
@@ -74,10 +74,10 @@ class EvidenceRow:
             }
         
         return {
-            "xss_reflection": (signals.get("xss_context") in {"html","js","attr"}) if signals else False,
-            "sqli_error": bool(signals.get("sqli_error_based")) if signals else False,
-            "sqli_timing": bool((signals.get("sql_boolean_delta") or 0) >= float(os.getenv("ELISE_TAU_SQLI","0.50"))) if signals else False,
-            "redirect_location": bool(signals.get("redirect_influence") is True) if signals else False,
+            "xss_reflection": (signals.get("xss.context") in {"html","js","attr"}) if signals else False,
+            "sqli_error": bool(signals.get("sqli.error_based")) if signals else False,
+            "sqli_timing": bool((signals.get("sqli.boolean_delta") or 0) >= float(os.getenv("ELISE_TAU_SQLI","0.50"))) if signals else False,
+            "redirect_location": bool(signals.get("redirect.influence") is True) if signals else False,
         }
 
     @classmethod
@@ -179,7 +179,7 @@ class EvidenceRow:
         
         # Legacy signals for backward compatibility (but namespaced)
         signals.update({
-            "xss_context": _get(_get(probe_bundle, "xss"), "context", None) if family == "xss" else None,
+            "xss_context": _get(_get(probe_bundle, "xss"), "xss_context", None) if family == "xss" else None,
             "sql_boolean_delta": _get(_get(probe_bundle, "sqli"), "boolean_delta", None) if family == "sqli" else None,
             "sqli_error_based": ("sql_error" in (getattr(inj, "why", []) or [])) if family == "sqli" else None,
             "redirect_influence": bool(300 <= (getattr(inj, "status", 0) or 0) < 400 and str(getattr(inj, "redirect_location","")).startswith(("http://","https://"))) if family == "redirect" else None,
@@ -291,6 +291,7 @@ def write_evidence(job_id: str, ev: EvidenceRow, probe_bundle=None) -> str:
     
     # Prepare evidence data
     evidence_data = asdict(ev)
+    
     
     # Add ctx_invoke to telemetry
     if not evidence_data.get("telemetry"):

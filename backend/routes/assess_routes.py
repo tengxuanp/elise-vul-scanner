@@ -13,7 +13,7 @@ from backend.app_state import DATA_DIR, USE_ML, REQUIRE_RANKER
 from backend.modules.fuzzer_core import run_job
 from backend.pipeline.workflow import assess_endpoints
 from backend.modules.strategy import parse_strategy, validate_strategy_requirements, ScanStrategy
-from backend.modules.event_aggregator import reset_aggregator
+from backend.modules.event_aggregator import reset_aggregator, set_current_job
 # from backend.modules.ml.infer_ranker import available_models, using_defaults  # Not used in this file
 from backend.routes.canonical_healthz_routes import get_healthz_data
 
@@ -169,7 +169,8 @@ async def assess_vulnerabilities(request: AssessRequest):
         # Validate strategy requirements
         strategy_validation = validate_strategy_requirements(strategy, ml_available)
         
-        # Reset event aggregator for this assessment
+        # Set current job and reset event aggregator for this assessment
+        set_current_job(request.job_id)
         reset_aggregator()
         
         # Get XSS context invoke mode

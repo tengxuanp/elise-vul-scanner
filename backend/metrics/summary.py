@@ -2,6 +2,8 @@
 Summary metrics computation for XSS context analysis.
 """
 
+from typing import Optional, List, Dict, Any
+
 def _to_int(x, default=0):
     """Safely convert to int with default."""
     try:
@@ -13,7 +15,7 @@ def _i(x, d=0):
     try: return int(x)
     except: return d
 
-def compute_totals_from_rows(rows: list[dict]) -> dict:
+def compute_totals_from_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Compute totals from rows for consistency checking."""
     t = {"positive": 0, "suspected": 0, "abstain": 0, "clean": 0, "na": 0, "error": 0}
     for r in rows:
@@ -23,7 +25,7 @@ def compute_totals_from_rows(rows: list[dict]) -> dict:
     t["total"] = sum(t.values())
     return t
 
-def finalize_xss_context_metrics_robust(meta: dict, rows: list[dict], *, xss_top_k_default: int) -> dict:
+def finalize_xss_context_metrics_robust(meta: Dict[str, Any], rows: List[Dict[str, Any]], *, xss_top_k_default: int) -> Dict[str, Any]:
     """Robust version of XSS context metrics finalization."""
     meta = dict(meta or {})
     ctx_hits = [r for r in rows if r.get("family") == "xss" and r.get("rank_source") == "ctx_pool"]
@@ -47,7 +49,7 @@ def finalize_xss_context_metrics_robust(meta: dict, rows: list[dict], *, xss_top
     meta["xss_first_hit_attempts_ctx"] = _to_int(meta.get("xss_first_hit_attempts_ctx"), 0)
     return meta
 
-def finalize_summary(job, summary: dict, rows: list[dict]) -> dict:
+def finalize_summary(job, summary: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Finalize summary with consistency checks and XSS context metrics."""
     # 1) Sanitize rows: don't allow XSS keys on SQL rows
     clean_rows = []
@@ -70,7 +72,7 @@ def finalize_summary(job, summary: dict, rows: list[dict]) -> dict:
     job.meta = summary["meta"]
     return summary
 
-def finalize_xss_context_metrics(meta: dict, rows: list[dict], *, ui_top_k_default: int | None = None) -> dict:
+def finalize_xss_context_metrics(meta: Dict[str, Any], rows: List[Dict[str, Any]], *, ui_top_k_default: Optional[int] = None) -> Dict[str, Any]:
     """
     Compute:
       - baseline: sum of Top-K we *would* try for each ctx_pool positive

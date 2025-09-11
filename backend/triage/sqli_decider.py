@@ -213,7 +213,15 @@ def decide_sqli(signals: Dict[str, Any], payload_used: str, target,
     logger.info(f"SQLI_SIGNALS error_based={sqli_error_based} boolean_delta={sqli_boolean_delta} timing_based={sqli_timing_based}")
     
     # Check for URL-like parameter suppression
-    if is_url_like_param(target.param, getattr(target, 'param_value', '')):
+    # Use actual original value from base_params
+    raw_val = ""
+    if hasattr(target, "base_params") and isinstance(target.base_params, dict):
+        raw_val = str(target.base_params.get(target.param, "") or "")
+    else:
+        # Fallback to param_value if base_params not available
+        raw_val = getattr(target, 'param_value', '')
+    
+    if is_url_like_param(target.param, raw_val):
         if not sqli_error_based:
             logger.info(f"SQLI_SUPPRESSED URL-like param {target.param} without error evidence")
             return ('clean', 'url_param_suppressed', {'param': target.param})

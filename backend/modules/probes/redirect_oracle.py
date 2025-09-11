@@ -1,10 +1,11 @@
 import httpx
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass
 class RedirectProbe:
     influence: bool = False
-    location: str | None = None
+    location: Optional[str] = None
     # Param information for UI display
     param_in: str = ""
     param: str = ""

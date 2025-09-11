@@ -293,12 +293,19 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         "ml_role": None,
                         "gated": False,
                         "ml_family": None,
-                    "ml_proba": None,
-                    "ml_threshold": None,
-                    "model_tag": None,
-                    "attempt_idx": None,
-                    "top_k_used": None,
-                    "timing_ms": 0  # Probe-only results have no injection timing
+                        "ml_proba": None,
+                        "ml_threshold": None,
+                        "model_tag": None,
+                        "attempt_idx": None,
+                        "top_k_used": None,
+                        "timing_ms": 0,  # Probe-only results have no injection timing
+                        "ml": {
+                            "rank_source": "probe_only",
+                            "ranker_active": False,
+                            "classifier_used": False,
+                            "p_cal": None,
+                            "skip_reason": "context_override"
+                        }
                     }
                     
                     # Add XSS context fields if this is an XSS finding
@@ -542,14 +549,28 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     xss_ml_proba = None
                     rank_source = "defaults"
                 
-                # HARD RULE: Always use default payloads based on actual family, never use ML classification
-                print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using default payloads only (ML family classification disabled)")
+                # Determine ranking strategy based on family and ML mode
+                if fam == "xss" and ctx_mode in {"auto", "always", "force_ml"}:
+                    # XSS can use ML ranking when ML mode is enabled
+                    print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using honest ML ranking")
+                    ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping, ml_mode=ctx_mode)
+                else:
+                    # SQLi and Redirect should use probe-only (rule-based) ranking
+                    print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using probe-only ranking")
+                    ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping, ml_mode="never")
                 
-                # Always use default ranking based on actual family being processed
-                ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=None, xss_escaping=None)
-                rank_source = "defaults"
-                print(f"XSS_SELECT fam={fam} src={rank_source} topk={len(ranked)} ml_proba=None")
+                # Extract rank_source from the first payload (they should all be the same)
+                if ranked and len(ranked) > 0:
+                    rank_source = ranked[0].get("rank_source", "defaults")
+                    p_cal = ranked[0].get("p_cal")
+                    model_tag = ranked[0].get("model_tag")
+                else:
+                    rank_source = "defaults"
+                    p_cal = None
+                    model_tag = None
+                
                 print(f"RANKED_RESULT_DEBUG fam={fam} ranked_count={len(ranked) if ranked else 0} first_payload={ranked[0]['payload'] if ranked else 'None'}")
+                print(f"RANKED_DEBUG before ML ranker check: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}, rank_source={rank_source}")
                 
                 # HARD FENCE: Ensure all payloads match the family being processed
                 if ranked:
@@ -559,13 +580,6 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         print(f"FAMILY_FENCE_DEBUG fam={fam} filtered {original_count - len(ranked)} mismatched payloads")
                 
                 attempted_by_family[fam] = len(ranked)
-                
-                # Ensure rank_source is set correctly (don't override ML decisions)
-                if not ranked or not ranked[0].get("rank_source"):
-                    # Only set default if not already set by ML logic above
-                    if rank_source == "rule":
-                        for payload in ranked:
-                            payload["rank_source"] = "rule"
                 
                 # Record context pool usage if ctx_pool is used
                 if rank_source == "ctx_pool":
@@ -857,6 +871,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         if rank_source == "defaults":
                             if not ranked:
                                 ml_state["skip_reason"] = "model_unavailable"
+                            elif not ml_state["ranker_active"]:
+                                ml_state["skip_reason"] = "model_unavailable"
                             else:
                                 ml_state["skip_reason"] = "threshold_blocked"
                         elif rank_source == "probe_only":
@@ -939,7 +955,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "attempt_idx": (attempt_idx + 1) if payload_rank_source in ["ml", "ctx_pool"] else None,
                             "top_k_used": len(ranked) if payload_rank_source in ["ml", "ctx_pool"] else None,
                             "timing_ms": inj_timing_ms,
-                            "telemetry": ev.telemetry  # Include the full telemetry from evidence
+                            "telemetry": ev.telemetry,  # Include the full telemetry from evidence
+                            "ml": ml_state  # Extract ML state
                         }
                         
                         # Add XSS context fields if this is an XSS finding
@@ -1168,7 +1185,8 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                         "attempt_idx": result.get("attempt_idx"),
                         "top_k_used": result.get("top_k_used"),
                         "timing_ms": result.get("timing_ms", 0),
-                        "status": result["target"].get("status", 0)
+                        "status": result["target"].get("status", 0),
+                        "ml": result.get("ml")  # Add ML state
                     }
                     results.append(slim_result)
                     

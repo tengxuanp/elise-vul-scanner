@@ -45,3 +45,6 @@ lab.db
 .next/
 __pycache__/
 .DS_Store
+
+# env files
+venv/

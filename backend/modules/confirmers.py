@@ -5,12 +5,13 @@ Determines which vulnerability family was actually triggered based on response s
 
 from __future__ import annotations
 import os
+from typing import Optional
 
 # thresholds (env overrides)
 TAU_SQLI = float(os.getenv("ELISE_TAU_SQLI", "0.15"))
 
 
-def confirm_xss(signals: dict) -> tuple[bool, str | None]:
+def confirm_xss(signals: dict) -> tuple[bool, Optional[str]]:
     """
     True when reflection is in a script-executable context.
     signals.xss_context ∈ {html, js, attr, js_string, html_body, url, css}
@@ -20,7 +21,7 @@ def confirm_xss(signals: dict) -> tuple[bool, str | None]:
     return ok, ("xss_reflection" if ok else None)
 
 
-def confirm_sqli(signals: dict) -> tuple[bool, str | None]:
+def confirm_sqli(signals: dict) -> tuple[bool, Optional[str]]:
     """
     True when DB error fingerprint OR timing oracle crosses threshold.
     Prefers error-based; falls back to boolean/timing delta.
@@ -34,7 +35,7 @@ def confirm_sqli(signals: dict) -> tuple[bool, str | None]:
     return False, None
 
 
-def confirm_redirect(signals: dict) -> tuple[bool, str | None]:
+def confirm_redirect(signals: dict) -> tuple[bool, Optional[str]]:
     """
     True when attacker-controlled host observed in Location or equivalent influence.
     """
@@ -42,7 +43,7 @@ def confirm_redirect(signals: dict) -> tuple[bool, str | None]:
     return ok, ("redirect_location" if ok else None)
 
 
-def oracle_from_signals(signals: dict) -> tuple[str | None, str | None]:
+def oracle_from_signals(signals: dict) -> tuple[Optional[str], Optional[str]]:
     """
     Returns (family, reason_code) in deterministic priority:
     SQLi > Redirect > XSS. This avoids mislabeling when multiple hints appear.

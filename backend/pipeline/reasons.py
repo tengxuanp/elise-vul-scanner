@@ -2,11 +2,13 @@
 Evidence "Why" reason mapping for accurate telemetry.
 """
 
-def build_why(row: dict) -> list[str]:
+from typing import List
+
+def build_why(row: dict) -> List[str]:
     """
     Produce a short, mutually-exclusive reason set for Evidence modal.
     """
-    why: list[str] = []
+    why: List[str] = []
 
     if row.get("family") == "xss":
         src = row.get("rank_source")

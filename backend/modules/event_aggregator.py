@@ -153,9 +153,15 @@ class AssessAggregator:
         suspected_total = decision_counts.get("suspected", 0)
         clean_total = decision_counts.get("clean", 0)
         
-        # Set provenance based on aggregator's own counters
-        provenance_counts["confirmed_probe"] = self.probe_successes
-        provenance_counts["confirmed_inject"] = self.inject_successes
+        # Set provenance based on family and detection method
+        # SQLi and Redirect are rule-based (probe), XSS uses ML (inject)
+        for result in results:
+            if result.get("decision") == "positive":
+                family = result.get("family", "unknown")
+                if family in ["sqli", "redirect"]:
+                    provenance_counts["confirmed_probe"] += 1
+                elif family == "xss":
+                    provenance_counts["confirmed_inject"] += 1
         
         # Invariant checks
         flags = {}
@@ -255,13 +261,45 @@ class AssessAggregator:
         self.xss_first_hit_attempts_ctx = 0
         self.xss_first_hit_attempts_baseline = 0
 
-# Global aggregator instance
-_global_aggregator = AssessAggregator()
+# Job-scoped aggregator storage
+import contextvars
+from typing import Dict
+
+_current_job_id = contextvars.ContextVar('current_job_id', default=None)
+_job_aggregators: Dict[str, AssessAggregator] = {}
+
+def set_current_job(job_id: str) -> None:
+    """Set the current job ID for this context."""
+    _current_job_id.set(job_id)
+    if job_id not in _job_aggregators:
+        _job_aggregators[job_id] = AssessAggregator()
 
 def get_aggregator() -> AssessAggregator:
-    """Get the global aggregator instance."""
-    return _global_aggregator
+    """Get the aggregator for the current job."""
+    job_id = _current_job_id.get()
+    if job_id is None:
+        # Fallback to global aggregator for backward compatibility
+        if 'global' not in _job_aggregators:
+            _job_aggregators['global'] = AssessAggregator()
+        return _job_aggregators['global']
+    
+    if job_id not in _job_aggregators:
+        _job_aggregators[job_id] = AssessAggregator()
+    
+    return _job_aggregators[job_id]
 
 def reset_aggregator() -> None:
-    """Reset the global aggregator."""
-    _global_aggregator.reset()
+    """Reset the aggregator for the current job."""
+    job_id = _current_job_id.get()
+    if job_id is None:
+        # Reset global aggregator
+        if 'global' in _job_aggregators:
+            _job_aggregators['global'].reset()
+    else:
+        if job_id in _job_aggregators:
+            _job_aggregators[job_id].reset()
+
+def cleanup_job_aggregator(job_id: str) -> None:
+    """Clean up aggregator for a specific job."""
+    if job_id in _job_aggregators:
+        del _job_aggregators[job_id]

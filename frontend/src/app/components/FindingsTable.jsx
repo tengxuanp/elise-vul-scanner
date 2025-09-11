@@ -70,15 +70,28 @@ const RankSourceBadge = ({ rank_source }) => {
   );
 };
 
-// ML chip with probability
-const MLChip = ({ rank_source, ml_proba }) => {
-  if (rank_source === "ml" && ml_proba != null) {
+// ML chip with honest state
+const MLChip = ({ rank_source, ml_proba, ml }) => {
+  // Use ML state if available, otherwise fallback to rank_source
+  const rankerActive = ml?.ranker_active ?? (rank_source === "ml");
+  const classifierUsed = ml?.classifier_used ?? (rank_source === "ml" && ml_proba != null);
+  
+  if (rankerActive && classifierUsed && ml_proba != null) {
     return (
       <span 
         className="px-2 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
         title="ML prioritized payload; decision from probe proof."
       >
         ML p={ml_proba.toFixed(2)}
+      </span>
+    );
+  } else if (!rankerActive) {
+    return (
+      <span 
+        className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700"
+        title="ML ranker inactive; using default payloads."
+      >
+        Rank: defaults • ML inactive
       </span>
     );
   }
@@ -282,7 +295,7 @@ export default function FindingsTable({ results=[], onView }) {
           {badge(result.decision)}
           <ProvenanceChips why={result.why} />
           <ProofTypeBadge vuln_proof={result.vuln_proof} />
-          <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} />
+          <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} ml={result.ml} />
           <XSSContextChips 
             family={result.family} 
             xss_context={result.xss_context} 

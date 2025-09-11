@@ -15,19 +15,10 @@ const SummaryPanel = ({
   const hasViolations = meta?.violations && meta.violations.length > 0;
   const strategyViolation = meta?.strategy === "ml_only" && (summary?.confirmed_probe > 0 || meta?.probe_attempts > 0);
   
-  // Calculate confirmed breakdown using new decision taxonomy
-  const confirmedProbe = assessmentResult.results?.filter(r => 
-    r.decision === "positive" && r.provenance === "Probe"
-  ).length || 0;
-  
-  const confirmedMLInject = assessmentResult.results?.filter(r => 
-    r.decision === "positive" && r.provenance === "Inject"
-  ).length || 0;
-  
-  const abstain = assessmentResult.results?.filter(r => 
-    r.decision === "abstain"
-  ).length || 0;
-  
+  // Use server summary directly - no client-side recomputation
+  const confirmedProbe = summary?.confirmed_probe || 0;
+  const confirmedMLInject = summary?.confirmed_ml_inject || 0;
+  const abstain = summary?.abstain || 0;
   const na = summary?.na || 0;
 
   // ML mode badge color

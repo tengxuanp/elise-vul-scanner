@@ -1,7 +1,7 @@
 import httpx, time
 import re
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 # Rule table for SQLi dialect detection
 DIALECT_TOKENS = {
@@ -71,7 +71,7 @@ class SqliProbe:
     dialect_confident: bool = False
     skipped: bool = False
 
-def detect_sqli_dialect(response_text: str, headers: dict) -> tuple[str, List[str], bool]:
+def detect_sqli_dialect(response_text: str, headers: dict) -> Tuple[str, List[str], bool]:
     """Detect SQLi dialect using rule-based heuristics."""
     text_lower = response_text.lower()
     matched_signals = []
