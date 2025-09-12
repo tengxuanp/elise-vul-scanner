@@ -11,6 +11,19 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
   
   useEffect(()=>{ document.body.style.overflow = open ? "hidden" : ""; }, [open]);
   
+  // Handle escape key
+  useEffect(() => {
+    const handleEscape = (e) => {
+      if (e.key === 'Escape' && open) {
+        onClose();
+      }
+    };
+    if (open) {
+      document.addEventListener('keydown', handleEscape);
+      return () => document.removeEventListener('keydown', handleEscape);
+    }
+  }, [open, onClose]);
+  
   // Fetch evidence when modal opens
   useEffect(() => {
     if (open && evidenceId && jobId) {
@@ -648,27 +661,42 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
-      <div className="w-full max-w-3xl bg-white rounded-2xl shadow p-4">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
-            <h3 className="text-lg font-semibold">Evidence</h3>
-            {evidence?.telemetry?.ctx_invoke && (
-              <span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 border">
-                {evidence.telemetry.ctx_invoke}
-              </span>
-            )}
-            {meta?.strategy && (
-              <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700 border">
-                Strategy: {meta.strategy === "rules_only" ? "Rules-Only" :
-                          meta.strategy === "smart_xss" ? "Smart-XSS" :
-                          meta.strategy === "full_smart" ? "Full-Smart" :
-                          meta.strategy === "exhaustive" ? "Exhaustive" : meta.strategy}
-              </span>
-            )}
+    <div 
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div 
+        className="w-full max-w-3xl max-h-[90vh] bg-white rounded-2xl shadow flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="p-4 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-3">
+              <h3 className="text-lg font-semibold">Evidence</h3>
+              {evidence?.telemetry?.ctx_invoke && (
+                <span className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700 border">
+                  {evidence.telemetry.ctx_invoke}
+                </span>
+              )}
+              {meta?.strategy && (
+                <span className="px-2 py-1 rounded text-xs bg-blue-100 text-blue-700 border">
+                  Strategy: {meta.strategy === "rules_only" ? "Rules-Only" :
+                            meta.strategy === "smart_xss" ? "Smart-XSS" :
+                            meta.strategy === "full_smart" ? "Full-Smart" :
+                            meta.strategy === "exhaustive" ? "Exhaustive" : meta.strategy}
+                </span>
+              )}
+            </div>
+            <button 
+              onClick={onClose} 
+              className="px-3 py-2 rounded bg-red-100 hover:bg-red-200 text-red-700 font-medium transition-colors"
+            >
+              ✕ Close
+            </button>
           </div>
-          <button onClick={onClose} className="px-2 py-1 rounded bg-zinc-100 hover:bg-zinc-200">Close</button>
         </div>
+        
+        <div className="flex-1 overflow-y-auto p-4">
         
         {loading && (
           <div className="text-center py-8">
@@ -990,6 +1018,7 @@ export default function EvidenceModal({ open, onClose, evidenceId, jobId, meta }
             </div>
           </>
         )}
+        </div>
       </div>
     </div>
   );
