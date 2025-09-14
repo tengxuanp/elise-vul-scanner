@@ -66,17 +66,24 @@ def convert_evidence_to_result(evidence_data: Dict[str, Any]) -> Dict[str, Any]:
     param = evidence_data.get("param", "")
     family = evidence_data.get("family", "")
     
-    # Determine decision based on CVSS score
+    # Determine decision based on CVSS score and explicit probe confirmation
     cvss = evidence_data.get("cvss", {})
-    cvss_base = cvss.get("base", 0) if isinstance(cvss, dict) else 0
+    cvss_score = 0.0
+    if isinstance(cvss, dict):
+        # Support both {"base": ...} and {"score": ...}
+        cvss_score = float(cvss.get("base", cvss.get("score", 0)) or 0)
+    elif isinstance(cvss, (int, float)):
+        cvss_score = float(cvss)
     
-    if cvss_base > 0:
+    why = evidence_data.get("why", []) or []
+    if "probe_proof" in why:
+        decision = "positive"
+    elif cvss_score > 0:
         decision = "positive"
     else:
         decision = "abstain"
     
-    # Extract why reasons
-    why = evidence_data.get("why", [])
+    # Extract why reasons (already loaded above)
     
     # Extract other fields
     rank_source = evidence_data.get("rank_source", "probe_only")

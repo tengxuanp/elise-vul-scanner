@@ -326,6 +326,17 @@ async def assess_vulnerabilities(request: AssessRequest):
         
         meta["strategy_validation"] = strategy_validation
         meta["xss_ctx_invoke"] = ctx_mode
+        # Also record SQLi ML mode requested/effective for frontend banners
+        if "sqli_ml_mode" not in meta:
+            meta["sqli_ml_mode"] = sqli_ml_mode
+
+        # Surface SQLi dialect ML availability for frontend (SummaryPanel)
+        try:
+            sqli_health = healthz_data.get("sqli_dialect_ml", {})
+            path = sqli_health.get("path_in_use")
+            meta["sqli_dialect_ml"] = path in {"text", "alt_numeric"}
+        except Exception:
+            meta["sqli_dialect_ml"] = False
         
         return AssessResponse(
             job_id=request.job_id,

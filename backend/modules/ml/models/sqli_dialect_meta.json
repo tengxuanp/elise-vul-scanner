@@ -1,16 +1,16 @@
 {
   "model_type": "LogisticRegression",
   "vectorizer_type": "TfidfVectorizer",
+  "n_features": 196,
   "classes": [
-    "sqlite",
-    "oracle",
-    "unknown",
-    "postgresql",
+    "mssql",
     "mysql",
-    "mssql"
+    "oracle",
+    "postgresql",
+    "sqlite",
+    "unknown"
   ],
-  "n_features": 1583,
-  "accuracy": 1.0,
-  "training_samples": 160,
-  "test_samples": 32
+  "accuracy": 0.8823529411764706,
+  "samples_total": 84,
+  "notes": "Synthetic corpus from rules + oracle/unknown tokens"
 }

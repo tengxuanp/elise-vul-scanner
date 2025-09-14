@@ -82,6 +82,9 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
     xss_first_hit_attempts_ctx = 0
     xss_first_hit_attempts_baseline = 0
     
+    # Track persisted SQLi ML modes from telemetry
+    detected_sqli_ml_modes = set()
+
     for result in results:
         # Count XSS context statistics
         if result.get("family") == "xss" and result.get("xss_context"):
@@ -183,6 +186,22 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
         "budget_ms_used": 0,
         "errors_by_kind": {}
     }
+
+    # Derive persisted SQLi ML mode (if any present in telemetry)
+    try:
+        if not detected_sqli_ml_modes:
+            for r in results:
+                t = r.get("telemetry", {}) or {}
+                m = t.get("sqli_ml_mode")
+                if m:
+                    detected_sqli_ml_modes.add(m)
+        if detected_sqli_ml_modes:
+            meta["sqli_ml_mode"] = list(detected_sqli_ml_modes)[0]
+    except Exception:
+        pass
+    
+    # Indicate that we reused persisted evidence rather than re-running
+    meta["persisted_reused"] = True
     
     return {
         "job_id": job_id,
@@ -253,7 +272,9 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
                 # Check ctx_mode from telemetry
                 telemetry = r.get("telemetry", {})
                 existing_ctx_mode = telemetry.get("ctx_invoke", "auto")
-                if existing_ctx_mode == ctx_mode:
+                # Also check SQLi ML mode to avoid reusing probe-only results when ML forced
+                existing_sqli_mode = telemetry.get("sqli_ml_mode", "never")
+                if existing_ctx_mode == ctx_mode and existing_sqli_mode == sqli_ml_mode:
                     matching_results.append(r)
         
         if matching_results:
@@ -264,11 +285,14 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
             # Show what strategies and ctx_modes are available
             available_strategies = set(r.get("strategy") for r in existing_results)
             available_ctx_modes = set()
+            available_sqli_modes = set()
             for r in existing_results:
                 telemetry = r.get("telemetry", {})
                 ctx_mode_from_telemetry = telemetry.get("ctx_invoke", "auto")
                 available_ctx_modes.add(ctx_mode_from_telemetry)
-            print(f"Found existing evidence files for job {job_id} with strategies {available_strategies} and ctx_modes {available_ctx_modes}, but current strategy is {strategy} and ctx_mode is {ctx_mode}. Re-running assessment.")
+                sqli_mode_from_telemetry = telemetry.get("sqli_ml_mode", "never")
+                available_sqli_modes.add(sqli_mode_from_telemetry)
+            print(f"Found existing evidence files for job {job_id} with strategies {available_strategies}, ctx_modes {available_ctx_modes}, sqli_ml_modes {available_sqli_modes}; current strategy={strategy}, ctx_mode={ctx_mode}, sqli_ml_mode={sqli_ml_mode}. Re-running assessment.")
     
     # Parse strategy and create execution plan
     try:
@@ -392,6 +416,14 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
                     "xss_escaping": result.get("xss_escaping"),
                     "xss_context_source": result.get("xss_context_source"),
                     "xss_context_ml_proba": result.get("xss_context_ml_proba")
+                })
+
+            # Add SQLi dialect fields if present
+            if result.get("sqli_dialect") is not None or result.get("sqli_dialect_source") is not None:
+                patch.update({
+                    "sqli_dialect": result.get("sqli_dialect"),
+                    "sqli_dialect_source": result.get("sqli_dialect_source"),
+                    "sqli_dialect_ml_proba": result.get("sqli_dialect_ml_proba")
                 })
             
             # Upsert the row

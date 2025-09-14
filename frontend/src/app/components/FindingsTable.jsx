@@ -69,7 +69,7 @@ const DecisionSourceBadge = ({ family, xssContextSource, sqliDialectSource }) =>
         return "XSS Probe";
       }
     } else if (family === "sqli") {
-      if (sqliDialectSource === "ml") {
+      if (sqliDialectSource === "ml" || (typeof sqliDialectSource === 'string' && sqliDialectSource.startsWith("ml"))) {
         return "SQLi Dialect Classifier";
       } else if (sqliDialectSource === "rule") {
         return "SQLi Rules";
@@ -285,7 +285,7 @@ const SQLiDialectChip = ({ family, telemetry }) => {
   
   const dialectMap = {
     "mysql": "MySQL",
-    "postgres": "PostgreSQL", 
+    "postgresql": "PostgreSQL", 
     "mssql": "SQL Server",
     "sqlite": "SQLite"
   };
@@ -400,7 +400,7 @@ export default function FindingsTable({ results=[], onView }) {
       <td className="p-2 text-right tabular-nums">
         {result.family === "xss" && result.xss_context_source === "ml" && result.xss_context_ml_proba ? 
           `${Math.round(result.xss_context_ml_proba * 100)}%` :
-          result.family === "sqli" && result.sqli_dialect_source === "ml" && result.sqli_dialect_ml_proba ?
+          result.family === "sqli" && (result.sqli_dialect_source === "ml" || (typeof result.sqli_dialect_source === 'string' && result.sqli_dialect_source.startsWith("ml"))) && result.sqli_dialect_ml_proba != null ?
           `${Math.round(result.sqli_dialect_ml_proba * 100)}%` :
           result.ml?.classifier_used && result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
       </td>

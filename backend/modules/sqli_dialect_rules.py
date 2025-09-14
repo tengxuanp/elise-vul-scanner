@@ -18,7 +18,7 @@ TOKENS = {
         "mysql_fetch_array",
         "mysql_num_rows"
     ],
-    "postgres": [
+    "postgresql": [
         "syntax error at or near",
         "psqlexception", 
         "org.postgresql", 
@@ -86,8 +86,8 @@ def infer_sqli_dialect_from_text(text: str, headers: Dict[str, str]) -> Tuple[Op
     if "mysql" in server_header and best in (None, "mysql"):
         best = best or "mysql"
         signals = signals + ["hdr:server=mysql"]
-    elif "postgresql" in server_header and best in (None, "postgres"):
-        best = best or "postgres"
+    elif "postgresql" in server_header and best in (None, "postgresql"):
+        best = best or "postgresql"
         signals = signals + ["hdr:server=postgresql"]
     elif "microsoft" in server_header and best in (None, "mssql"):
         best = best or "mssql"

@@ -93,6 +93,36 @@ def get_healthz_data():
         except Exception as e:
             ml_status = "error"
             fails.append(f"ML status check failed: {e}")
+
+    # SQLi dialect ML health
+    sqli_dialect_ml = {
+        "path_in_use": "unavailable",
+        "has_text_model": False,
+        "has_vectorizer": False,
+        "has_alt_model": False,
+        "dims_match": None,
+    }
+    try:
+        from backend.modules.ml.sqli_dialect_infer import get_dialect_ml_health
+        sqli_dialect_ml = get_dialect_ml_health()
+        if USE_ML and not sqli_dialect_ml.get("has_text_model") and not sqli_dialect_ml.get("has_alt_model"):
+            fails.append("SQLi dialect ML assets missing")
+        if sqli_dialect_ml.get("has_text_model") and sqli_dialect_ml.get("has_vectorizer") and sqli_dialect_ml.get("dims_match") is False:
+            fails.append("SQLi dialect model/vectorizer mismatch")
+    except Exception as e:
+        fails.append(f"SQLi dialect ML health failed: {e}")
+
+    # SQLi dialect ML fallback note (rule -> ML surrogate)
+    sqli_dialect_fallback = {"fallback_used_count": 0}
+    try:
+        from backend.modules.probes.sqli_triage import get_sqli_fallback_stats
+        sqli_dialect_fallback = get_sqli_fallback_stats()
+        # Surface a small note inside the ML block without failing health
+        sqli_dialect_ml["fallback_active"] = sqli_dialect_fallback.get("fallback_used_count", 0) > 0
+        sqli_dialect_ml["fallback_count"] = sqli_dialect_fallback.get("fallback_used_count", 0)
+        sqli_dialect_ml["fallback_last_error"] = sqli_dialect_fallback.get("last_error")
+    except Exception:
+        pass
     
     return {
         "ok": not bool(fails), 
@@ -114,7 +144,9 @@ def get_healthz_data():
         "playwright_ok": playwright_ok,
         "crawler_import_ok": crawler_import_ok,
         "checks": fails,
-        "failed_checks": fails
+        "failed_checks": fails,
+        "sqli_dialect_ml": sqli_dialect_ml,
+        "sqli_dialect_fallback": sqli_dialect_fallback
     }
 
 @router.get("/healthz")

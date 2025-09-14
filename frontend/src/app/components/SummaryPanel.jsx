@@ -53,7 +53,7 @@ const SummaryPanel = ({
     const xssRule = strategyConfig.xss.rule_conf_gate;
     const xssTopk = strategyConfig.xss.topk;
     
-    const sqliDialect = strategyConfig.sqli.dialect_mode;
+    const sqliDialect = strategyConfig.sqli.ml_mode;
     const sqliTopk = strategyConfig.sqli.topk;
     const sqliSC = strategyConfig.sqli.short_circuit.enabled;
     const sqliM = strategyConfig.sqli.short_circuit.M;
@@ -67,7 +67,27 @@ const SummaryPanel = ({
   return (
     <div className="card p-6">
       <h3 className="font-semibold mb-4">Summary</h3>
-      
+
+      {/* Persisted Results Banner */}
+      {meta?.persisted_reused && (
+        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
+          <div className="text-sm font-medium text-yellow-800 mb-1">Using persisted results</div>
+          <div className="text-xs text-yellow-700">
+            Showing results previously saved for this job. {(() => {
+              const xssMismatch = meta?.xss_ctx_invoke && strategyConfig?.xss?.ml_mode && meta.xss_ctx_invoke !== strategyConfig.xss.ml_mode;
+              const sqliMismatch = meta?.sqli_ml_mode && strategyConfig?.sqli?.ml_mode && meta.sqli_ml_mode !== strategyConfig.sqli.ml_mode;
+              if (xssMismatch || sqliMismatch) {
+                const parts = [];
+                if (xssMismatch) parts.push(`XSS ML mode was '${meta.xss_ctx_invoke}', requested '${strategyConfig.xss.ml_mode}'`);
+                if (sqliMismatch) parts.push(`SQLi ML mode was '${meta.sqli_ml_mode}', requested '${strategyConfig.sqli.ml_mode}'`);
+                return `Modes differ from current plan: ${parts.join('; ')}. Click Re-assess to re-run with current settings.`;
+              }
+              return 'Click Re-assess to re-run with current settings.';
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* ML Mode Badge */}
       <div className="mb-4">
         <span className={`px-3 py-1 rounded-full text-sm font-medium ${getMLBadgeColor(mlMode)}`}>

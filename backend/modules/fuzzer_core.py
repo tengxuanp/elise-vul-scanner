@@ -606,6 +606,25 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     xss_ml_proba = None
                     rank_source = "defaults"
                 
+                # Extract SQLi dialect information if available
+                sqli_dialect = None
+                sqli_dialect_source = None
+                sqli_dialect_ml_proba = None
+                print(f"SQLI_PROBE_DEBUG fam={fam} has_probe_bundle={probe_bundle is not None} has_sqli={hasattr(probe_bundle, 'sqli') if probe_bundle else False}")
+                # Only extract SQLi dialect variables when processing SQLi family
+                if fam == "sqli" and hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
+                    sqli_probe = probe_bundle.sqli
+                    sqli_dialect = getattr(sqli_probe, "dialect", None)
+                    sqli_dialect_source = getattr(sqli_probe, "dialect_ml_source", None)
+                    sqli_dialect_ml_proba = getattr(sqli_probe, "dialect_ml_proba", None)
+                    
+                    print(f"SQLI_PROBE_DEBUG sqli_dialect={sqli_dialect} sqli_dialect_source={sqli_dialect_source} sqli_dialect_ml_proba={sqli_dialect_ml_proba}")
+                else:
+                    # Clear SQLi dialect variables for non-SQLi families
+                    sqli_dialect = None
+                    sqli_dialect_source = None
+                    sqli_dialect_ml_proba = None
+                
                 # Determine ranking strategy based on family and ML mode
                 if fam == "xss" and ctx_mode in {"auto", "always", "force_ml"}:
                     # XSS can use ML ranking when ML mode is enabled
@@ -997,6 +1016,15 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         sqli_error = ev.sqli_details.get("error_excerpt") if ev.sqli_details else None
                         ev.vuln_proof = create_vuln_proof(fired_family, context, escaping, redirect_location, sqli_error)
                         
+                        # Ensure telemetry includes sqli_ml_mode so persisted matching is precise
+                        try:
+                            if not hasattr(ev, 'telemetry') or ev.telemetry is None:
+                                ev.telemetry = {}
+                            if isinstance(ev.telemetry, dict):
+                                ev.telemetry.setdefault('sqli_ml_mode', sqli_ml_mode)
+                        except Exception:
+                            pass
+
                         evidence_id = write_evidence(job_id, ev, probe_bundle)
                         
                         # Log confirm event
@@ -1035,6 +1063,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "gated": False,
                             "ml_family": fam if payload_rank_source == "ml" else None,
                             "ml_proba": xss_ml_proba if payload_rank_source == "ml" and fam == "xss" and xss_ml_proba is not None else (p_cal if payload_rank_source == "ml" else None),
+                            "xss_context": xss_context if fam == "xss" else None,
+                            "xss_escaping": xss_escaping if fam == "xss" else None,
+                            "xss_context_source": xss_context_source if fam == "xss" else None,
+                            "xss_context_ml_proba": xss_ml_proba if fam == "xss" else None,
+                            "sqli_dialect": sqli_dialect if fam == "sqli" else None,
+                            "sqli_dialect_source": sqli_dialect_source if fam == "sqli" else None,
+                            "sqli_dialect_ml_proba": sqli_dialect_ml_proba if fam == "sqli" else None,
                             "ml_threshold": threshold if payload_rank_source == "ml" else None,
                             "model_tag": model_tag if payload_rank_source == "ml" else None,
                             "attempt_idx": (attempt_idx + 1) if payload_rank_source in ["ml", "ctx_pool"] else None,
@@ -1054,13 +1089,15 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             })
                         
                         # Add SQLi dialect fields if this is a SQLi finding
+                        print(f"SQLI_DIALECT_FLOW_DEBUG fired_family={fired_family} is_sqli={fired_family == 'sqli'}")
                         if fired_family == "sqli":
-                            print(f"RESULT_DICT_DEBUG fired_family={fired_family} ev.sqli_dialect={getattr(ev, 'sqli_dialect', None)} ev.sqli_dialect_source={getattr(ev, 'sqli_dialect_source', None)} ev.sqli_dialect_ml_proba={getattr(ev, 'sqli_dialect_ml_proba', None)}")
+                            print(f"RESULT_DICT_DEBUG fired_family={fired_family} sqli_dialect={sqli_dialect} sqli_dialect_source={sqli_dialect_source} sqli_dialect_ml_proba={sqli_dialect_ml_proba}")
                             result_dict.update({
-                                "sqli_dialect": ev.sqli_dialect,
-                                "sqli_dialect_source": ev.sqli_dialect_source,
-                                "sqli_dialect_ml_proba": ev.sqli_dialect_ml_proba
+                                "sqli_dialect": sqli_dialect,
+                                "sqli_dialect_source": sqli_dialect_source,
+                                "sqli_dialect_ml_proba": sqli_dialect_ml_proba
                             })
+                            print(f"RESULT_DICT_UPDATED_DEBUG sqli_dialect added to result_dict")
                         
                         # Store positive result but continue processing other families
                         print(f"POSITIVE_RESULT_DEBUG Found {fired_family} vulnerability, continuing to process other families")
