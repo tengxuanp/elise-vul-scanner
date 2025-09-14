@@ -45,16 +45,48 @@ def confirm_redirect(signals: dict) -> tuple[bool, Optional[str]]:
 
 def oracle_from_signals(signals: dict) -> tuple[Optional[str], Optional[str]]:
     """
-    Returns (family, reason_code) in deterministic priority:
-    SQLi > Redirect > XSS. This avoids mislabeling when multiple hints appear.
+    Returns (family, reason_code) with improved logic to avoid mislabeling.
+    Instead of rigid priority, use signal strength to determine the most likely family.
     """
-    ok, rc = confirm_sqli(signals)
-    if ok: 
-        return "sqli", rc
-    ok, rc = confirm_redirect(signals)
-    if ok: 
-        return "redirect", rc
-    ok, rc = confirm_xss(signals)
-    if ok: 
-        return "xss", rc
+    print(f"ORACLE_DEBUG signals={signals}")
+    
+    # Check all families
+    sqli_ok, sqli_rc = confirm_sqli(signals)
+    redirect_ok, redirect_rc = confirm_redirect(signals)
+    xss_ok, xss_rc = confirm_xss(signals)
+    
+    print(f"ORACLE_DEBUG sqli_ok={sqli_ok} redirect_ok={redirect_ok} xss_ok={xss_ok}")
+    
+    # If only one family is confirmed, return it
+    confirmed_families = []
+    if sqli_ok:
+        confirmed_families.append(("sqli", sqli_rc))
+    if redirect_ok:
+        confirmed_families.append(("redirect", redirect_rc))
+    if xss_ok:
+        confirmed_families.append(("xss", xss_rc))
+    
+    if len(confirmed_families) == 1:
+        return confirmed_families[0]
+    elif len(confirmed_families) == 0:
+        return None, None
+    
+    # Multiple families confirmed - use signal strength to decide
+    # For now, prefer XSS over SQLi when both are present (common case for XSS in HTML contexts)
+    # This fixes the bug where XSS targets were being misclassified as SQLi
+    if xss_ok and sqli_ok:
+        # Check if SQLi has strong error-based signals
+        if signals.get("sqli_error_based"):
+            return "sqli", sqli_rc  # Strong SQLi signal
+        else:
+            return "xss", xss_rc    # Prefer XSS for weak SQLi signals
+    
+    # Original priority for other cases: SQLi > Redirect > XSS
+    if sqli_ok:
+        return "sqli", sqli_rc
+    if redirect_ok:
+        return "redirect", redirect_rc
+    if xss_ok:
+        return "xss", xss_rc
+    
     return None, None

@@ -26,7 +26,7 @@ class XSSConfig(BaseModel):
     topk: int = Field(3, ge=1, le=20)
 
 class SQLiConfig(BaseModel):
-    dialect_mode: Literal["rules", "auto_ml"] = "rules"
+    ml_mode: Literal["auto", "always", "never", "force_ml"] = "never"
     short_circuit: Dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "M": 12, "K": 20})
     topk: int = Field(6, ge=1, le=20)
 
@@ -80,6 +80,10 @@ def apply_strategy_config(strategy_config: Optional[StrategyConfig]) -> Dict[str
     
     # SQLi configuration
     if strategy_config.sqli:
+        # Set SQLi ML mode
+        effective_settings["sqli_ml_mode"] = strategy_config.sqli.ml_mode
+        effective_settings["sqli_topk"] = strategy_config.sqli.topk
+        
         # Set SQLi short-circuit environment variables
         if strategy_config.sqli.short_circuit.get("enabled", True):
             os.environ["ELISE_SQLI_SHORTCIRCUIT_M"] = str(strategy_config.sqli.short_circuit.get("M", 12))
@@ -156,6 +160,13 @@ async def assess_vulnerabilities(request: AssessRequest):
             request.strategy = effective_settings.get("strategy", request.strategy)
             request.xss_ctx_invoke = effective_settings.get("xss_ctx_invoke", request.xss_ctx_invoke)
             request.top_k = effective_settings.get("top_k", request.top_k)
+        else:
+            # Create default effective_settings for legacy mode
+            effective_settings = {
+                "strategy": request.strategy,
+                "families": ["xss", "sqli", "redirect"],
+                "xss_ctx_invoke": request.xss_ctx_invoke or os.getenv("ELISE_XSS_CTX_INVOKE", "auto")
+            }
         
         # Parse and validate strategy
         strategy = parse_strategy(request.strategy)
@@ -173,8 +184,14 @@ async def assess_vulnerabilities(request: AssessRequest):
         set_current_job(request.job_id)
         reset_aggregator()
         
-        # Get XSS context invoke mode
-        ctx_mode = request.xss_ctx_invoke or os.getenv("ELISE_XSS_CTX_INVOKE", "auto")
+        # Get XSS context invoke mode from effective settings
+        ctx_mode = effective_settings.get("xss_ctx_invoke", request.xss_ctx_invoke or os.getenv("ELISE_XSS_CTX_INVOKE", "auto"))
+        
+        # Get SQLi ML mode from strategy config
+        sqli_ml_mode = "never"  # Default
+        if request.strategy_config and hasattr(request.strategy_config, 'sqli'):
+            sqli_ml_mode = request.strategy_config.sqli.ml_mode
+        
         
         # Log strategy information
         if request.strategy_config:
@@ -183,7 +200,7 @@ async def assess_vulnerabilities(request: AssessRequest):
             sc_enabled = sqli.short_circuit.get('enabled', True)
             sc_text = f"on(M={sqli.short_circuit.get('M', 12)}/K={sqli.short_circuit.get('K', 20)})" if sc_enabled else "off"
             effective_ml_mode = effective_settings.get("xss_ctx_invoke", xss.ml_mode)
-            print(f"ASSESS_STRATEGY preset={request.strategy_config.strategy} legacy_strategy={effective_settings['strategy']} xss.ml={effective_ml_mode} xss.topk={xss.topk} sqli.dialect={sqli.dialect_mode} sqli.topk={sqli.topk} sqli.sc={sc_text}")
+            print(f"ASSESS_STRATEGY preset={request.strategy_config.strategy} legacy_strategy={effective_settings['strategy']} xss.ml={effective_ml_mode} xss.topk={xss.topk} sqli.ml={sqli.ml_mode} sqli.topk={sqli.topk} sqli.sc={sc_text}")
         else:
             print(f"ASSESS_STRATEGY preset=legacy strategy={strategy.value} xss.ml={ctx_mode} xss.topk={request.top_k or 3}")
         
@@ -227,7 +244,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 job_id=request.job_id,
                 top_k=request.top_k or 3,
                 strategy=strategy.value,
-                ctx_mode=ctx_mode
+                ctx_mode=ctx_mode,
+                sqli_ml_mode=sqli_ml_mode
             )
         else:
             # Use endpoints pathway with deterministic enumeration
@@ -240,7 +258,8 @@ async def assess_vulnerabilities(request: AssessRequest):
                 job_id=request.job_id,
                 top_k=request.top_k or 3,
                 strategy=strategy.value,
-                ctx_mode=ctx_mode
+                ctx_mode=ctx_mode,
+                sqli_ml_mode=sqli_ml_mode
             )
         
         # Handle persist-after-crawl for target_url pathway
@@ -299,7 +318,7 @@ async def assess_vulnerabilities(request: AssessRequest):
             sc_m = sqli.short_circuit.get('M', 12)
             sc_k = sqli.short_circuit.get('K', 20)
             sc_text = f"M={sc_m}/K={sc_k}" if sc_enabled else "OFF"
-            plan_summary = f"XSS={xss.ml_mode} (τ={xss.tau_ml}, rule={xss.rule_conf_gate}), XSS Top-K={xss.topk} • SQLi=dialect {sqli.dialect_mode}, SQLi Top-K={sqli.topk} • Short-circuit {sc_text} • Families: {', '.join(request.strategy_config.families)}"
+            plan_summary = f"XSS={xss.ml_mode} (τ={xss.tau_ml}, rule={xss.rule_conf_gate}), XSS Top-K={xss.topk} • SQLi={sqli.ml_mode}, SQLi Top-K={sqli.topk} • Short-circuit {sc_text} • Families: {', '.join(request.strategy_config.families)}"
             meta["plan_summary"] = plan_summary
         else:
             # Fallback to legacy strategy

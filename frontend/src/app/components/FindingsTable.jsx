@@ -55,17 +55,94 @@ const ProofTypeBadge = ({ vuln_proof }) => {
   );
 };
 
-// Rank Source badge
-const RankSourceBadge = ({ rank_source }) => {
+// Decision Source badge (shows probe ML)
+const DecisionSourceBadge = ({ family, xssContextSource, sqliDialectSource }) => {
+  
+  // Map probe ML sources to more specific descriptions with model names
+  const getProbeMLSource = (family, xssContextSource, sqliDialectSource) => {
+    if (family === "xss") {
+      if (xssContextSource === "ml") {
+        return "XSS Context Classifier";
+      } else if (xssContextSource === "rule") {
+        return "XSS Rules";
+      } else {
+        return "XSS Probe";
+      }
+    } else if (family === "sqli") {
+      if (sqliDialectSource === "ml") {
+        return "SQLi Dialect Classifier";
+      } else if (sqliDialectSource === "rule") {
+        return "SQLi Rules";
+      } else {
+        return "SQLi Probe";
+      }
+    } else if (family === "redirect") {
+      return "Redirect Probe";
+    }
+    return "Probe";
+  };
+  
+  // For Decision Source, we want to show probe ML, not payload ranking ML
+  const specificSource = getProbeMLSource(family, xssContextSource, sqliDialectSource);
+  
+  const colors = {
+    "XSS Context Classifier": "bg-purple-100 text-purple-700",
+    "XSS Rules": "bg-blue-100 text-blue-700",
+    "XSS Probe": "bg-green-100 text-green-700",
+    "SQLi Dialect Classifier": "bg-purple-100 text-purple-700", 
+    "SQLi Rules": "bg-blue-100 text-blue-700",
+    "SQLi Probe": "bg-green-100 text-green-700",
+    "Redirect Probe": "bg-yellow-100 text-yellow-700",
+    "Probe": "bg-gray-100 text-gray-700"
+  };
+  
+  return (
+    <span 
+      className={`px-2 py-0.5 rounded text-xs ${colors[specificSource] || "bg-gray-100 text-gray-700"}`}
+      title={`Probe ML source: ${specificSource}`}
+    >
+      {specificSource}
+    </span>
+  );
+};
+
+// Rank Source badge (shows payload ranking ML - for Evidence Modal)
+const RankSourceBadge = ({ rank_source, family, model_tag }) => {
   if (!rank_source) return null;
+  
+  // Map rank_source to more specific descriptions
+  const getSpecificSource = (source, family, modelTag) => {
+    if (source === "ml") {
+      if (family === "xss") {
+        return modelTag === "family_xss" ? "XSS Ranker" : "XSS ML";
+      } else if (family === "sqli") {
+        return modelTag === "family_sqli" ? "SQLi Ranker" : "SQLi ML";
+      } else if (family === "redirect") {
+        return modelTag === "family_redirect" ? "Redirect Ranker" : "Redirect ML";
+      }
+      return "ML Ranker";
+    } else if (source === "probe_only") {
+      return "Probe Only";
+    } else if (source === "defaults") {
+      return "Default Payloads";
+    }
+    return source;
+  };
+  
+  const specificSource = getSpecificSource(rank_source, family, model_tag);
+  
   const colors = {
     "ml": "bg-purple-100 text-purple-700",
     "probe_only": "bg-blue-100 text-blue-700", 
     "defaults": "bg-gray-100 text-gray-700"
   };
+  
   return (
-    <span className={`px-2 py-0.5 rounded text-xs ${colors[rank_source] || "bg-gray-100 text-gray-700"}`}>
-      {rank_source}
+    <span 
+      className={`px-2 py-0.5 rounded text-xs ${colors[rank_source] || "bg-gray-100 text-gray-700"}`}
+      title={`Ranking source: ${rank_source}${model_tag ? ` (${model_tag})` : ''}`}
+    >
+      {specificSource}
     </span>
   );
 };
@@ -122,10 +199,10 @@ const MLChip = ({ rank_source, ml_proba, ml }) => {
 };
 
 // SQLi dialect badge
-const SQLiDialectBadge = ({ family, telemetry }) => {
+const SQLiDialectBadge = ({ family, result }) => {
   if (family !== "sqli") return null;
   
-  if (!telemetry?.sqli_dialect_hint) {
+  if (!result?.sqli_dialect) {
     return (
       <span className="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700" title="No SQLi dialect detected">
         —
@@ -133,14 +210,16 @@ const SQLiDialectBadge = ({ family, telemetry }) => {
     );
   }
   
-  const dialect = telemetry.sqli_dialect_hint;
-  const confident = telemetry.sqli_dialect_confident;
+  const dialect = result.sqli_dialect;
+  const confident = result.sqli_dialect_source === "ml" && result.sqli_dialect_ml_proba > 0.7;
   
   const dialectColors = {
     "mysql": "bg-blue-100 text-blue-700",
-    "postgres": "bg-green-100 text-green-700", 
+    "postgresql": "bg-green-100 text-green-700", 
     "mssql": "bg-red-100 text-red-700",
-    "sqlite": "bg-yellow-100 text-yellow-700"
+    "sqlite": "bg-yellow-100 text-yellow-700",
+    "oracle": "bg-purple-100 text-purple-700",
+    "unknown": "bg-gray-100 text-gray-700"
   };
   
   const colorClass = dialectColors[dialect] || "bg-gray-100 text-gray-700";
@@ -185,14 +264,6 @@ const XSSContextChips = ({ family, xss_context, xss_escaping, xss_context_source
       >
         {contextMap[xss_context] || "?"}/{escapingMap[xss_escaping] || "?"}
       </span>
-      {xss_context_source === "ml" && xss_context_ml_proba && (
-        <span 
-          className="px-1.5 py-0.5 rounded text-xs bg-purple-100 text-purple-700 font-mono"
-          title="ML-assisted classification"
-        >
-          ML {xss_context_ml_proba.toFixed(2)}
-        </span>
-      )}
     </div>
   );
 };
@@ -306,7 +377,6 @@ export default function FindingsTable({ results=[], onView }) {
           {badge(result.decision)}
           <ProvenanceChips why={result.why} />
           <ProofTypeBadge vuln_proof={result.vuln_proof} />
-          <MLChip rank_source={result.rank_source} ml_proba={result.ml_proba} ml={result.ml} />
           <XSSContextChips 
             family={result.family} 
             xss_context={result.xss_context} 
@@ -321,13 +391,21 @@ export default function FindingsTable({ results=[], onView }) {
         </div>
       </td>
       <td className="p-2">
-        <RankSourceBadge rank_source={result.telemetry?.xss?.rank_source || result.rank_source} />
+        <DecisionSourceBadge 
+          family={result.family}
+          xssContextSource={result.xss_context_source}
+          sqliDialectSource={result.sqli_dialect_source}
+        />
       </td>
       <td className="p-2 text-right tabular-nums">
-        {result.ml?.classifier_used && result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
+        {result.family === "xss" && result.xss_context_source === "ml" && result.xss_context_ml_proba ? 
+          `${Math.round(result.xss_context_ml_proba * 100)}%` :
+          result.family === "sqli" && result.sqli_dialect_source === "ml" && result.sqli_dialect_ml_proba ?
+          `${Math.round(result.sqli_dialect_ml_proba * 100)}%` :
+          result.ml?.classifier_used && result.ml_proba != null ? result.ml_proba.toFixed(2) : "—"}
       </td>
       <td className="p-2">
-        <SQLiDialectBadge family={result.family} telemetry={result.telemetry} />
+        <SQLiDialectBadge family={result.family} result={result} />
       </td>
       <td className="p-2 font-semibold">
         {result.cvss?.base ?? "—"}
@@ -366,7 +444,7 @@ export default function FindingsTable({ results=[], onView }) {
                   <th className="p-2">Target</th>
                   <th className="p-2">Param</th>
                   <th className="p-2">Decision</th>
-                  <th className="p-2">Rank Source</th>
+                  <th className="p-2">Decision Source</th>
                   <th className="p-2">ML Proba</th>
                   <th className="p-2">SQLi Dialect</th>
                   <th className="p-2">CVSS</th>

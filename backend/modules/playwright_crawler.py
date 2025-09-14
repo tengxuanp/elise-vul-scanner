@@ -291,6 +291,27 @@ def crawl_site(
             if seed and same_site(seed, target_url):
                 url_queue.append((seed, 0))
     
+    # Extract parameters from initial target_url and add to captured_requests
+    # This ensures that parameters from the initial URL are not missed
+    if target_url and same_site(target_url, target_url):
+        initial_params = extract_params_from_url(target_url)
+        print(f"[CRAWL_DEBUG] Initial URL: {target_url}")
+        print(f"[CRAWL_DEBUG] Initial params: {initial_params}")
+        if initial_params:
+            # Create a mock request for the initial URL
+            parsed_url = urlparse(target_url)
+            captured_requests.append({
+                "url": target_url,
+                "method": "GET",
+                "req_headers": {},
+                "post_data": None,
+                "resource_type": "document",
+                "content_type": "text/html",
+                "source": "initial",
+                "status": 200,  # Assume success for initial URL
+            })
+            print(f"[CRAWL_DEBUG] Added initial request to captured_requests")
+    
     # Remove duplicates from queue
     seen_in_queue = set()
     unique_queue = []
@@ -592,7 +613,9 @@ def crawl_site(
     
     # Process captured requests into endpoints
     for request_info in captured_requests:
+        print(f"[CRAWL_DEBUG] Processing request: {request_info}")
         endpoint = process_request(request_info)
+        print(f"[CRAWL_DEBUG] Processed endpoint: {endpoint}")
         if endpoint:
             endpoints.append(endpoint)
     

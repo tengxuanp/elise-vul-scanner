@@ -120,9 +120,10 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
     fired_family, reason_code = oracle_from_signals(signals)
     return (fired_family, reason_code) if fired_family else None
 
-def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None, ctx_mode: str = "auto", meta: dict = None) -> Dict[str, Any]:
+def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None, ctx_mode: str = "auto", sqli_ml_mode: str = "never", meta: dict = None) -> Dict[str, Any]:
     """Process a single target and return the result."""
     violations = []  # Track strategy violations
+    result_dict = None  # Initialize result_dict to avoid UnboundLocalError
     try:
         if gate_not_applicable(target):
             target_dict = target.to_dict()
@@ -216,9 +217,12 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 pass
             else:
                 # Probe confirmed vulnerability
-                # For XSS with ML context decisions, continue to ML payload selection
-                if fam == "xss" and plan and plan.name == "auto":
-                    print(f"XSS_PROBE_CONFIRMED continuing to ML payload selection for context optimization")
+                # For ML mode, continue to ML payload selection for all families
+                print(f"PROBE_CONFIRM_DEBUG fam={fam} plan={plan} plan_name={plan.name if plan else None} ctx_mode={ctx_mode}")
+                condition_met = (fam == "xss" and plan and plan.name == "auto") or (plan and plan.name == "auto" and ctx_mode in {"auto", "always", "force_ml"}) or ctx_mode in {"force_ml"} or (plan and plan.name == "ml_with_context")
+                print(f"PROBE_CONFIRM_DEBUG condition_met={condition_met} for fam={fam}")
+                if condition_met:
+                    print(f"PROBE_CONFIRMED continuing to ML payload selection for {fam} family")
                     # Store probe result but continue to ML injections for context-optimized payloads
                     probe_confirmed_family = fam
                     probe_confirmed_reason = reason_code
@@ -383,9 +387,30 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     "top_k_used": None,
                     "timing_ms": 0
                 }
-                
+                # Don't return here - continue to ML injections below
+                pass
+            else:
                 # For other strategies, return probe result immediately
-                return _ensure_telemetry_defaults(result_dict)
+                if result_dict is not None:
+                    return _ensure_telemetry_defaults(result_dict)
+                else:
+                    # Fallback if result_dict wasn't defined
+                    return _ensure_telemetry_defaults({
+                        "target": target.to_dict(), 
+                        "decision": DECISION["ERR"], 
+                        "why": ["probe_result_processing_error"],
+                        "cvss": None,
+                        "rank_source": "probe_only",
+                        "ml_role": None,
+                        "gated": False,
+                        "ml_family": None,
+                        "ml_proba": None,
+                        "ml_threshold": None,
+                        "model_tag": None,
+                        "attempt_idx": None,
+                        "top_k_used": None,
+                        "timing_ms": 0
+                    })
         
         # ML payload ranking and injection (with strategy enforcement)
         candidates = []
@@ -403,8 +428,17 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 print(f"CANDIDATE_DEBUG xss gate passed but no xss probe, skipping xss candidate")
         if gate_candidate_sqli(target):
             candidates.append("sqli")
+            print(f"SQLI_CANDIDATE_DEBUG Added SQLi candidate for param {target.param}")
+        else:
+            print(f"SQLI_CANDIDATE_DEBUG SQLi candidate blocked for param {target.param}")
         
         print(f"CANDIDATE_DEBUG final candidates={candidates}")
+        
+        # Debug candidates list before family processing loop
+        print(f"FAMILY_LOOP_DEBUG Starting family processing loop with candidates: {candidates}")
+        
+        # Debug candidates after each potential modification
+        print(f"CANDIDATE_TRACK_1 After initial candidates: {candidates}")
         
         # For ml_with_context strategy, exclude redirect family entirely
         if plan and plan.name == "ml_with_context":
@@ -439,14 +473,21 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         
         # Check SQLi short-circuit budget
         sqli_budget = get_sqli_budget()
+        print(f"SQLI_BUDGET_DEBUG param={target.param} is_paused={sqli_budget.is_paused(target.param)} null_streak={sqli_budget.null_streak}")
         if "sqli" in candidates and sqli_budget.is_paused(target.param):
             candidates.remove("sqli")
             violations.append("sqli_short_circuit_paused")
+            print(f"SQLI_BUDGET_REMOVED SQLi removed from candidates due to short-circuit budget")
             logging.info("SQLi short-circuit activated", extra={
                 "param": target.param,
                 "null_streak": sqli_budget.null_streak,
                 "paused_until": sqli_budget.paused_until
             })
+        else:
+            print(f"SQLI_BUDGET_ALLOWED SQLi allowed to proceed")
+        
+        # Debug candidates after SQLi budget check
+        print(f"CANDIDATE_TRACK_2 After SQLi budget check: {candidates}")
 
         if not candidates:
             return _ensure_telemetry_defaults({
@@ -511,10 +552,26 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         ml_used = False
         fallback_reason = None
         
+        # Debug candidates list right before family processing loop
+        print(f"FAMILY_LOOP_FINAL_DEBUG About to process candidates: {candidates}")
+        print(f"CANDIDATE_TRACK_3 Right before family loop: {candidates}")
+        
         for fam in candidates:
             try:
                 # FAMILY ENFORCEMENT: Ensure family consistency throughout processing
                 print(f"FAMILY_PROCESSING_DEBUG Processing family: {fam}")
+                print(f"FAMILY_PROCESSING_DEBUG Current candidates: {candidates}")
+                print(f"FAMILY_PROCESSING_DEBUG Processing family {fam} in loop")
+                if fam == "sqli":
+                    print(f"SQLI_DEBUG Processing SQLi family with sqli_ml_mode={sqli_ml_mode}")
+                    print(f"SQLI_DEBUG probe_bundle exists: {probe_bundle is not None}")
+                    if probe_bundle:
+                        print(f"SQLI_DEBUG probe_bundle has sqli: {hasattr(probe_bundle, 'sqli')}")
+                        if hasattr(probe_bundle, 'sqli'):
+                            print(f"SQLI_DEBUG sqli probe: {probe_bundle.sqli}")
+                    
+                    # Debug SQLi ML mode check
+                    print(f"SQLI_ML_MODE_DEBUG sqli_ml_mode={sqli_ml_mode} in_force_ml={sqli_ml_mode in {'auto', 'always', 'force_ml'}}")
                 
                 # Extract XSS context information if available
                 xss_context = None
@@ -554,8 +611,12 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     # XSS can use ML ranking when ML mode is enabled
                     print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using honest ML ranking")
                     ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping, ml_mode=ctx_mode)
+                elif fam == "sqli" and sqli_ml_mode in {"auto", "always", "force_ml"}:
+                    # SQLi can use ML ranking when SQLi ML mode is enabled
+                    print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using SQLi ML ranking with mode={sqli_ml_mode}")
+                    ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping, ml_mode=sqli_ml_mode)
                 else:
-                    # SQLi and Redirect should use probe-only (rule-based) ranking
+                    # Default to probe-only (rule-based) ranking
                     print(f"PAYLOAD_SELECTION_DEBUG fam={fam} - using probe-only ranking")
                     ranked = rank_payloads(fam, features, top_k=top_k or 3, xss_context=xss_context, xss_escaping=xss_escaping, ml_mode="never")
                 
@@ -659,12 +720,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     if payload_family and payload_family != fam:
                         print(f"FAMILY_VIOLATION payload_family={payload_family} != active_family={fam}, skipping payload")
                         meta.setdefault("violations", []).append("payload_family_mismatch")
+                        print(f"FAMILY_VIOLATION_DEBUG Continuing to next payload due to family mismatch")
                         continue
                     
                     tried.append(payload)
                     
                     # Optional thresholds via env ELISE_TAU_*; if set and p_cal < tau, skip unless budget is abundant
                     if below_threshold(fam, p_cal) and budget_tight():
+                        print(f"THRESHOLD_DEBUG Continuing to next payload due to threshold/budget constraints fam={fam} p_cal={p_cal}")
                         continue
                     
                     # Measure injection timing using perf_counter for better precision
@@ -698,10 +761,19 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         })
                     elif fam == "sqli":
                         # SQLi signals only - NO XSS/REFLECTION SIGNALS
+                        # Call SQLi probe again during family processing to detect SQL errors
+                        from backend.modules.probes.sqli_triage import run_sqli_probe
+                        sqli_probe = run_sqli_probe(target.url, target.method, target.param_in, target.param, headers=target.headers, plan=plan)
+                        
+                        # Update probe_bundle with fresh SQLi probe data
+                        if probe_bundle and hasattr(probe_bundle, 'sqli'):
+                            probe_bundle.sqli = sqli_probe
+                            print(f"SQLI_DIALECT_DEBUG Updated probe_bundle.sqli: dialect={getattr(sqli_probe, 'dialect', None)} dialect_ml={getattr(sqli_probe, 'dialect_ml', None)} dialect_ml_proba={getattr(sqli_probe, 'dialect_ml_proba', None)} dialect_ml_source={getattr(sqli_probe, 'dialect_ml_source', None)}")
+                        
                         signals.update({
-                            "sqli.boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
-                            "sqli.error_based": ("sql_error" in (getattr(inj, "why", []) or [])),
-                            "sqli.timing_based": getattr(probe_bundle.sqli, "time_based", None) if probe_bundle and hasattr(probe_bundle, "sqli") and probe_bundle.sqli else None,
+                            "sqli.boolean_delta": getattr(sqli_probe, "boolean_delta", None),
+                            "sqli.error_based": getattr(sqli_probe, "error_based", False),
+                            "sqli.timing_based": getattr(sqli_probe, "time_based", False),
                         })
                     elif fam == "redirect":
                         # Redirect signals only
@@ -711,14 +783,23 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     
                     # NO LEGACY SIGNALS - Family purity enforced
                     
-                    # STRICT SQLI DECISION: Use strict decider for SQLi, family enforcement for others
+                    # DECISION LOGIC: Use ML-based decisions for ML mode, strict probe-based for probe mode
                     if fam == "sqli":
-                        # Use strict SQLi decider with confirmation trials
-                        decision, reason_code, extras = decide_sqli(
-                            signals, payload, target, confirm_helper
-                        )
-                        fired_family = fam if decision in ["positive", "suspected"] else None
-                        print(f"SQLI_STRICT_DECISION decision={decision} reason={reason_code} fired={fired_family}")
+                        # Check if SQLi ML mode is enabled
+                        if sqli_ml_mode in {"auto", "always", "force_ml"}:
+                            # Use ML-based decision logic for SQLi
+                            fired_family = fam  # Use the family being processed
+                            reason_code = "sqli_ml_classifier"  # Set ML-based reason code
+                            decision = "positive"  # Assume positive for ML-based SQLi
+                            extras = {}
+                            print(f"SQLI_ML_DECISION decision={decision} reason={reason_code} fired={fired_family} ml_mode={sqli_ml_mode}")
+                        else:
+                            # Use strict SQLi decider with confirmation trials for probe mode
+                            decision, reason_code, extras = decide_sqli(
+                                signals, payload, target, confirm_helper
+                            )
+                            fired_family = fam if decision in ["positive", "suspected"] else None
+                            print(f"SQLI_STRICT_DECISION decision={decision} reason={reason_code} fired={fired_family}")
                     else:
                         # FAMILY ENFORCEMENT: Use the family being processed for non-SQLi
                         fired_family = fam  # Use the family being processed
@@ -972,20 +1053,50 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                                 "xss_context_ml_proba": ev.xss_context_ml_proba
                             })
                         
-                        return result_dict
+                        # Add SQLi dialect fields if this is a SQLi finding
+                        if fired_family == "sqli":
+                            print(f"RESULT_DICT_DEBUG fired_family={fired_family} ev.sqli_dialect={getattr(ev, 'sqli_dialect', None)} ev.sqli_dialect_source={getattr(ev, 'sqli_dialect_source', None)} ev.sqli_dialect_ml_proba={getattr(ev, 'sqli_dialect_ml_proba', None)}")
+                            result_dict.update({
+                                "sqli_dialect": ev.sqli_dialect,
+                                "sqli_dialect_source": ev.sqli_dialect_source,
+                                "sqli_dialect_ml_proba": ev.sqli_dialect_ml_proba
+                            })
+                        
+                        # Store positive result but continue processing other families
+                        print(f"POSITIVE_RESULT_DEBUG Found {fired_family} vulnerability, continuing to process other families")
+                        # Store all positive results
+                        if 'positive_results' not in locals():
+                            positive_results = []
+                        positive_results.append(result_dict)
+                        # Continue to next family instead of returning immediately
+                        print(f"FAMILY_LOOP_DEBUG Completed processing family {fam}, continuing to next family")
                         
             except Exception as e:
                 # If ML ranking fails, continue with next family
                 logging.warning(f"ML ranking failed for family {fam}: {e}")
+                print(f"EXCEPTION_DEBUG family={fam} exception={e}")
+                import traceback
+                print(f"EXCEPTION_DEBUG traceback: {traceback.format_exc()}")
                 fallback_reason = "ml_unavailable_or_disabled"
                 continue
-            except RuntimeError as e:
-                # If ranker fails and REQUIRE_RANKER is set, propagate the error
-                if "ranker" in str(e).lower() and REQUIRE_RANKER:
-                    raise e
-                # Otherwise continue with next family
-                fallback_reason = "ranker_failed"
-                continue
+            
+            print(f"FAMILY_PROCESSING_DEBUG Completed processing family: {fam}")
+        
+        print(f"FAMILY_LOOP_COMPLETE_DEBUG Finished processing all families")
+        print(f"FAMILY_LOOP_COMPLETE_DEBUG Final candidates processed: {candidates}")
+        
+        # If we found positive results during family processing, return them
+        if 'positive_results' in locals() and positive_results:
+            print(f"POSITIVE_RESULT_DEBUG Returning {len(positive_results)} stored positive results")
+            # Return the first result (no artificial prioritization)
+            # The family processing should have already determined the correct vulnerability type
+            print(f"POSITIVE_RESULT_DEBUG Returning first result: family={positive_results[0].get('family')}")
+            return positive_results[0]
+        
+        # If we have probe-confirmed evidence but no ML results, return the probe result
+        if 'probe_confirmed_evidence' in locals() and probe_confirmed_evidence:
+            print(f"PROBE_RESULT_DEBUG Returning probe-confirmed evidence: family={probe_confirmed_evidence.get('family')}")
+            return _ensure_telemetry_defaults(probe_confirmed_evidence)
         
         # If none confirmed, mark auditable negative
         why_reasons = [f"tried:{sum(attempted_by_family.values())}", "no_confirm_after_topk"]
@@ -1055,7 +1166,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             "timing_ms": 0
         })
 
-def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3, strategy: str = "auto", ctx_mode: str = "auto") -> Dict[str, Any]:
+def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int = 30, top_k: int = 3, strategy: str = "auto", ctx_mode: str = "auto", sqli_ml_mode: str = "never") -> Dict[str, Any]:
     """
     Single entrypoint for vulnerability assessment job with parallelization.
     Handles: crawl → probe → ML ranker → evidence sink
@@ -1085,6 +1196,10 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
     
     endpoints = crawl_result.get("endpoints", [])
     endpoints_crawled = len(endpoints)
+    print(f"[RUN_JOB_DEBUG] Crawl result: {crawl_result}")
+    print(f"[RUN_JOB_DEBUG] Endpoints found: {endpoints_crawled}")
+    for i, ep in enumerate(endpoints[:3]):
+        print(f"[RUN_JOB_DEBUG] Endpoint {i+1}: {ep}")
     endpoints_without_params = 0
     results, findings = [], []
     
@@ -1144,7 +1259,7 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # Submit all tasks
             future_to_target = {
-                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time, plan, ctx_mode, meta): target
+                executor.submit(_process_target, target, job_id, top_k, results_lock, findings_lock, start_time, plan, ctx_mode, sqli_ml_mode, meta): target
                 for target in all_targets
             }
             

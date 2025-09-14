@@ -228,7 +228,7 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
     
     return {"summary": summary, "results": results, "findings": findings, "job_id": job_id, "meta": meta}
 
-def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto", ctx_mode: str = "auto")->Dict[str,Any]:
+def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, strategy: str = "auto", ctx_mode: str = "auto", sqli_ml_mode: str = "never")->Dict[str,Any]:
     """
     Assess endpoints using deterministic target enumeration.
     This is a simplified version without parallelization for direct endpoint assessment.
@@ -340,7 +340,7 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         )
         
         # Use the same _process_target function from fuzzer_core
-        result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan, ctx_mode=ctx_mode, meta={})
+        result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan, ctx_mode=ctx_mode, sqli_ml_mode=sqli_ml_mode, meta={})
         raw_results.append(result)
         
         # Extract evidence if present

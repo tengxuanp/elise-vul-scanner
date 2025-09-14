@@ -75,7 +75,7 @@ const StrategySelector = ({
     },
     full_smart: {
       name: "Full-Smart (Auto)",
-      description: "XSS + SQLi ML (beta - SQLi ML not yet available)",
+      description: "XSS + SQLi ML with auto mode",
       config: {
         strategy: "full_smart",
         families: ["xss", "sqli"],
@@ -86,7 +86,7 @@ const StrategySelector = ({
           topk: 3
         },
         sqli: {
-          dialect_mode: sqliDialectMLAvailable ? "auto_ml" : "rules",
+          ml_mode: sqliDialectMLAvailable ? "auto" : "never",
           short_circuit: { enabled: true, M: 12, K: 20 },
           topk: 6
         }
@@ -140,7 +140,7 @@ const StrategySelector = ({
     const xssRule = config.xss.rule_conf_gate;
     const xssTopk = config.xss.topk;
     
-    const sqliDialect = config.sqli.dialect_mode;
+    const sqliMLMode = config.sqli.ml_mode;
     const sqliTopk = config.sqli.topk;
     const sqliSC = config.sqli.short_circuit.enabled;
     const sqliM = config.sqli.short_circuit.M;
@@ -148,7 +148,7 @@ const StrategySelector = ({
     
     const families = config.families.join(", ");
     
-    return `Plan: XSS=${xssMode} (τ=${xssTau}, rule=${xssRule}), XSS Top-K=${xssTopk} • SQLi=dialect ${sqliDialect}, SQLi Top-K=${sqliTopk} • Short-circuit ${sqliSC ? `M=${sqliM}/K=${sqliK}` : 'OFF'} • Families: ${families}`;
+    return `Plan: XSS=${xssMode} (τ=${xssTau}, rule=${xssRule}), XSS Top-K=${xssTopk} • SQLi=${sqliMLMode}, SQLi Top-K=${sqliTopk} • Short-circuit ${sqliSC ? `M=${sqliM}/K=${sqliK}` : 'OFF'} • Families: ${families}`;
   };
 
   return (
@@ -183,11 +183,6 @@ const StrategySelector = ({
                   <div>
                     <div className="font-medium text-gray-900">
                       {preset.name}
-                      {preset.disabled && (
-                        <span className="ml-2 text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
-                          Beta
-                        </span>
-                      )}
                     </div>
                     <div className="text-sm text-gray-600 mt-1">
                       {preset.description}
@@ -283,17 +278,16 @@ const StrategySelector = ({
             <h4 className="text-sm font-medium text-gray-700 mb-3">SQLi Configuration</h4>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs text-gray-600 mb-1">Dialect Mode</label>
+                <label className="block text-xs text-gray-600 mb-1">ML Mode</label>
                 <select
-                  value={config.sqli.dialect_mode}
-                  onChange={(e) => handleAdvancedChange("sqli", "dialect_mode", e.target.value)}
-                  disabled={!sqliDialectMLAvailable && config.sqli.dialect_mode === "auto_ml"}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm disabled:opacity-50"
+                  value={config.sqli.ml_mode}
+                  onChange={(e) => handleAdvancedChange("sqli", "ml_mode", e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 >
-                  <option value="rules">Rules Only</option>
-                  <option value="auto_ml" disabled={!sqliDialectMLAvailable}>
-                    Auto ML {!sqliDialectMLAvailable && "(not available)"}
-                  </option>
+                  <option value="auto">Auto</option>
+                  <option value="always">Always</option>
+                  <option value="never">Never</option>
+                  <option value="force_ml">Force ML</option>
                 </select>
               </div>
               <div>

@@ -16,8 +16,11 @@ def gate_candidate_sqli(t: Target) -> bool:
     URL-like parameters are suppressed for SQLi unless hard SQL error evidence exists.
     This prevents false positives from redirect parameters like /go?url=.
     """
+    print(f"SQLI_GATE_CHECK param={t.param} param_in={t.param_in} url={t.url}")
+    
     # Basic parameter type check
     if t.param_in not in ("query", "form", "json"):
+        print(f"SQLI_GATE_REJECTED param {t.param} rejected - not query/form/json")
         return False
     
     # URL-param suppression check
@@ -36,10 +39,13 @@ def gate_candidate_sqli(t: Target) -> bool:
     except:
         pass
     
+    print(f"SQLI_GATE_CHECK param={t.param} param_value='{param_value}'")
+    
     if should_suppress_sqli_for_param(t.param, param_value, has_error_evidence=False):
         print(f"SQLI_SUPPRESSED URL-like param {t.param} suppressed for SQLi")
         return False
     
+    print(f"SQLI_GATE_ALLOWED param {t.param} allowed for SQLi")
     return True
 
 def gate_candidate_redirect(t: Target) -> bool:

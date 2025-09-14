@@ -245,35 +245,35 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
     Else: fall back to manifest defaults ordering with score=None, p_cal=None.
     Never raise for unknown family—fallback gracefully.
     """
-    fam = family.lower()
-    print(f"RANK_PAYLOADS_CALLED fam={fam} xss_context={xss_context} xss_escaping={xss_escaping} ml_mode={ml_mode}")
+    family_lower = family.lower()  # Use local variable to avoid overwriting global 'fam'
+    print(f"RANK_PAYLOADS_CALLED fam={family_lower} xss_context={xss_context} xss_escaping={xss_escaping} ml_mode={ml_mode}")
 
     # Try to use ML ranking if available and enabled
     if USE_ML and ml_mode in {"auto", "always", "force_ml"}:
-        model = _load_model(fam)
+        model = _load_model(family_lower)
         if model is not None:
             try:
-                print(f"RANK_PAYLOADS_ML_ATTEMPT fam={fam}")
+                print(f"RANK_PAYLOADS_ML_ATTEMPT fam={family_lower}")
                 # Use the already-built features for ML ranking
                 ml_features = features
-                print(f"RANK_PAYLOADS_ML_FEATURES fam={fam} features={ml_features}")
+                print(f"RANK_PAYLOADS_ML_FEATURES fam={family_lower} features={ml_features}")
                 if ml_features is not None:
                     # Convert features to numpy array for ML model
                     feature_vector = _features_to_vector(ml_features)
-                    print(f"RANK_PAYLOADS_ML_VECTOR fam={fam} vector_shape={feature_vector.shape if feature_vector is not None else None}")
+                    print(f"RANK_PAYLOADS_ML_VECTOR fam={family_lower} vector_shape={feature_vector.shape if feature_vector is not None else None}")
                     if feature_vector is not None:
                         # Use ML model for ranking
                         scores = model.predict_proba(feature_vector)
-                        calibrated_scores = _apply_calibration(fam, scores)
+                        calibrated_scores = _apply_calibration(family_lower, scores)
                     
                         # Get payloads and rank them
-                        default_payloads = _get_default_payloads(fam)
+                        default_payloads = _get_default_payloads(family_lower)
                         if not default_payloads:
                             default_payloads = {
                                 "xss": ['"><svg onload=alert(1)>', "<img src=x onerror=alert(1)>", "'\"><script>alert(1)</script>"],
                                 "sqli": ["'", "' OR '1'='1' -- ", "1 AND SLEEP(2) -- "],
                                 "redirect": ["https://example.com/", "//example.com/", "/\\example.com"],
-                            }.get(fam, [])
+                            }.get(family_lower, [])
                         
                         results = []
                         for i, payload in enumerate(default_payloads[:top_k]):
@@ -291,34 +291,34 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
                                 "score": score,
                                 "p_cal": p_cal,
                                 "rank_source": "ml",
-                                "model_tag": f"{fam}_ranker",
-                                "family": fam,
+                                "model_tag": f"{family_lower}_ranker",
+                                "family": family_lower,
                                 "skip_reason": None
                             })
                         
                         # Sort by p_cal descending
                         results.sort(key=lambda x: x["p_cal"], reverse=True)
-                        print(f"RANK_PAYLOADS_ML_SUCCESS fam={fam} count={len(results)}")
+                        print(f"RANK_PAYLOADS_ML_SUCCESS fam={family_lower} count={len(results)}")
                         return results
                     else:
-                        print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={fam}")
+                        print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={family_lower}")
                         skip_reason = "features_missing"
                 else:
-                    print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={fam}")
+                    print(f"RANK_PAYLOADS_ML_NO_FEATURES fam={family_lower}")
                     skip_reason = "features_missing"
             except Exception as e:
-                print(f"RANK_PAYLOADS_ML_ERROR fam={fam} error={e}")
+                print(f"RANK_PAYLOADS_ML_ERROR fam={family_lower} error={e}")
                 skip_reason = "model_unavailable"
         else:
-            print(f"RANK_PAYLOADS_ML_NO_MODEL fam={fam}")
+            print(f"RANK_PAYLOADS_ML_NO_MODEL fam={family_lower}")
             skip_reason = "model_unavailable"
     else:
-        print(f"RANK_PAYLOADS_ML_DISABLED fam={fam}")
+        print(f"RANK_PAYLOADS_ML_DISABLED fam={family_lower}")
         skip_reason = "model_unavailable"
 
     # Fallback to defaults
-    print(f"RANK_PAYLOADS_FALLBACK_DEFAULTS fam={fam}")
-    default_payloads = _get_default_payloads(fam)
+    print(f"RANK_PAYLOADS_FALLBACK_DEFAULTS fam={family_lower}")
+    default_payloads = _get_default_payloads(family_lower)
     
     if not default_payloads:
         # Hardcoded fallback
@@ -326,11 +326,11 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
             "xss": ['"><svg onload=alert(1)>', "<img src=x onerror=alert(1)>", "'\"><script>alert(1)</script>"],
             "sqli": ["'", "' OR '1'='1' -- ", "1 AND SLEEP(2) -- "],
             "redirect": ["https://example.com/", "//example.com/", "/\\example.com"],
-        }.get(fam, [])
+        }.get(family_lower, [])
 
     # If REQUIRE_RANKER is true and no defaults available, fail
     if REQUIRE_RANKER and not default_payloads:
-        raise RuntimeError(f"Ranker required but no model or defaults found for family: {fam}")
+        raise RuntimeError(f"Ranker required but no model or defaults found for family: {family_lower}")
 
     # Use default payloads
     results = []
@@ -347,13 +347,13 @@ def rank_payloads(family: str, features: Dict[str, Any], top_k: int = 3, xss_con
             "p_cal": p_cal,
             "rank_source": "defaults",
             "model_tag": model_tag,
-            "family": fam,
+            "family": family_lower,
             "skip_reason": skip_reason if 'skip_reason' in locals() else "model_unavailable"
         })
 
     # Sort by score descending
     results.sort(key=lambda x: x["score"], reverse=True)
-    print(f"RANK_PAYLOADS_DEFAULTS_SUCCESS fam={fam} count={len(results)}")
+    print(f"RANK_PAYLOADS_DEFAULTS_SUCCESS fam={family_lower} count={len(results)}")
     return results
 
 

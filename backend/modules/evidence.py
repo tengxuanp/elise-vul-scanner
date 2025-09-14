@@ -37,6 +37,10 @@ class EvidenceRow:
     xss_escaping: Optional[str] = None  # "raw|html|url|js|unknown"
     xss_context_source: Optional[str] = None  # "rule|ml"
     xss_context_ml_proba: Optional[float] = None  # ML probability when source="ml"
+    # SQLi Dialect fields
+    sqli_dialect: Optional[str] = None  # "mysql|postgresql|mssql|sqlite|oracle|unknown"
+    sqli_dialect_source: Optional[str] = None  # "rule|ml"
+    sqli_dialect_ml_proba: Optional[float] = None  # ML probability when source="ml"
     # Telemetry fields
     attempt_idx: Optional[int] = None  # Attempt index for this payload
     top_k_used: Optional[int] = None   # Number of top-k payloads used
@@ -113,6 +117,31 @@ class EvidenceRow:
                 xss_context_ml_proba = xss_context_ml.get("proba")
             elif xss_context_rule:
                 xss_context_source = "rule"
+
+        # Extract SQLi dialect information
+        sqli_dialect = None
+        sqli_dialect_source = None
+        sqli_dialect_ml_proba = None
+        
+        if family == "sqli" and hasattr(p, "sqli") and p.sqli:
+            sqli_dialect = getattr(p.sqli, "dialect", None)
+            
+            # Determine source and ML probability
+            sqli_dialect_ml = getattr(p.sqli, "dialect_ml", None)
+            sqli_dialect_rule = getattr(p.sqli, "dialect_rule", None)
+            sqli_dialect_source = getattr(p.sqli, "dialect_ml_source", None)
+            
+            if sqli_dialect_source == "ml":
+                # dialect_ml_proba is stored separately, not in dialect_ml dict
+                sqli_dialect_ml_proba = getattr(p.sqli, "dialect_ml_proba", None)
+            elif sqli_dialect_source == "rule":
+                pass  # Already set above
+            elif sqli_dialect_ml and sqli_dialect_source in ["ml", "ml_failed", "ml_unavailable"]:
+                # ML was attempted, set source to ml
+                sqli_dialect_source = "ml"
+                sqli_dialect_ml_proba = getattr(p.sqli, "dialect_ml_proba", None)
+            elif sqli_dialect_rule:
+                sqli_dialect_source = "rule"
         
         # Sanitize response snippet
         response_snippet = "<probe_confirmed>"
@@ -136,6 +165,9 @@ class EvidenceRow:
             xss_escaping=xss_escaping,
             xss_context_source=xss_context_source,
             xss_context_ml_proba=xss_context_ml_proba,
+            sqli_dialect=sqli_dialect,
+            sqli_dialect_source=sqli_dialect_source,
+            sqli_dialect_ml_proba=sqli_dialect_ml_proba,
             attempt_idx=0,
             top_k_used=0
         )
@@ -210,6 +242,38 @@ class EvidenceRow:
             elif xss_context_rule:
                 xss_context_source = "rule"
 
+        # Extract SQLi dialect information
+        sqli_dialect = None
+        sqli_dialect_source = None
+        sqli_dialect_ml_proba = None
+        
+        if family == "sqli" and hasattr(probe_bundle, "sqli") and probe_bundle.sqli:
+            sqli_dialect = _get(probe_bundle.sqli, "dialect", None)
+            
+            # Determine source and ML probability
+            sqli_dialect_ml = _get(probe_bundle.sqli, "dialect_ml", None)
+            sqli_dialect_rule = _get(probe_bundle.sqli, "dialect_rule", None)
+            sqli_dialect_source = _get(probe_bundle.sqli, "dialect_ml_source", None)
+            
+            print(f"EVIDENCE_SQLI_DEBUG family={family} has_probe_bundle={hasattr(probe_bundle, 'sqli')} probe_bundle_sqli={probe_bundle.sqli if hasattr(probe_bundle, 'sqli') else None}")
+            print(f"EVIDENCE_SQLI_DEBUG dialect={sqli_dialect} dialect_ml={sqli_dialect_ml} dialect_rule={sqli_dialect_rule} dialect_source={sqli_dialect_source}")
+            
+            print(f"EVIDENCE_SQLI_DEBUG family={family} has_probe_bundle={hasattr(probe_bundle, 'sqli')} probe_bundle_sqli={probe_bundle.sqli if hasattr(probe_bundle, 'sqli') else None}")
+            print(f"EVIDENCE_SQLI_DEBUG dialect={sqli_dialect} dialect_ml={sqli_dialect_ml} dialect_rule={sqli_dialect_rule} dialect_source={sqli_dialect_source}")
+            
+            if sqli_dialect_source == "ml":
+                # dialect_ml_proba is stored separately, not in dialect_ml dict
+                sqli_dialect_ml_proba = _get(probe_bundle.sqli, "dialect_ml_proba", None)
+                print(f"EVIDENCE_SQLI_ML_PROBA_DEBUG sqli_dialect_source={sqli_dialect_source} sqli_dialect_ml_proba={sqli_dialect_ml_proba}")
+            elif sqli_dialect_source == "rule":
+                pass  # Already set above
+            elif sqli_dialect_ml and sqli_dialect_source in ["ml", "ml_failed", "ml_unavailable"]:
+                # ML was attempted, set source to ml
+                sqli_dialect_source = "ml"
+                sqli_dialect_ml_proba = _get(probe_bundle.sqli, "dialect_ml_proba", None)
+            elif sqli_dialect_rule:
+                sqli_dialect_source = "rule"
+
         # FAMILY MISMATCH DETECTION: Check if attempt_family != classified_family
         attempt_family = family  # The family we're attempting to test
         classified_family = ml_family  # The family the ML model classified this as
@@ -252,6 +316,9 @@ class EvidenceRow:
             xss_escaping=xss_escaping,
             xss_context_source=xss_context_source,
             xss_context_ml_proba=xss_context_ml_proba,
+            sqli_dialect=sqli_dialect,
+            sqli_dialect_source=sqli_dialect_source,
+            sqli_dialect_ml_proba=sqli_dialect_ml_proba,
             attempt_idx=0,  # Will be set by caller
             top_k_used=0    # Will be set by caller
         )

@@ -59,7 +59,7 @@ HEADER_SIGNALS = {
     "sqlite": ["SQLite", "Python", "Werkzeug"]
 }
 
-ERR_TOKENS = ("sql syntax", "sqlite error", "warning: mysql", "psql:", "unterminated", "odbc")
+ERR_TOKENS = ("sql syntax", "sql error", "sqlite error", "warning: mysql", "psql:", "unterminated", "odbc")
 
 @dataclass
 class SqliProbe:
@@ -69,6 +69,9 @@ class SqliProbe:
     dialect: Optional[str] = None
     dialect_signals: List[str] = None
     dialect_confident: bool = False
+    dialect_ml: Optional[str] = None
+    dialect_ml_proba: float = 0.0
+    dialect_ml_source: str = "rule"
     skipped: bool = False
 
 def detect_sqli_dialect(response_text: str, headers: dict) -> Tuple[str, List[str], bool]:
@@ -111,10 +114,36 @@ def detect_sqli_dialect(response_text: str, headers: dict) -> Tuple[str, List[st
     
     return "unknown", matched_signals, False
 
+def detect_sqli_dialect_ml(response_text: str, headers: dict, status_code: int = None) -> Tuple[str, float, str]:
+    """Detect SQLi dialect using ML classification."""
+    try:
+        from backend.modules.ml.sqli_dialect_infer import predict_sqli_dialect
+        
+        # Get ML prediction
+        ml_result = predict_sqli_dialect(response_text, headers, status_code)
+        
+        if ml_result:
+            dialect = ml_result["pred"]
+            proba = ml_result["proba"]
+            source = "ml"
+            return dialect, proba, source
+        else:
+            return "unknown", 0.0, "ml_failed"
+            
+    except ImportError:
+        print("SQLi dialect ML model not available")
+        return "unknown", 0.0, "ml_unavailable"
+    except Exception as e:
+        print(f"SQLi dialect ML prediction failed: {e}")
+        return "unknown", 0.0, "ml_error"
+
 def run_sqli_probe(url, method, param_in, param, headers=None, plan=None) -> SqliProbe:
     """Run SQLi probe with enhanced dialect detection."""
+    print(f"[SQLI_PROBE_DEBUG] Starting SQLi probe for {url} param={param}")
+    
     # Defensive check: skip if SQLi probes are disabled
     if plan and "sqli" in plan.probes_disabled:
+        print(f"[SQLI_PROBE_DEBUG] SQLi probes disabled, skipping")
         probe = SqliProbe()
         probe.skipped = True
         return probe
@@ -131,14 +160,40 @@ def run_sqli_probe(url, method, param_in, param, headers=None, plan=None) -> Sql
     # error-based
     r = send("'")
     low = (r.text or "").lower()
+    print(f"[SQLI_PROBE_DEBUG] Error response: {r.text[:100]}...")
+    print(f"[SQLI_PROBE_DEBUG] Status code: {r.status_code}")
+    print(f"[SQLI_PROBE_DEBUG] Checking ERR_TOKENS: {ERR_TOKENS}")
+    print(f"[SQLI_PROBE_DEBUG] Error text lower: {low}")
     if any(tok in low for tok in ERR_TOKENS): 
+        print(f"[SQLI_PROBE_DEBUG] SQL error detected!")
         probe.error_based = True
+    else:
+        print(f"[SQLI_PROBE_DEBUG] No SQL error detected")
     
-    # Detect dialect from error response
+    # Detect dialect from error response (rule-based)
     dialect, signals, confident = detect_sqli_dialect(r.text or "", r.headers)
     probe.dialect = dialect
     probe.dialect_signals = signals
     probe.dialect_confident = confident
+    
+    # Detect dialect using ML (if available)
+    dialect_ml, proba_ml, source_ml = detect_sqli_dialect_ml(r.text or "", r.headers, r.status_code)
+    probe.dialect_ml = dialect_ml
+    probe.dialect_ml_proba = proba_ml
+    probe.dialect_ml_source = source_ml
+    
+    # Fuse rule-based and ML results
+    if source_ml == "ml" and proba_ml > 0.7:
+        # ML is confident, use ML result
+        probe.dialect = dialect_ml
+        probe.dialect_confident = True
+        probe.dialect_signals.append(f"ml:{dialect_ml}({proba_ml:.2f})")
+    elif confident and source_ml == "ml":
+        # Both rule-based and ML are confident, prefer rule-based
+        probe.dialect_signals.append(f"ml:{dialect_ml}({proba_ml:.2f})")
+    elif source_ml == "ml":
+        # ML available but not confident, add as additional signal
+        probe.dialect_signals.append(f"ml:{dialect_ml}({proba_ml:.2f})")
     
     # boolean quick check
     a = send("1")

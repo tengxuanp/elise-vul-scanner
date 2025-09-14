@@ -136,5 +136,11 @@ def convert_evidence_to_result(evidence_data: Dict[str, Any]) -> Dict[str, Any]:
             "xss_context_source": evidence_data.get("xss_context_source"),
             "xss_context_ml_proba": evidence_data.get("xss_context_ml_proba")
         })
+    elif family == "sqli":
+        result.update({
+            "sqli_dialect": evidence_data.get("sqli_dialect"),
+            "sqli_dialect_source": evidence_data.get("sqli_dialect_source"),
+            "sqli_dialect_ml_proba": evidence_data.get("sqli_dialect_ml_proba")
+        })
     
     return result
