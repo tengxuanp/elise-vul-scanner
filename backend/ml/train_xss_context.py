@@ -18,6 +18,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.dummy import DummyClassifier
 from sklearn.preprocessing import LabelEncoder
 import joblib
 
@@ -101,13 +102,9 @@ def train_context_model(df: pd.DataFrame) -> Tuple[Any, Any, Dict[str, Any]]:
     X = np.hstack([tfidf_features.toarray(), binary_features])
     y = df['label_context'].values
     
-    # Encode labels
-    label_encoder = LabelEncoder()
-    y_encoded = label_encoder.fit_transform(y)
-    
     # Split data
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
     
     # Train model
@@ -121,11 +118,11 @@ def train_context_model(df: pd.DataFrame) -> Tuple[Any, Any, Dict[str, Any]]:
     
     # Evaluate
     y_pred = model.predict(X_test)
-    y_pred_labels = label_encoder.inverse_transform(y_pred)
-    y_test_labels = label_encoder.inverse_transform(y_test)
+    y_pred_labels = y_pred
+    y_test_labels = y_test
     
     # Cross-validation score
-    cv_scores = cross_val_score(model, X, y_encoded, cv=5, scoring='f1_weighted')
+    cv_scores = cross_val_score(model, X, y, cv=5, scoring='f1_weighted')
     
     metrics = {
         'accuracy': model.score(X_test, y_test),
@@ -133,7 +130,7 @@ def train_context_model(df: pd.DataFrame) -> Tuple[Any, Any, Dict[str, Any]]:
         'cv_std': cv_scores.std(),
         'classification_report': classification_report(y_test_labels, y_pred_labels, output_dict=True),
         'confusion_matrix': confusion_matrix(y_test_labels, y_pred_labels).tolist(),
-        'classes': label_encoder.classes_.tolist()
+        'classes': sorted(list(set(y.tolist())))
     }
     
     print(f"Context model accuracy: {metrics['accuracy']:.3f}")
@@ -152,6 +149,24 @@ def train_escaping_model(df: pd.DataFrame) -> Tuple[Any, Any, Dict[str, Any]]:
     # Combine features
     X = np.hstack([tfidf_features.toarray(), binary_features])
     y = df['label_escaping'].values
+    
+    # Handle degenerate case: only one class present
+    unique = np.unique(y)
+    if len(unique) < 2:
+        # Fit a constant predictor so inference has a usable model
+        constant_label = unique[0]
+        model = DummyClassifier(strategy='constant', constant=constant_label)
+        model.fit(X, y)
+        metrics = {
+            'accuracy': 1.0,
+            'cv_mean': 1.0,
+            'cv_std': 0.0,
+            'classification_report': {constant_label: {'precision': 1.0, 'recall': 1.0, 'f1-score': 1.0, 'support': int((y == constant_label).sum())}},
+            'confusion_matrix': [[int((y == constant_label).sum())]],
+            'classes': [constant_label]
+        }
+        print("Escaping dataset has a single class; using constant predictor.")
+        return model, vectorizer, metrics
     
     # Encode labels
     label_encoder = LabelEncoder()

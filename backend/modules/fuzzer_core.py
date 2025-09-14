@@ -18,6 +18,7 @@ from backend.modules.event_aggregator import get_aggregator
 # Import SQLi dialect and budget modules
 from backend.modules.payloads_sqli import sqli_payload_pool_for, sqli_payload_strings_for
 from backend.modules.sqli_dialect_rules import infer_sqli_dialect_from_text
+from backend.modules.ml.sqli_dialect_infer import predict_sqli_dialect
 from backend.modules.sqli_budget import get_sqli_budget
 
 def record_probe_attempt(target_id: str, family: str, success: bool):
@@ -219,7 +220,21 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 # Probe confirmed vulnerability
                 # For ML mode, continue to ML payload selection for all families
                 print(f"PROBE_CONFIRM_DEBUG fam={fam} plan={plan} plan_name={plan.name if plan else None} ctx_mode={ctx_mode}")
-                condition_met = (fam == "xss" and plan and plan.name == "auto") or (plan and plan.name == "auto" and ctx_mode in {"auto", "always", "force_ml"}) or ctx_mode in {"force_ml"} or (plan and plan.name == "ml_with_context")
+                # Decide if we continue to ML payload selection after a probe-confirmed vuln.
+                # - XSS: continue under ml_with_context, or auto with ctx_mode allowing ML, or force_ml.
+                # - SQLi: continue only if SQLi ML mode explicitly allows it (always/force_ml).
+                # - Redirect: keep probe-confirmed result (no ML path).
+                condition_met = False
+                if fam == "xss":
+                    if (plan and plan.name == "ml_with_context"):
+                        condition_met = True
+                    elif (plan and plan.name == "auto" and ctx_mode in {"auto", "always", "force_ml"}):
+                        condition_met = True
+                    elif ctx_mode in {"force_ml"}:
+                        condition_met = True
+                elif fam == "sqli":
+                    if sqli_ml_mode in {"always", "force_ml"}:
+                        condition_met = True
                 print(f"PROBE_CONFIRM_DEBUG condition_met={condition_met} for fam={fam}")
                 if condition_met:
                     print(f"PROBE_CONFIRMED continuing to ML payload selection for {fam} family")
@@ -229,6 +244,21 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 else:
                     # Return probe result immediately for non-XSS or non-auto strategies
                     ev = EvidenceRow.from_probe_confirm(target, fam, probe_bundle)
+                    # If this is SQLi, attempt to enrich with ML dialect prediction even on probe-only flow
+                    if fam == "sqli":
+                        try:
+                            # Prefer probe's error excerpt, otherwise use captured response text
+                            text = getattr(probe_bundle.sqli, "error_excerpt", None) or getattr(ev, "response_snippet_text", None) or getattr(ev, "response_snippet", None) or ""
+                            headers = getattr(ev, "response_headers", {}) or {}
+                            status = getattr(ev, "response_status", None)
+                            out = predict_sqli_dialect(text, headers, status)
+                            if out:
+                                ev.sqli_dialect = out.get("pred")
+                                ev.sqli_dialect_ml_proba = out.get("proba")
+                                ev.sqli_dialect_source = "ml"
+                        except Exception as _e:
+                            # Best-effort; keep probe result even if ML dialect fails
+                            pass
                     ev.cvss = cvss_for(fam, ev)
                     ev.why = unique_merge(ev.why, [reason_code])
                     
@@ -311,6 +341,13 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "skip_reason": "context_override"
                         }
                     }
+                    # Add SQLi dialect ML fields to result when available
+                    if fam == "sqli" and getattr(ev, "sqli_dialect", None):
+                        result_dict.update({
+                            "sqli_dialect": ev.sqli_dialect,
+                            "sqli_dialect_source": getattr(ev, "sqli_dialect_source", None),
+                            "sqli_dialect_ml_proba": getattr(ev, "sqli_dialect_ml_proba", None)
+                        })
                     
                     # Add XSS context fields if this is an XSS finding
                     if fam == "xss":

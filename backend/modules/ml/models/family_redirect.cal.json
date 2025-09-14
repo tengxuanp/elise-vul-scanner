@@ -1,1 +1,5 @@
-{"calibrated": true, "method": "isotonic", "n_bins": 10}
+{
+  "note": "Calibrated within model; p_cal comes from predict_proba",
+  "a": 1.0,
+  "b": 0.0
+}

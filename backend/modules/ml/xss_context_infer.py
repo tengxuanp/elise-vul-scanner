@@ -13,6 +13,8 @@ from pathlib import Path
 import joblib
 
 from backend.app_state import MODEL_DIR
+import joblib
+from sklearn.base import BaseEstimator
 
 
 class MockContextModel:
@@ -67,6 +69,8 @@ _context_model = None
 _context_vectorizer = None
 _escaping_model = None
 _escaping_vectorizer = None
+_ctx_pipeline = None  # optional sklearn Pipeline
+_esc_pipeline = None
 _model_loading_lock = Lock()
 
 def load_models() -> Tuple[bool, bool]:
@@ -90,8 +94,17 @@ def load_models() -> Tuple[bool, bool]:
             # Load context model
             context_model_path = MODEL_DIR / "xss_context_model.joblib"
             context_vectorizer_path = MODEL_DIR / "xss_context_vectorizer.joblib"
+            ctx_pipe_path = MODEL_DIR / "xss_context_pipeline.joblib"
             
-            if context_model_path.exists() and context_vectorizer_path.exists():
+            if ctx_pipe_path.exists():
+                try:
+                    global _ctx_pipeline
+                    _ctx_pipeline = joblib.load(ctx_pipe_path)
+                    context_loaded = True
+                    print("XSS context pipeline loaded successfully")
+                except Exception as e:
+                    print(f"Failed to load XSS context pipeline: {e}")
+            if _ctx_pipeline is None and context_model_path.exists() and context_vectorizer_path.exists():
                 # Try loading with compatibility options for numpy 2.x
                 _context_model = joblib.load(context_model_path, mmap_mode=None)
                 _context_vectorizer = joblib.load(context_vectorizer_path, mmap_mode=None)
@@ -113,8 +126,17 @@ def load_models() -> Tuple[bool, bool]:
             # Load escaping model
             escaping_model_path = MODEL_DIR / "xss_escaping_model.joblib"
             escaping_vectorizer_path = MODEL_DIR / "xss_escaping_vectorizer.joblib"
+            esc_pipe_path = MODEL_DIR / "xss_escaping_pipeline.joblib"
             
-            if escaping_model_path.exists() and escaping_vectorizer_path.exists():
+            if esc_pipe_path.exists():
+                try:
+                    global _esc_pipeline
+                    _esc_pipeline = joblib.load(esc_pipe_path)
+                    escaping_loaded = True
+                    print("XSS escaping pipeline loaded successfully")
+                except Exception as e:
+                    print(f"Failed to load XSS escaping pipeline: {e}")
+            if _esc_pipeline is None and escaping_model_path.exists() and escaping_vectorizer_path.exists():
                 # Try loading with compatibility options for numpy 2.x
                 _escaping_model = joblib.load(escaping_model_path, mmap_mode=None)
                 _escaping_vectorizer = joblib.load(escaping_vectorizer_path, mmap_mode=None)
@@ -287,16 +309,24 @@ def predict_xss_context(text_window: str, canary_pos: int) -> Optional[Dict[str,
             return None
     
     try:
-        # Extract features using the same method as training
-        text, binary_features = _extract_features(text_window)
-        
-        # Transform text
+        if _ctx_pipeline is not None:
+            # Use pipeline on augmented window text
+            text_aug, _ = extract_features_for_inference(text_window, canary_pos)
+            proba = _ctx_pipeline.predict_proba([text_aug])[0]
+            if hasattr(_ctx_pipeline.named_steps['clf'], 'classes_'):
+                classes = _ctx_pipeline.named_steps['clf'].classes_
+            else:
+                # Fallback: infer from meta if needed
+                classes = np.array(['html_body','attr','js_string','url','css','comment','json'])
+            idx = int(np.argmax(proba))
+            pred_class = classes[idx]
+            confidence = float(proba[idx])
+            return {"pred": pred_class, "proba": confidence, "all_probas": {cls: float(p) for cls,p in zip(classes, proba)}}
+
+        # Legacy path
+        text, binary_features = extract_features_for_inference(text_window, canary_pos)
         X_text = _context_vectorizer.transform([text])
-        
-        # Combine text and binary features
         X = np.hstack([X_text.toarray(), binary_features])
-        
-        # Predict
         pred_proba = _context_model.predict_proba(X)[0]
         pred_class_idx = np.argmax(pred_proba)
         pred_class = _context_model.classes_[pred_class_idx]
@@ -323,16 +353,22 @@ def predict_xss_escaping(text_window: str, canary_pos: int) -> Optional[Dict[str
             return None
     
     try:
-        # Extract features using the same method as training
-        text, binary_features = _extract_features(text_window)
-        
-        # Transform text
+        if _esc_pipeline is not None:
+            text_aug, _ = extract_features_for_inference(text_window, canary_pos)
+            proba = _esc_pipeline.predict_proba([text_aug])[0]
+            if hasattr(_esc_pipeline.named_steps['clf'], 'classes_'):
+                classes = _esc_pipeline.named_steps['clf'].classes_
+            else:
+                classes = np.array(['raw','html','url','js'])
+            idx = int(np.argmax(proba))
+            pred_class = classes[idx]
+            confidence = float(proba[idx])
+            return {"pred": pred_class, "proba": confidence, "all_probas": {cls: float(p) for cls,p in zip(classes, proba)}}
+
+        # Legacy path
+        text, binary_features = extract_features_for_inference(text_window, canary_pos)
         X_text = _escaping_vectorizer.transform([text])
-        
-        # Combine text and binary features
         X = np.hstack([X_text.toarray(), binary_features])
-        
-        # Predict
         pred_proba = _escaping_model.predict_proba(X)[0]
         pred_class_idx = np.argmax(pred_proba)
         pred_class = _escaping_model.classes_[pred_class_idx]

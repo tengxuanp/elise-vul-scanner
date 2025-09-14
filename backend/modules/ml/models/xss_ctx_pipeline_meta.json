@@ -1,0 +1,28 @@
+{
+  "context_classes": [
+    "attr",
+    "comment",
+    "css",
+    "html_body",
+    "js_string",
+    "json",
+    "url"
+  ],
+  "escaping_classes": [
+    "html",
+    "js",
+    "raw",
+    "url"
+  ],
+  "sklearn_version": "1.7.1",
+  "numpy_version": "2.2.1",
+  "platform": "macOS-15.6.1-arm64-arm-64bit",
+  "metrics": {
+    "context": {
+      "acc": 1.0
+    },
+    "escaping": {
+      "acc": 0.6405
+    }
+  }
+}

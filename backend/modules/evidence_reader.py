@@ -115,7 +115,7 @@ def convert_evidence_to_result(evidence_data: Dict[str, Any]) -> Dict[str, Any]:
         "family": family,  # Add family field for findings aggregation
         "decision": decision,
         "why": why,
-        "cvss": cvss if cvss_base > 0 else None,
+        "cvss": cvss if cvss_score > 0 else None,
         "rank_source": rank_source,
         "provenance": provenance,  # Add provenance field
         "ml_role": "prioritization" if rank_source == "ml" else None,

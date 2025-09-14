@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { TriangleAlert, ShieldCheck, Database, Link as LinkIcon, ChevronDown, ChevronRight } from "lucide-react";
 import { humanizeWhyCodes } from "../../lib/microcopy";
 
@@ -318,6 +318,81 @@ const Microcopy = ({ why }) => {
 export default function FindingsTable({ results=[], onView }) {
   if (!results.length) return <div className="text-sm text-zinc-500 p-4">No results yet.</div>;
 
+  // Quick filters and sorting state
+  const [familyFilter, setFamilyFilter] = useState('all'); // all|xss|sqli|redirect
+  const [sourceFilter, setSourceFilter] = useState('all'); // all|probe|ml
+  const [onlyConfident, setOnlyConfident] = useState(false); // ML p>0.7
+  const [dialectFilter, setDialectFilter] = useState('all'); // all|mysql|postgresql|mssql|sqlite|oracle|unknown
+  const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState('cvss'); // cvss|family|proba|target
+  const [sortDir, setSortDir] = useState('desc'); // asc|desc
+
+  const normalized = useMemo(() => {
+    // Normalize a few fields up-front to simplify filtering/sorting
+    return (results || []).map(r => {
+      const sqliSrc = (r.sqli_dialect_source || '').toLowerCase();
+      const sqliMl = sqliSrc.startsWith('ml');
+      const sqliProba = typeof r.sqli_dialect_ml_proba === 'number' ? r.sqli_dialect_ml_proba : null;
+      const cvssScore = r?.cvss?.base ?? r?.cvss?.score ?? r?.cvss ?? 0;
+      const family = (r.family || '').toLowerCase();
+      const url = r?.target?.url || r?.url || '';
+      const param = r?.target?.param || r?.param || '';
+      const paramIn = r?.target?.param_in || r?.param_in || '';
+      const text = `${family} ${url} ${paramIn}:${param} ${(r.why||[]).join(' ')} ${(r.sqli_dialect||'')}`.toLowerCase();
+      return {
+        ...r,
+        _cvss: Number(cvssScore) || 0,
+        _sqliMl: sqliMl,
+        _sqliConfident: sqliMl && (Number(sqliProba) > 0.7),
+        _sqliProba: sqliProba,
+        _text: text,
+      };
+    });
+  }, [results]);
+
+  const filtered = useMemo(() => {
+    return normalized.filter(r => {
+      // family filter
+      if (familyFilter !== 'all' && r.family !== familyFilter) return false;
+      // source filter (probe vs ml) uses dialect for SQLi and xss_context_source for XSS
+      if (sourceFilter !== 'all') {
+        const xssSrc = (r.xss_context_source || '').toLowerCase();
+        const sqliSrc = (r.sqli_dialect_source || '').toLowerCase();
+        const isProbe = (r.rank_source === 'probe_only') || (!xssSrc && !sqliSrc) || (r.family === 'sqli' && !sqliSrc);
+        const isMl = (xssSrc === 'ml') || sqliSrc.startsWith('ml') || r.rank_source === 'ml';
+        if (sourceFilter === 'probe' && !isProbe) return false;
+        if (sourceFilter === 'ml' && !isMl) return false;
+      }
+      // confident ML filter (applies to both XSS and SQLi)
+      if (onlyConfident) {
+        const xssConf = (r.xss_context_source === 'ml') && (Number(r.xss_context_ml_proba) > 0.7);
+        const sqliConf = r._sqliConfident;
+        if (!(xssConf || sqliConf)) return false;
+      }
+      // dialect filter (only when family is sqli)
+      if (dialectFilter !== 'all' && r.family === 'sqli') {
+        const d = (r.sqli_dialect || 'unknown').toLowerCase();
+        if (d !== dialectFilter) return false;
+      }
+      // text search
+      if (search && !r._text.includes(search.toLowerCase())) return false;
+      return true;
+    });
+  }, [normalized, familyFilter, sourceFilter, onlyConfident, dialectFilter, search]);
+
+  const sorted = useMemo(() => {
+    const arr = [...filtered];
+    arr.sort((a,b) => {
+      const dir = sortDir === 'asc' ? 1 : -1;
+      if (sortKey === 'cvss') return dir * ((a._cvss||0) - (b._cvss||0));
+      if (sortKey === 'family') return dir * String(a.family||'').localeCompare(String(b.family||''));
+      if (sortKey === 'proba') return dir * ((Number(a._sqliProba||a.xss_context_ml_proba||0)) - (Number(b._sqliProba||b.xss_context_ml_proba||0)));
+      if (sortKey === 'target') return dir * String(a?.target?.url||a.url||'').localeCompare(String(b?.target?.url||b.url||''));
+      return 0;
+    });
+    return arr.reverse(); // because above diff is a-b; then reverse to apply desc default
+  }, [filtered, sortKey, sortDir]);
+
   // Group results by decision
   const grouped = results.reduce((acc, result) => {
     const decision = result.decision;
@@ -388,6 +463,12 @@ export default function FindingsTable({ results=[], onView }) {
             family={result.family} 
             telemetry={result.telemetry}
           />
+          {/* Rank source chip to show payload prioritization origin */}
+          {result.rank_source && (
+            <span className={`px-2 py-0.5 rounded text-xs ${result.rank_source==='ml' ? 'bg-purple-100 text-purple-700' : result.rank_source==='ctx_pool' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'}`} title={`Ranking source: ${result.rank_source}`}>
+              {result.rank_source === 'ml' ? 'Rank: model' : result.rank_source === 'ctx_pool' ? 'Rank: ctx_pool' : 'Rank: defaults'}
+            </span>
+          )}
         </div>
       </td>
       <td className="p-2">
@@ -439,20 +520,20 @@ export default function FindingsTable({ results=[], onView }) {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-zinc-500">
-                  <th className="p-2">Family</th>
-                  <th className="p-2">Target</th>
+                <tr className="text-left text-zinc-500 sticky top-0 bg-white">
+                  <th className="p-2 cursor-pointer" onClick={()=>{setSortKey('family'); setSortDir(d=>d==='asc'?'desc':'asc')}}>Family</th>
+                  <th className="p-2 cursor-pointer" onClick={()=>{setSortKey('target'); setSortDir(d=>d==='asc'?'desc':'asc')}}>Target</th>
                   <th className="p-2">Param</th>
                   <th className="p-2">Decision</th>
                   <th className="p-2">Decision Source</th>
-                  <th className="p-2">ML Proba</th>
+                  <th className="p-2 cursor-pointer" onClick={()=>{setSortKey('proba'); setSortDir(d=>d==='asc'?'desc':'asc')}}>ML Proba</th>
                   <th className="p-2">SQLi Dialect</th>
-                  <th className="p-2">CVSS</th>
+                  <th className="p-2 cursor-pointer" onClick={()=>{setSortKey('cvss'); setSortDir(d=>d==='asc'?'desc':'asc')}}>CVSS</th>
                   <th className="p-2"></th>
                 </tr>
               </thead>
               <tbody>
-                {results.map((result, index) => renderResultRow(result, index))}
+                {sorted.map((result, index) => renderResultRow(result, index))}
               </tbody>
             </table>
           </div>
@@ -461,8 +542,29 @@ export default function FindingsTable({ results=[], onView }) {
     );
   };
 
+  // Quick filter bar
+  const FilterBar = () => (
+    <div className="flex flex-wrap gap-2 items-center p-2 bg-gray-50 rounded mb-3">
+      <span className="text-xs text-gray-600">Filter:</span>
+      {['all','xss','sqli','redirect'].map(f => (
+        <button key={f} onClick={()=>setFamilyFilter(f)} className={`px-2 py-0.5 rounded text-xs ${familyFilter===f?'bg-zinc-900 text-white':'bg-white text-gray-700 border'}`}>{f}</button>
+      ))}
+      <span className="ml-2 text-xs text-gray-600">Source:</span>
+      {['all','probe','ml'].map(f => (
+        <button key={f} onClick={()=>setSourceFilter(f)} className={`px-2 py-0.5 rounded text-xs ${sourceFilter===f?'bg-purple-700 text-white':'bg-white text-gray-700 border'}`}>{f}</button>
+      ))}
+      <label className="ml-2 text-xs flex items-center gap-1"><input type="checkbox" checked={onlyConfident} onChange={e=>setOnlyConfident(e.target.checked)} /> Confident ML</label>
+      <span className="ml-2 text-xs text-gray-600">Dialect:</span>
+      {['all','sqlite','mysql','postgresql','mssql','oracle','unknown'].map(d => (
+        <button key={d} onClick={()=>setDialectFilter(d)} className={`px-2 py-0.5 rounded text-xs ${dialectFilter===d?'bg-green-700 text-white':'bg-white text-gray-700 border'}`}>{d}</button>
+      ))}
+      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search…" className="ml-auto px-2 py-1 text-xs border rounded w-40" />
+    </div>
+  );
+
   return (
     <div>
+      <FilterBar />
       {grouped.positive && renderSection("Positive", grouped.positive, "positive")}
       {grouped.suspected && renderSection("Suspected", grouped.suspected, "suspected")}
       {grouped.clean && renderSection("Clean", grouped.clean, "clean")}

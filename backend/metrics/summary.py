@@ -1,5 +1,5 @@
 """
-Summary metrics computation for XSS context analysis.
+Summary metrics computation for XSS context analysis and SQLi dialect analysis.
 """
 
 from typing import Optional, List, Dict, Any
@@ -66,10 +66,14 @@ def finalize_summary(job, summary: Dict[str, Any], rows: List[Dict[str, Any]]) -
 
     # 2) XSS context metrics with correct Top-K
     plan_top_k = summary.get("top_k") or (job.meta or {}).get("xss_top_k") or 0
-    summary["meta"] = finalize_xss_context_metrics_robust(job.meta or {}, rows, xss_top_k_default=_to_int(plan_top_k, 0))
+    meta = finalize_xss_context_metrics_robust(job.meta or {}, rows, xss_top_k_default=_to_int(plan_top_k, 0))
+
+    # 3) SQLi dialect analysis metrics
+    meta = finalize_sqli_dialect_metrics(meta, rows)
 
     # Optionally persist meta back to job
-    job.meta = summary["meta"]
+    summary["meta"] = meta
+    job.meta = meta
     return summary
 
 def finalize_xss_context_metrics(meta: Dict[str, Any], rows: List[Dict[str, Any]], *, ui_top_k_default: Optional[int] = None) -> Dict[str, Any]:
@@ -145,4 +149,43 @@ def finalize_xss_context_metrics(meta: Dict[str, Any], rows: List[Dict[str, Any]
     # Log telemetry summary
     print(f"XSS_TELEMETRY ml_final={meta.get('xss_final_from_ml', 0)} rs_ml={xss_rank_source_ml} used={xss_context_pool_used} saved={saved}")
     
+    return meta
+
+def finalize_sqli_dialect_metrics(meta: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Compute SQLi dialect analysis metrics from result rows.
+
+    Produces into meta:
+      - sqli_positives_total: count of SQLi positives
+      - sqli_dialect_ml_invoked: count where sqli_dialect_source startswith "ml"
+      - sqli_dialect_ml_confident: count where source startswith "ml" and proba > 0.7
+      - sqli_dialect_dist: map of dialect -> count
+    """
+    meta = dict(meta or {})
+    total = 0
+    ml_invoked = 0
+    ml_confident = 0
+    dist: Dict[str, int] = {}
+
+    for r in rows:
+        if r.get("family") != "sqli":
+            continue
+        if r.get("decision") != "positive":
+            continue
+        total += 1
+        d = (r.get("sqli_dialect") or "unknown").lower()
+        dist[d] = dist.get(d, 0) + 1
+        src = (r.get("sqli_dialect_source") or "").lower()
+        if src.startswith("ml"):
+            ml_invoked += 1
+            try:
+                p = float(r.get("sqli_dialect_ml_proba") or 0.0)
+            except Exception:
+                p = 0.0
+            if p > 0.7:
+                ml_confident += 1
+
+    meta["sqli_positives_total"] = total
+    meta["sqli_dialect_ml_invoked"] = ml_invoked
+    meta["sqli_dialect_ml_confident"] = ml_confident
+    meta["sqli_dialect_dist"] = dist
     return meta

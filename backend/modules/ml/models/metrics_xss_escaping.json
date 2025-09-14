@@ -1,0 +1,21 @@
+{
+  "accuracy": 1.0,
+  "cv_mean": 1.0,
+  "cv_std": 0.0,
+  "classification_report": {
+    "raw": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1-score": 1.0,
+      "support": 887
+    }
+  },
+  "confusion_matrix": [
+    [
+      887
+    ]
+  ],
+  "classes": [
+    "raw"
+  ]
+}

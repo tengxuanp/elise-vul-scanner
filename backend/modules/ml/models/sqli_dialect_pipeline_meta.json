@@ -1,0 +1,21 @@
+{
+  "classes": [
+    "mssql",
+    "mysql",
+    "oracle",
+    "postgresql",
+    "sqlite",
+    "unknown"
+  ],
+  "accuracy": 0.9047619047619048,
+  "tau_unknown": 0.6,
+  "sklearn_version": "1.7.1",
+  "numpy_version": "2.2.1",
+  "platform": "macOS-15.6.1-arm64-arm-64bit",
+  "features": {
+    "word_ngrams": "1-2",
+    "char_ngrams": "3-5",
+    "max_word": 6000,
+    "max_char": 8000
+  }
+}

@@ -62,6 +62,19 @@ def family_from_signals(row: dict) -> tuple[str, float]:
 
     return "none", 0.6  # negative / no hit
 
+def _entropy(s: str) -> float:
+    try:
+        if not s:
+            return 0.0
+        from math import log2
+        from collections import Counter
+        c = Counter(s)
+        n = float(len(s))
+        return -sum((v/n) * log2(v/n) for v in c.values())
+    except Exception:
+        return 0.0
+
+
 def extract_features(row: dict) -> dict:
     req = row.get("request") or {}
     url = row.get("url") or req.get("url") or ""
@@ -78,13 +91,21 @@ def extract_features(row: dict) -> dict:
     payload_flags = {
         "has_quote": "'" in payload or '"' in payload,
         "has_angle": "<" in payload or ">" in payload,
+        "has_lt_gt": ("<" in payload and ">" in payload),
         "has_and": " and " in f" {p} ",
         "has_or": " or " in f" {p} ",
         "has_union": "union" in p,
         "has_select": "select" in p,
         "has_script": "<script" in p,
         "has_urlenc_pct": "%" in payload,  # rough
+        "has_event_handler": bool(re.search(r"on[a-z]+=", p)),
+        "has_comment_seq": ("--" in p) or ("/*" in p and "*/" in p),
     }
+    # SQL keyword count
+    kw_list = ["select","union","and","or","from","where","sleep","benchmark","insert","update","delete"]
+    sql_kw_hits = sum(1 for kw in kw_list if kw in p)
+    # Balanced quotes heuristic
+    balanced_quotes = (payload.count("'") % 2 == 0) and (payload.count('"') % 2 == 0)
 
     # Delta features
     d = {}
@@ -104,6 +125,39 @@ def extract_features(row: dict) -> dict:
         "external_redirect": bool(hits.get("open_redirect") or sig.get("external_redirect") or (sig.get("open_redirect") or {}).get("open_redirect") is True),
     }
 
+    # Response/context derived flags
+    status = row.get("response_status") or row.get("status") or 0
+    try:
+        status = int(status)
+    except Exception:
+        status = 0
+    status_class = status // 100
+    status_flags = {f"status_class_{i}": int(status_class == i) for i in [2,3,4,5]}
+    ct = (row.get("content_type") or row.get("response_headers",{}).get("content-type") or "").lower()
+    ct_flags = {
+        "content_type_html": int("text/html" in ct),
+        "content_type_json": int("application/json" in ct)
+    }
+    xss_ctx = (row.get("xss_context") or "").lower()
+    ctx_flags = {
+        "ctx_html": int(xss_ctx in {"html","html_body"}),
+        "ctx_attr": int(xss_ctx == "attr"),
+        "ctx_js": int(xss_ctx in {"js","js_string"}),
+    }
+
+    # Param + payload analytics
+    param_len = len(param or "")
+    urlenc_ratio = (payload.count('%') / max(1, len(payload))) if payload else 0.0
+    alnum = sum(ch.isalnum() for ch in payload)
+    digits = sum(ch.isdigit() for ch in payload)
+    symbols = sum(not ch.isalnum() and not ch.isspace() for ch in payload)
+    n = max(1, len(payload))
+    alnum_ratio = alnum / n
+    digit_ratio = digits / n
+    symbol_ratio = symbols / n
+    double_encoded_hint = int('%25' in p or '%%' in p)
+    entropy = _entropy(payload)
+
     return {
         "host": host,
         "path": path,
@@ -112,8 +166,30 @@ def extract_features(row: dict) -> dict:
         "param_loc": ploc or ("query" if "?" in url else ""),
         "payload_hash": short_hash(payload),
         "payload_len": len(payload),
-        **{f"pf_{k}": int(v) for k, v in payload_flags.items()},
-        **{f"sig_{k}": int(v) for k, v in sig_flags.items()},
+        "param_len": param_len,
+        "alnum_ratio": alnum_ratio,
+        "digit_ratio": digit_ratio,
+        "symbol_ratio": symbol_ratio,
+        "url_encoded_ratio": urlenc_ratio,
+        "double_encoded_hint": double_encoded_hint,
+        "shannon_entropy": entropy,
+        "has_quote": int(payload_flags["has_quote"]),
+        "has_angle": int(payload_flags["has_angle"]),
+        "has_lt_gt": int(payload_flags["has_lt_gt"]),
+        "has_script_tag": int(payload_flags["has_script"]),
+        "has_event_handler": int(payload_flags["has_event_handler"]),
+        "sql_kw_hits": int(sql_kw_hits),
+        "balanced_quotes": int(balanced_quotes),
+        "has_comment_seq": int(payload_flags["has_comment_seq"]),
+        # Probe-style features expected by infer_ranker
+        "probe_sql_error": int(sig_flags["sql_error"]),
+        "probe_timing_delta_gt2s": int((row.get("latency_ms_delta") or 0) >= 2000),
+        "probe_reflection_html": int(ctx_flags["ctx_html"] and sig_flags["xss_reflected"]),
+        "probe_reflection_js": int(ctx_flags["ctx_js"] and sig_flags["xss_reflected"]),
+        "probe_redirect_location_reflects": int(sig_flags["external_redirect"]),
+        **status_flags,
+        **ct_flags,
+        **ctx_flags,
         **d,
     }
 
@@ -136,16 +212,39 @@ def main():
 
     rows = []
     for f in files:
-        with open(f, "r", encoding="utf-8", errors="ignore") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
+        # Support both NDJSON (.jsonl) and one-JSON-per-file (.json)
+        try:
+            if f.endswith('.jsonl'):
+                with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        rows.append(obj)
+            elif f.endswith('.json'):
                 try:
-                    obj = json.loads(line)
+                    obj = json.loads(Path(f).read_text(encoding='utf-8', errors='ignore'))
+                    rows.append(obj)
                 except Exception:
                     continue
-                rows.append(obj)
+            else:
+                # Default to NDJSON behavior
+                with open(f, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = json.loads(line)
+                        except Exception:
+                            continue
+                        rows.append(obj)
+        except Exception:
+            continue
 
     # de-dup by (host,path,method,param,payload_hash)
     seen = set()
@@ -153,6 +252,13 @@ def main():
     per_host = defaultdict(list)
 
     for r in rows:
+        # Map evidence schema -> expected fields
+        if 'signals' not in r and 'probe_signals' in r:
+            r['signals'] = r.get('probe_signals')
+        if 'url' not in r and r.get('target') and isinstance(r['target'], dict):
+            r['url'] = r['target'].get('url')
+            r['method'] = r['target'].get('method', r.get('method','GET'))
+            r['param'] = r['target'].get('param', r.get('param',''))
         feats = extract_features(r)
         y, conf = family_from_signals(r)
         if conf < args.min_conf:

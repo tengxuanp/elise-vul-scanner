@@ -123,6 +123,14 @@ def get_healthz_data():
         sqli_dialect_ml["fallback_last_error"] = sqli_dialect_fallback.get("last_error")
     except Exception:
         pass
+
+    # XSS context/escaping models health
+    xss_ctx_ml = {"context_model_loaded": False, "escaping_model_loaded": False}
+    try:
+        from backend.modules.ml.xss_context_infer import get_model_info as _xss_info
+        xss_ctx_ml = _xss_info()
+    except Exception as e:
+        fails.append(f"XSS context ML health failed: {e}")
     
     return {
         "ok": not bool(fails), 
@@ -146,7 +154,8 @@ def get_healthz_data():
         "checks": fails,
         "failed_checks": fails,
         "sqli_dialect_ml": sqli_dialect_ml,
-        "sqli_dialect_fallback": sqli_dialect_fallback
+        "sqli_dialect_fallback": sqli_dialect_fallback,
+        "xss_context_ml": xss_ctx_ml
     }
 
 @router.get("/healthz")

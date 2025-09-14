@@ -18,6 +18,7 @@ from backend.app_state import MODEL_DIR
 _dialect_model = None
 _dialect_vectorizer = None
 _alt_model = None  # fallback: may be a Pipeline or a compact classifier
+_tau_unknown = 0.6
 _load_lock = Lock()
 
 # Map label variants to canonical names used across the codebase
@@ -66,6 +67,19 @@ def load_models() -> bool:
                 except Exception as e:
                     print(f"Failed to load SQLi alt-model: {e}")
 
+            # Load pipeline meta (for tau_unknown) if present
+            try:
+                import json
+                meta_path = MODEL_DIR / 'sqli_dialect_pipeline_meta.json'
+                if meta_path.exists():
+                    data = json.loads(meta_path.read_text())
+                    tau = data.get('tau_unknown')
+                    if isinstance(tau, (int, float)):
+                        global _tau_unknown
+                        _tau_unknown = float(tau)
+            except Exception:
+                pass
+
             if not loaded_any:
                 print(f"SQLi dialect assets missing: model={model_path.exists()} vectorizer={vectorizer_path.exists()} alt_model={alt_model_path.exists()}")
                 return False
@@ -113,8 +127,25 @@ def _predict_with_model(text: str) -> Optional[Tuple[str, float, Dict[str, float
         except Exception as e:
             print(f"Primary model/vectorizer prediction failed: {e}")
 
-    # 2) Skip alt-model text prediction by default (not a Pipeline in our assets)
-    #    We rely on numeric fallback below when alt-model is present.
+    # 2) If alt-model is a Pipeline, it may accept raw text directly
+    if _alt_model is not None:
+        try:
+            proba_row = _alt_model.predict_proba([text])[0]
+            classes = getattr(_alt_model, 'classes_', None)
+            if classes is None:
+                return None
+            best_idx = int(np.argmax(proba_row))
+            max_p = float(proba_row[best_idx])
+            raw_label = str(classes[best_idx])
+            label = _LABEL_CANON.get(raw_label, raw_label)
+            if max_p < _tau_unknown:
+                label = 'unknown'
+            all_probas: Dict[str, float] = {}
+            for cls, p in zip(classes, proba_row):
+                all_probas[_LABEL_CANON.get(str(cls), str(cls))] = float(p)
+            return label, max_p, all_probas
+        except Exception as e:
+            print(f"Alt-model direct text prediction failed: {e}")
 
     # 3) Try numeric feature fallback for compact classifiers
     try:

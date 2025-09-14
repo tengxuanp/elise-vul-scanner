@@ -468,6 +468,60 @@ const SummaryPanel = ({
           )}
         </div>
       )}
+
+      {/* SQLi Dialect Analysis */}
+      {assessmentResult?.results && assessmentResult.results.some(r => r.family === 'sqli' && r.decision === 'positive') && (() => {
+        const sqliRows = (assessmentResult.results || []).filter(r => r.family === 'sqli' && r.decision === 'positive');
+        const sqliPos = sqliRows.length;
+        const mlRows = sqliRows.filter(r => (r.sqli_dialect_source || '').toLowerCase().startsWith('ml'));
+        const mlInvoked = mlRows.length;
+        const mlConfident = mlRows.filter(r => (r.sqli_dialect_ml_proba || 0) > 0.7).length;
+        const dist = {};
+        sqliRows.forEach(r => {
+          const d = (r.sqli_dialect || 'unknown').toLowerCase();
+          dist[d] = (dist[d] || 0) + 1;
+        });
+        const entries = Object.entries(dist);
+        return (
+        <div className="mt-6 pt-4 border-t">
+          <h4 className="font-medium text-sm text-gray-700 mb-3">SQLi Dialect Analysis</h4>
+          <div className="grid grid-cols-2 gap-4 text-sm">
+            <div>
+              <div className="text-gray-600">Dialect ML mode</div>
+              <div className="font-semibold">{meta?.sqli_ml_mode || 'auto'}</div>
+            </div>
+            <div>
+              <div className="text-gray-600">SQLi positives</div>
+              <div className="font-semibold">{sqliPos}</div>
+            </div>
+            <div>
+              <div className="text-gray-600">ML invoked</div>
+              <div className="font-semibold text-purple-600">{mlInvoked}</div>
+            </div>
+            <div>
+              <div className="text-gray-600">ML confident</div>
+              <div className="font-semibold text-green-600">{mlConfident}</div>
+            </div>
+          </div>
+          {entries.length > 0 && (
+            <div className="mt-3">
+              <div className="text-gray-600 text-xs mb-2">Dialect Distribution</div>
+              <div className="flex flex-wrap gap-1">
+                {entries.map(([dialect, count]) => (
+                  <span
+                    key={dialect}
+                    className="px-2 py-1 rounded text-xs bg-gray-100 text-gray-700"
+                    title={`${dialect}: ${count} positives`}
+                  >
+                    {dialect}: {count}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+        );
+      })()}
     </div>
   );
 };

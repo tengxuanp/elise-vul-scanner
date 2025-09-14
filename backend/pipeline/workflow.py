@@ -199,6 +199,32 @@ def create_assessment_response_from_results(results: List[Dict[str, Any]], job_i
             meta["sqli_ml_mode"] = list(detected_sqli_ml_modes)[0]
     except Exception:
         pass
+
+    # SQLi dialect analysis (summary-level, like XSS section)
+    try:
+        sqli_rows = [r for r in results if r.get("family") == "sqli" and r.get("decision") == "positive"]
+        meta["sqli_positives_total"] = len(sqli_rows)
+        # ML invoked/confident counts
+        ml_invoked = 0
+        ml_confident = 0
+        dist = {}
+        for r in sqli_rows:
+            d = (r.get("sqli_dialect") or "unknown").lower()
+            dist[d] = dist.get(d, 0) + 1
+            src = (r.get("sqli_dialect_source") or "").lower()
+            if src.startswith("ml"):
+                ml_invoked += 1
+                try:
+                    p = float(r.get("sqli_dialect_ml_proba") or 0.0)
+                except Exception:
+                    p = 0.0
+                if p > 0.7:
+                    ml_confident += 1
+        meta["sqli_dialect_ml_invoked"] = ml_invoked
+        meta["sqli_dialect_ml_confident"] = ml_confident
+        meta["sqli_dialect_dist"] = dist
+    except Exception:
+        pass
     
     # Indicate that we reused persisted evidence rather than re-running
     meta["persisted_reused"] = True
