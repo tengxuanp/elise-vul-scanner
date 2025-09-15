@@ -11,9 +11,11 @@ export default function CrawlPage() {
     target_url: '',
     max_depth: 2,
     max_endpoints: 30,
+    max_seconds: 60,
     submit_get_forms: true,
     submit_post_forms: true,
-    click_buttons: true
+    click_buttons: true,
+    seeds_text: ''
   });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -44,9 +46,15 @@ export default function CrawlPage() {
         crawl_opts: {
           max_depth: parseInt(formData.max_depth),
           max_endpoints: parseInt(formData.max_endpoints),
+          max_seconds: formData.max_seconds ? parseInt(formData.max_seconds) : undefined,
           submit_get_forms: formData.submit_get_forms,
           submit_post_forms: formData.submit_post_forms,
-          click_buttons: formData.click_buttons
+          click_buttons: formData.click_buttons,
+          // Parse seeds (comma or newline separated)
+          seeds: (formData.seeds_text || '')
+            .split(/\n|,/) 
+            .map(s => s.trim())
+            .filter(Boolean)
         }
       };
 
@@ -190,6 +198,21 @@ export default function CrawlPage() {
                   </div>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Time Budget (seconds)
+                  </label>
+                  <input
+                    type="number"
+                    name="max_seconds"
+                    value={formData.max_seconds}
+                    onChange={handleInputChange}
+                    min="10"
+                    max="600"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
                 <div className="space-y-2">
                   <label className="flex items-center">
                     <input
@@ -225,6 +248,23 @@ export default function CrawlPage() {
                   </label>
                 </div>
 
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Seed Routes (optional)
+                  </label>
+                  <textarea
+                    name="seeds_text"
+                    value={formData.seeds_text}
+                    onChange={handleInputChange}
+                    rows={3}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder={`One per line or comma-separated. Examples:\n/#/\n/#/login\n/#/search`}
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    For SPAs (e.g., Juice Shop), seeding common hash routes speeds up discovery.
+                  </p>
+                </div>
+
                 <button
                   type="submit"
                   disabled={loading}
@@ -244,6 +284,7 @@ export default function CrawlPage() {
             {/* Results */}
             <div className="bg-white rounded-lg shadow p-6">
               <h2 className="text-xl font-semibold mb-4">Crawl Results</h2>
+              <p className="text-xs text-gray-500 mb-3">Note: Server URLs don't include hash fragments. For SPAs, see the <span className="font-medium">view</span> field for the router route (e.g., <code>#/search</code>).</p>
               
               {result ? (
                 <div className="space-y-4">
@@ -288,6 +329,9 @@ export default function CrawlPage() {
                                 <p className="text-sm font-medium text-gray-900 truncate">
                                   {endpoint.method} {endpoint.url}
                                 </p>
+                                {endpoint.spa_view && (
+                                  <p className="text-xs text-gray-500 truncate">view: {endpoint.spa_view}</p>
+                                )}
                                 {endpoint.params && endpoint.params.length > 0 && (
                                   <p className="text-xs text-gray-500">
                                     {endpoint.params.length} parameter(s)

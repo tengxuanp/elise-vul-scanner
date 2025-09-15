@@ -1,6 +1,6 @@
 # Makefile for Elise Project
 
-.PHONY: lab lab-down playwright models docker-up docker-down docker-build docker-logs help
+.PHONY: lab lab-down dvwa-up dvwa-down benchmark-up benchmark-down labs-up labs-down labs-logs playwright models docker-up docker-down docker-build docker-logs help
 
 # Start the vulnerable lab environment
 lab:
@@ -57,6 +57,13 @@ help:
 	@echo "Available targets:"
 	@echo "  lab          - Start the vulnerable lab environment"
 	@echo "  lab-down     - Stop the vulnerable lab environment"
+	@echo "  dvwa-up      - Start DVWA (PHP/Apache + MariaDB)"
+	@echo "  dvwa-down    - Stop DVWA"
+	@echo "  benchmark-up - Start OWASP Benchmark (Java/Tomcat, HTTPS:8443)"
+	@echo "  benchmark-down- Stop OWASP Benchmark"
+	@echo "  labs-up      - Start both DVWA and OWASP Benchmark"
+	@echo "  labs-down    - Stop both DVWA and OWASP Benchmark"
+	@echo "  labs-logs    - Tail logs for DVWA/Benchmark labs"
 	@echo "  playwright   - Install Playwright browsers for development"
 	@echo "  models       - Train ML models with synthetic data"
 	@echo "  docker-build - Build all Docker images"
@@ -64,3 +71,43 @@ help:
 	@echo "  docker-down  - Stop Elise stack"
 	@echo "  docker-logs  - Show logs for all services"
 	@echo "  help         - Show this help message"
+
+# === Third-party Labs ===
+
+dvwa-up:
+	@echo "Starting DVWA (http://localhost:4280)..."
+	docker compose -f labs/docker-compose.yml up -d dvwa
+	@echo "✅ DVWA started. Open http://localhost:4280"
+
+dvwa-down:
+	@echo "Stopping DVWA..."
+	docker compose -f labs/docker-compose.yml rm -sf dvwa dvwa-db
+	@echo "✅ DVWA stopped"
+
+benchmark-up:
+	@echo "Starting OWASP Benchmark (https://localhost:8443/benchmark/)..."
+	docker compose -f labs/docker-compose.yml up -d owasp-benchmark
+	@echo "⏳ First start may take several minutes (Maven build + Tomcat download)"
+	@echo "🔐 The app uses a self-signed cert; your browser will warn on HTTPS"
+	@echo "✅ After healthy, open https://localhost:8443/benchmark/"
+
+benchmark-down:
+	@echo "Stopping OWASP Benchmark..."
+	docker compose -f labs/docker-compose.yml rm -sf owasp-benchmark
+	@echo "✅ OWASP Benchmark stopped"
+
+labs-up:
+	@echo "Starting DVWA and OWASP Benchmark..."
+	docker compose -f labs/docker-compose.yml up -d
+	@echo "✅ Labs started"
+	@echo "  DVWA:            http://localhost:4280"
+	@echo "  OWASP Benchmark: https://localhost:8443/benchmark/ (self-signed cert)"
+
+labs-down:
+	@echo "Stopping DVWA and OWASP Benchmark..."
+	docker compose -f labs/docker-compose.yml down
+	@echo "✅ Labs stopped"
+
+labs-logs:
+	@echo "Tailing logs for third-party labs..."
+	docker compose -f labs/docker-compose.yml logs -f

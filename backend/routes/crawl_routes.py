@@ -46,6 +46,9 @@ async def crawl_endpoints(request: CrawlRequest):
         submit_get_forms = crawl_opts.get('submit_get_forms', True)
         submit_post_forms = crawl_opts.get('submit_post_forms', True)
         click_buttons = crawl_opts.get('click_buttons', True)
+        max_seconds = crawl_opts.get('max_seconds')
+        seeds = crawl_opts.get('seeds')
+        auth = crawl_opts.get('auth')
         
         # Run crawler in thread pool to avoid sync/async conflict
         crawl_result = await run_in_threadpool(
@@ -55,7 +58,10 @@ async def crawl_endpoints(request: CrawlRequest):
             max_endpoints=max_endpoints,
             submit_get_forms=submit_get_forms,
             submit_post_forms=submit_post_forms,
-            click_buttons=click_buttons
+            click_buttons=click_buttons,
+            max_seconds=max_seconds,
+            seeds=seeds,
+            auth=auth
         )
         
         endpoints = crawl_result.get("endpoints", [])

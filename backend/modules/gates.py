@@ -33,7 +33,7 @@ def gate_candidate_sqli(t: Target) -> bool:
         from urllib.parse import urlparse, parse_qs
         parsed = urlparse(t.url)
         if t.param_in == 'query' and parsed.query:
-            query_params = parse_qs(parsed.query)
+            query_params = parse_qs(parsed.query, keep_blank_values=True)
             if t.param in query_params:
                 param_value = query_params[t.param][0] if query_params[t.param] else ''
     except:

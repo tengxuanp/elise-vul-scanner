@@ -17,8 +17,9 @@ def confirm_xss(signals: dict) -> tuple[bool, Optional[str]]:
     signals.xss_context ∈ {html, js, attr, js_string, html_body, url, css}
     """
     ctx = (signals or {}).get("xss_context")
-    ok = ctx in {"html", "js", "attr", "js_string", "html_body", "url", "css"}
-    return ok, ("xss_reflection" if ok else None)
+    dom = bool((signals or {}).get("xss_dom_executed", False))
+    ok = ctx in {"html", "js", "attr", "js_string", "html_body", "url", "css"} or dom
+    return ok, ("xss_dom_execution" if dom else ("xss_reflection" if ok else None))
 
 
 def confirm_sqli(signals: dict) -> tuple[bool, Optional[str]]:
@@ -32,6 +33,12 @@ def confirm_sqli(signals: dict) -> tuple[bool, Optional[str]]:
     delta = s.get("sql_boolean_delta")
     if isinstance(delta, (int, float)) and delta >= TAU_SQLI:
         return True, "sqli_timing"
+    # Optional: Data-diff based confirmation (feature-flagged)
+    try:
+        if os.getenv("ELISE_ENABLE_DATA_DIFF", "0") == "1" and s.get("sqli_data_diff"):
+            return True, "sqli_data_diff"
+    except Exception:
+        pass
     return False, None
 
 

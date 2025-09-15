@@ -53,6 +53,7 @@ from .ml.infer_ranker import rank_payloads
 from .strategy import probe_enabled, injections_enabled
 from .ml.feature_spec import build_features
 from .injector import inject_once
+from .ml.data_diff import classify as classify_data_diff, prepare_training_row as prepare_diff_row
 from .evidence import EvidenceRow, write_evidence
 from .cvss_rules import cvss_for
 from .playwright_crawler import crawl_site
@@ -113,6 +114,7 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
     """Determine if probe results confirm a vulnerability family using oracle-based confirmation."""
     signals = {
         "xss_context": getattr(probe_bundle.xss, "context", None),
+        "xss_dom_executed": getattr(probe_bundle.xss, "dom_executed", False),
         "redirect_influence": getattr(probe_bundle.redirect, "influence", None),
         "sqli_error_based": getattr(probe_bundle.sqli, "error_based", None),
         "sql_boolean_delta": getattr(probe_bundle.sqli, "boolean_delta", 0),
@@ -145,14 +147,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         if plan is None:
             # Fallback behavior when no plan is provided
             families_to_probe = ["xss", "sqli", "redirect"]
-            probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
+            probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta, job_id)
             probe_result = _confirmed_family(probe_bundle)
         else:
             # Only run probes for enabled families
             families_to_probe = [family for family in ["xss", "sqli", "redirect"] if probe_enabled(plan, family)]
             print(f"PROBE_DEBUG plan={plan.name} probes_disabled={plan.probes_disabled} families_to_probe={families_to_probe}")
             if families_to_probe:
-                probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta)
+                probe_bundle = run_probes(target, families_to_probe, plan, ctx_mode, meta, job_id)
                 probe_result = _confirmed_family(probe_bundle)
             else:
                 # No probes enabled by strategy - create empty probe bundle
@@ -452,7 +454,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         # ML payload ranking and injection (with strategy enforcement)
         candidates = []
         if gate_candidate_xss(target):
-            # Only add XSS candidate if target actually has XSS reflections
+            # Prefer canary reflection; if absent, fall back on HTML pages to try ML/default payloads.
             if hasattr(probe_bundle, "xss") and probe_bundle.xss:
                 reflected = getattr(probe_bundle.xss, "reflected", False)
                 print(f"CANDIDATE_DEBUG xss probe exists, reflected={reflected}")
@@ -460,9 +462,19 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                     candidates.append("xss")
                     print(f"CANDIDATE_DEBUG added xss candidate for target with reflection")
                 else:
-                    print(f"CANDIDATE_DEBUG xss gate passed but no reflection, skipping xss candidate")
+                    # Fallback when HTML content and strategy allows injections
+                    if (target.content_type or "").lower().find("text/html") != -1:
+                        candidates.append("xss")
+                        print(f"CANDIDATE_DEBUG added xss candidate on HTML without reflection (fallback)")
+                    else:
+                        print(f"CANDIDATE_DEBUG xss gate passed but no reflection and non-HTML content, skipping")
             else:
-                print(f"CANDIDATE_DEBUG xss gate passed but no xss probe, skipping xss candidate")
+                # No probe result; be conservative and add on HTML content
+                if (target.content_type or "").lower().find("text/html") != -1:
+                    candidates.append("xss")
+                    print(f"CANDIDATE_DEBUG no xss probe result; added xss candidate on HTML (fallback)")
+                else:
+                    print(f"CANDIDATE_DEBUG xss gate passed but no xss probe, skipping xss candidate")
         if gate_candidate_sqli(target):
             candidates.append("sqli")
             print(f"SQLI_CANDIDATE_DEBUG Added SQLi candidate for param {target.param}")
@@ -814,6 +826,7 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         signals.update({
                             "xss.context": getattr(probe_bundle.xss, "xss_context", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
                             "xss.reflected": getattr(probe_bundle.xss, "reflected", None) if probe_bundle and hasattr(probe_bundle, "xss") and probe_bundle.xss else None,
+                            "xss_dom_executed": getattr(probe_bundle.xss, "dom_executed", False) if probe_bundle and hasattr(probe_bundle, "xss") else False,
                         })
                     elif fam == "sqli":
                         # SQLi signals only - NO XSS/REFLECTION SIGNALS
@@ -831,6 +844,45 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                             "sqli.error_based": getattr(sqli_probe, "error_based", False),
                             "sqli.timing_based": getattr(sqli_probe, "time_based", False),
                         })
+                        # Data-diff classifier (feature-flagged) using attack vs benign control
+                        try:
+                            enable_dd = os.getenv("ELISE_ENABLE_DATA_DIFF", "0") == "1"
+                        except Exception:
+                            enable_dd = False
+                        if enable_dd:
+                            try:
+                                ctrl = inject_once(target, fam, "1")
+                                feat = prepare_diff_row(
+                                    {
+                                        "response_len": inj.response_len,
+                                        "is_json": inj.is_json,
+                                        "json_top_keys": inj.json_top_keys,
+                                        "html_tag_counts": inj.html_tag_counts,
+                                    },
+                                    {
+                                        "response_len": ctrl.response_len,
+                                        "is_json": ctrl.is_json,
+                                        "json_top_keys": ctrl.json_top_keys,
+                                        "html_tag_counts": ctrl.html_tag_counts,
+                                    },
+                                )
+                                p = classify_data_diff(feat)
+                                tau = float(os.getenv("ELISE_SQLI_DATA_DIFF_TAU", "0.80"))
+                                if p >= tau:
+                                    signals["sqli.data_diff"] = True
+                                # Persist training example
+                                try:
+                                    if job_id:
+                                        from backend.app_state import DATA_DIR
+                                        import json
+                                        job_dir = DATA_DIR / "jobs" / job_id
+                                        job_dir.mkdir(parents=True, exist_ok=True)
+                                        with open(job_dir / "sqli_data_diff_events.ndjson", "a", encoding="utf-8") as f:
+                                            f.write(json.dumps({"features": feat, "p": p, "url": target.url, "param": target.param, "payload": payload}) + "\n")
+                                except Exception:
+                                    pass
+                            except Exception as _e:
+                                print(f"DATA_DIFF_DEBUG failed: {_e}")
                     elif fam == "redirect":
                         # Redirect signals only
                         signals.update({

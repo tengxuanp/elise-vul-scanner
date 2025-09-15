@@ -22,7 +22,10 @@ class Param(BaseModel):
 class ParamLocs(BaseModel):
     query: List[str] = Field(default_factory=list)
     form: List[str] = Field(default_factory=list)
-    json: List[str] = Field(default_factory=list)
+    json_: List[str] = Field(default_factory=list, alias='json')
+
+    class Config:
+        allow_population_by_field_name = True
 
 class EndpointOut(BaseModel):
     url: str

@@ -79,7 +79,8 @@ def default_port(scheme: Optional[str]) -> int:
 
 def parse_query(url: str) -> List[str]:
     try:
-        return sorted(parse_qs(urlparse(url).query).keys())
+        # keep_blank_values=True ensures keys like ?q= are preserved
+        return sorted(parse_qs(urlparse(url).query, keep_blank_values=True).keys())
     except Exception:
         return []
 
@@ -145,7 +146,7 @@ def parse_body(headers: Dict[str, str], post_data: Optional[str]) -> Dict[str, A
     # Form-urlencoded
     if "application/x-www-form-urlencoded" in ct or "form" in ct:
         try:
-            parsed_qs = parse_qs(post_data)  # {k: [v,...]}
+            parsed_qs = parse_qs(post_data, keep_blank_values=True)  # {k: [v,...]}
             parsed = {k: (v[0] if isinstance(v, list) and v else v) for k, v in parsed_qs.items()}
             return {
                 "type": "form",
@@ -219,7 +220,8 @@ def make_paramlocs(
 def extract_params_from_url(url: str) -> List[str]:
     """Extract parameter names from query string."""
     try:
-        return sorted(parse_qs(urlparse(url).query).keys())
+        # Preserve blank values so ?q= yields ['q']
+        return sorted(parse_qs(urlparse(url).query, keep_blank_values=True).keys())
     except Exception:
         return []
 
@@ -228,7 +230,7 @@ def extract_params_from_form_data(post_data: str, content_type: str) -> List[str
     """Extract parameter names from form data."""
     try:
         if "application/x-www-form-urlencoded" in content_type:
-            return sorted(parse_qs(post_data).keys())
+            return sorted(parse_qs(post_data, keep_blank_values=True).keys())
         elif "application/json" in content_type:
             data = json.loads(post_data)
             if isinstance(data, dict):
@@ -257,6 +259,7 @@ def crawl_site(
     seeds: Optional[List[str]] = None,
     auth: Optional[Dict[str, Any]] = None,
     click_buttons: bool = True,
+    max_seconds: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Strict, interaction-based crawler that:
@@ -274,6 +277,7 @@ def crawl_site(
     """
     assert isinstance(max_depth, int) and max_depth >= 0, "max_depth must be a non-negative int"
     
+    import time
     print(f"[CRAWL] start={target_url} max_depth={max_depth}")
     # Initialize state
     visited_urls: Set[str] = set()
@@ -283,9 +287,22 @@ def crawl_site(
     pages_visited = 0
     xhr_count = 0
     emitted = 0
+    visited_routes: Set[str] = set()
+    started_at = time.time()
 
     # Initialize queue with target_url and seeds
     url_queue.append((target_url, 0))
+    # Auto-seed common SPA routes for Juice Shop-like hash routers if no seeds provided
+    if not seeds and ("/#/" in target_url or urlparse(target_url).fragment.startswith("/")):
+        base = strip_fragment(target_url).rstrip('/')
+        seeds = [
+            f"{base}/#/",
+            f"{base}/#/login",
+            f"{base}/#/search",
+            f"{base}/#/contact",
+            f"{base}/#/about",
+            f"{base}/#/basket",
+        ]
     if seeds:
         for seed in seeds:
             if seed and same_site(seed, target_url):
@@ -346,6 +363,9 @@ def crawl_site(
             "source": request_info.get("source") or "other",
             "content_type": request_info.get("content_type") or "text/html",
             "seen": 1,
+            # Include SPA context for UI/debugging
+            "spa_view": request_info.get("view_fragment"),
+            "spa_view_url": request_info.get("view_url"),
         }
 
     def _src_rank(s):
@@ -385,7 +405,14 @@ def crawl_site(
             page.on("request", capture_request)
             page.on("response", capture_response)
 
-            page.goto(url, wait_until="networkidle")
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=15000)
+            except PlaywrightTimeoutError:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=2000)
+            except PlaywrightTimeoutError:
+                pass
             nonlocal pages_visited
             pages_visited += 1
             
@@ -418,17 +445,23 @@ def crawl_site(
                             if b.is_visible():
                                 b.click()
                                 clicked += 1
-                                page.wait_for_timeout(400)
+                                page.wait_for_timeout(250)
                     except Exception:
                         pass
             
-            # Collect same-origin links (up to 30 per page)
+            # Collect same-origin links (up to 60 per page, prefer hash/router links first)
             links = page.evaluate("""
                 () => {
                     const links = [];
-                    const anchors = document.querySelectorAll('a[href]');
-                    for (let i = 0; i < Math.min(anchors.length, 30); i++) {
-                        const href = anchors[i].getAttribute('href');
+                    const anchors = Array.from(document.querySelectorAll('a[href]'));
+                    // prioritize hash-based router links first
+                    const sorted = anchors.sort((a,b) => {
+                        const ah = (a.getAttribute('href')||'').startsWith('#/');
+                        const bh = (b.getAttribute('href')||'').startsWith('#/');
+                        return (bh?1:0) - (ah?1:0);
+                    });
+                    for (let i = 0; i < Math.min(sorted.length, 60); i++) {
+                        const href = sorted[i].getAttribute('href');
                         if (href && !href.startsWith('javascript:') && !href.startsWith('mailto:')) {
                             try {
                                 const url = new URL(href, window.location.href);
@@ -438,15 +471,30 @@ def crawl_site(
                             }
                         }
                     }
+                    // Also collect Angular routerLink targets if present
+                    const routerEls = Array.from(document.querySelectorAll('[routerLink]'));
+                    for (let i = 0; i < Math.min(routerEls.length, 40); i++) {
+                        const rl = routerEls[i].getAttribute('routerLink');
+                        if (!rl) continue;
+                        try {
+                            const href = rl.startsWith('/') ? `#${rl}` : `#/${rl}`;
+                            const url = new URL(href, window.location.href);
+                            links.push(url.href);
+                        } catch (e) {}
+                    }
                     return links;
                 }
             """)
-            
-            # Filter to same-site URLs
+
+            # Detect SPA hash-router presence (Python: use 'in' not JS 'includes')
+            is_hash_spa = any((('/#/' in l) or ('#/' in l)) for l in (links or []))
+
+            # Filter to same-site URLs; for SPAs we will prefer in-page navigation and NOT enqueue
             for link in links:
-                if same_site(link, target_url) and link not in visited_urls:
-                    new_urls.append(link)
-            
+                if same_site(link, target_url) and link not in visited_urls and not is_static_resource(link):
+                    if not is_hash_spa:
+                        new_urls.append(link)
+
             # Handle forms
             forms = page.query_selector_all('form')
             for form in forms:
@@ -507,7 +555,70 @@ def crawl_site(
                     print(f"[WARN] Form processing failed: {e}")
             
             # small idle to let XHRs flush
-            page.wait_for_timeout(400)
+            page.wait_for_timeout(300)
+
+            # If SPA (hash router), proactively click a few router links to trigger XHRs without full reloads
+            try:
+                if True:  # unconditional; inner check limits to SPA only
+                    hash_links = page.query_selector_all('a[href^="#/"], a[href*="/#/"], [routerLink]')
+                    clicked = 0
+                    for a in hash_links:
+                        if clicked >= 10:
+                            break
+                        try:
+                            # Click and wait a short settle time (networkidle may not fire for SPAs)
+                            href = a.get_attribute('href') or a.get_attribute('routerLink') or ''
+                            if not href:
+                                continue
+                            before = page.url
+                            a.click()
+                            page.wait_for_timeout(300)
+                            after = page.url
+                            if after not in visited_routes:
+                                visited_routes.add(after)
+                                # Discover new links on this routed view
+                                more_links = page.evaluate("""
+                                    () => Array.from(document.querySelectorAll('a[href]')).slice(0, 40).map(a=>{
+                                        try { return new URL(a.getAttribute('href'), window.location.href).href } catch(e){ return null }
+                                    }).filter(Boolean)
+                                """)
+                                for ml in more_links:
+                                    if same_site(ml, target_url) and not is_static_resource(ml):
+                                        if not (('#/' in ml) or ('/#/' in ml)):
+                                            # Only enqueue non-hash links to avoid redundant full reloads
+                                            if ml not in visited_urls and ml not in new_urls:
+                                                new_urls.append(ml)
+                            clicked += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+            # Explicit search stimulation for common SPA search inputs (ensures ?q= captured)
+            try:
+                # Reveal the search bar if it is hidden behind an icon/button
+                toggle = page.query_selector('button[aria-label*="search" i], button[aria-label*="Search" i], button[aria-label*="open" i], button mat-icon[svgicon="search"]')
+                if toggle and toggle.is_visible():
+                    try:
+                        toggle.click()
+                        page.wait_for_timeout(120)
+                    except Exception:
+                        pass
+                search = page.query_selector('input[aria-label="Search"], input[placeholder*="search" i], input[name="q"], input#searchQuery')
+                if search and search.is_visible():
+                    try:
+                        search.click()
+                        search.fill('test')
+                        page.keyboard.press('Enter')
+                    except Exception:
+                        pass
+                    try:
+                        page.wait_for_load_state('domcontentloaded', timeout=1500)
+                    except PlaywrightTimeoutError:
+                        pass
+                    page.wait_for_timeout(200)
+            except Exception:
+                pass
         except Exception as e:
             print(f"[ERROR] Failed to visit {url}: {e}")
         finally:
@@ -519,7 +630,14 @@ def crawl_site(
     def _do_form_login(context, auth: Dict[str, Any]):
         page = context.new_page()
         try:
-            page.goto(str(auth["login_url"]), wait_until="networkidle")
+            try:
+                page.goto(str(auth["login_url"]), wait_until="domcontentloaded", timeout=15000)
+            except PlaywrightTimeoutError:
+                pass
+            try:
+                page.wait_for_load_state("networkidle", timeout=2000)
+            except PlaywrightTimeoutError:
+                pass
             page.fill(f'[name="{auth["username_field"]}"]', auth["username"])
             page.fill(f'[name="{auth["password_field"]}"]', auth["password"])
             if auth.get("submit_selector"):
@@ -529,13 +647,41 @@ def crawl_site(
                 btn = page.query_selector('button[type="submit"], input[type="submit"]') or page.query_selector("button, [role=button]")
                 if btn: btn.click()
                 else: page.keyboard.press("Enter")
-            page.wait_for_load_state("networkidle")
+            try:
+                page.wait_for_load_state("networkidle", timeout=2000)
+            except PlaywrightTimeoutError:
+                pass
         finally:
             page.close()
 
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        context = browser.new_context(ignore_https_errors=True)
+
+        # Route handler: block heavy assets and long-lived sockets to speed up crawling
+        def _route_handler(route):
+            try:
+                req = route.request
+                rtype = (req.resource_type or '').lower()
+                url = req.url
+                # Block non-essential resource types
+                if rtype in ('image','media','font'):
+                    return route.abort()
+                # Block long-lived sockets/event streams which delay networkidle
+                if 'socket.io' in url or rtype in ('websocket','eventsource'):
+                    return route.abort()
+                # Block third-party origins altogether
+                if not same_site(url, target_url):
+                    return route.abort()
+            except Exception:
+                pass
+            return route.continue_()
+
+        try:
+            context.route('**/*', _route_handler)
+        except Exception:
+            # Best-effort; continue if routing not available
+            pass
         
         # Perform authentication if provided
         if auth:
@@ -556,6 +702,24 @@ def crawl_site(
                 rt = (getattr(request, "resource_type", "") or "").lower()
                 src = "xhr" if rt in ("xhr","fetch") else ("nav" if rt == "document" else (rt or "other"))
                 
+                # Try to capture current SPA route (hash) from the frame URL
+                view_url = None
+                view_fragment = None
+                try:
+                    frame = getattr(request, 'frame', None)
+                    if frame is not None:
+                        view_url = getattr(frame, 'url', None)
+                        if view_url:
+                            from urllib.parse import urlparse
+                            frag = urlparse(view_url).fragment or ''
+                            if frag:
+                                if not frag.startswith('#'):
+                                    frag = '#' + frag
+                                view_fragment = frag
+                except Exception:
+                    view_url = None
+                    view_fragment = None
+                
                 captured_requests.append({
                     "url": url,
                     "method": request.method.upper(),
@@ -565,6 +729,8 @@ def crawl_site(
                     "content_type": None,                 # will be filled by response
                     "source": src,
                     "status": None,                       # will be filled by response
+                    "view_url": view_url,
+                    "view_fragment": view_fragment,
                 })
             except Exception as e:
                 print(f"[WARN] Request capture failed: {e}")
@@ -602,12 +768,26 @@ def crawl_site(
             
             # Visit page and get new URLs
             new_urls = visit_page(current_url, context, click_buttons)
-            
+
             # Add new URLs to queue
             for new_url in new_urls:
                 if new_url not in visited_urls and current_depth < max_depth:
                     print(f"[CRAWL] enqueue depth={current_depth+1} url={new_url}")
                     url_queue.append((new_url, current_depth + 1))
+
+            # Early stop if enough endpoints captured
+            try:
+                agg = aggregate_endpoints([process_request(r) for r in captured_requests if process_request(r)])
+                if len(agg) >= max_endpoints:
+                    print(f"[CRAWL] Reached max_endpoints={max_endpoints}, stopping BFS.")
+                    break
+            except Exception:
+                pass
+
+            # Time budget check
+            if max_seconds is not None and (time.time() - started_at) > max_seconds:
+                print(f"[CRAWL] Time budget exceeded ({max_seconds}s). Stopping crawl.")
+                break
         
         browser.close()
     
@@ -639,4 +819,3 @@ def crawl_site(
             "withParams": sum(1 for e in endpoints if e["params"])
         }
     }
-

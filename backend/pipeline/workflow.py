@@ -609,6 +609,16 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "confirmed_ml_inject": ssot_summary["provenance"]["confirmed_inject"],
     }
     
+    # Derive rank_source counts (probe vs ml vs defaults) from results for UI
+    rank_source_counts = {}
+    try:
+        for r in results:
+            rs = r.get("rank_source")
+            if rs:
+                rank_source_counts[rs] = rank_source_counts.get(rs, 0) + 1
+    except Exception:
+        rank_source_counts = {}
+
     meta = {
         "endpoints_supplied": endpoints_supplied,
         "targets_enumerated": targets_enumerated,
@@ -649,7 +659,8 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         "injections_attempted": probe_attempts + ml_inject_attempts,
         "injections_succeeded": probe_successes + ml_inject_successes,
         "budget_ms_used": processing_ms,  # Use actual processing time
-        "errors_by_kind": {}
+        "errors_by_kind": {},
+        "rank_source_counts": rank_source_counts
     }
     
     # Apply decision canonicalization and telemetry defaults

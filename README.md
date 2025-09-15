@@ -404,6 +404,21 @@ For testing and development purposes, Elise includes a local vulnerable web appl
 
 **This vulnerable lab is for local/offline testing only. Do not expose to the internet or use in production environments.**
 
+## 🔬 Third-Party Labs (DVWA, OWASP Benchmark)
+
+For evaluation against well-known vulnerable apps, this repo includes an optional labs compose stack under `labs/`.
+
+- DVWA (LAMP/MySQL): `make dvwa-up` → http://localhost:4280
+- OWASP Benchmark (Java/Servlet): `make benchmark-up` → https://localhost:8443/benchmark/
+- Start both: `make labs-up`
+- Stop both: `make labs-down`
+
+Notes
+
+- OWASP Benchmark uses a self-signed certificate; proceed through your browser’s HTTPS warning.
+- First start of OWASP Benchmark can take several minutes while Maven builds and Tomcat downloads.
+- See `labs/README.md` for details and credentials.
+
 ## 🔒 Security Considerations
 
 - **Responsible Disclosure**: Only test authorized targets

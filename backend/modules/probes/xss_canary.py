@@ -1,4 +1,5 @@
 import httpx
+from urllib.parse import urlparse
 import html
 import urllib.parse
 import re
@@ -210,7 +211,7 @@ def capture_xss_reflection_data(job_id: str, url: str, method: str, param_in: st
     with open(events_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(event_data) + "\n")
 
-def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None, ctx_mode: str = "auto", meta: dict = None):
+def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None, job_id: str = None, plan=None, ctx_mode: str = "auto", meta: dict = None, base_params: Optional[Dict[str, Any]] = None):
     """Run XSS probe with enhanced context and escaping detection."""
     print(f"XSS_PROBE_START url={url} param={param} ctx_mode={ctx_mode}")
     # Check if XSS probes are disabled by the current plan
@@ -219,12 +220,56 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
         probe.skipped = True
         return probe
     
-    params = {}; data=None; js=None
-    if param_in=="query": params={param: CANARY}
-    elif param_in=="form": data={param: CANARY}
-    elif param_in=="json": js={param: CANARY}
+    # Build request payloads, including base_params for form/json where available.
+    params = {}
+    data = None
+    js = None
+    if param_in == "query":
+        # Prefer replacing the query param in the URL to avoid duplicates
+        try:
+            from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+            parts = list(urlparse(url))
+            q = parse_qs(parts[4], keep_blank_values=True)
+            q[param] = [CANARY]
+            parts[4] = urlencode(q, doseq=True)
+            url = urlunparse(parts)
+        except Exception:
+            params = {param: CANARY}
+    elif param_in == "form":
+        merged = dict(base_params or {})
+        merged[param] = CANARY
+        data = merged
+    elif param_in == "json":
+        merged = dict(base_params or {})
+        merged[param] = CANARY
+        js = merged
     
-    r = httpx.request(method, url, params=params, data=data, json=js, headers=headers, timeout=8.0, follow_redirects=True)
+    # TLS verify policy: mirror injector behavior (ignore for localhost/self-signed or when env disables)
+    def _tls_insecure(u: str) -> bool:
+        try:
+            if os.getenv("ELISE_TLS_INSECURE", "0") == "1":
+                return True
+            v = (os.getenv("ELISE_HTTP_VERIFY_TLS") or "").strip().lower()
+            if v in {"0", "false", "no"}:
+                return True
+            p = urlparse(u)
+            if (p.scheme or "").lower() == "https" and (p.hostname or "").lower() in {"localhost", "127.0.0.1"}:
+                return True
+        except Exception:
+            pass
+        return False
+
+    r = httpx.request(
+        method,
+        url,
+        params=params,
+        data=data,
+        json=js,
+        headers=headers,
+        timeout=8.0,
+        follow_redirects=True,
+        verify=not _tls_insecure(url),
+    )
     text = r.text or ""
     
     print(f"XSS_PROBE_CANARY url={url} param={param} canary_found={CANARY in text}")
@@ -242,7 +287,8 @@ def run_xss_probe(url: str, method: str, param_in: str, param: str, headers=None
         
         # Implement proper context resolution logic according to patch
         RULE_CONF_GATE = float(os.getenv("ELISE_RULE_CONF_GATE", "0.85"))
-        ML_OVERRIDE_GATE = float(os.getenv("ELISE_ML_OVERRIDE_GATE", "0.80"))
+        # Lower default ML override gate to let ML resolve uncertain contexts more often
+        ML_OVERRIDE_GATE = float(os.getenv("ELISE_ML_OVERRIDE_GATE", "0.65"))
         
         # 1) Get rule-based predictions
         r_ctx = context_result["pred"]

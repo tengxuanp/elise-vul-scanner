@@ -118,6 +118,23 @@ class EvidenceRow:
             elif xss_context_rule:
                 xss_context_source = "rule"
 
+        # Heuristic fallback: if XSS confirmed via injection but no probe context is available,
+        # infer a reasonable context for UI chips based on the payload/response.
+        try:
+            if family == "xss" and (not xss_context or xss_context == "unknown"):
+                payload = rec.get("payload") if isinstance(rec, dict) else None
+                snippet = getattr(inj, "response_snippet", "") or ""
+                if payload and ("<" in payload and ">" in payload):
+                    xss_context = "html_body"
+                    xss_context_source = xss_context_source or "heuristic"
+                    # If raw payload appears verbatim, escaping is raw
+                    try:
+                        xss_escaping = "raw" if payload in snippet else (xss_escaping or "unknown")
+                    except Exception:
+                        xss_escaping = xss_escaping or "unknown"
+        except Exception:
+            pass
+
         # Extract SQLi dialect information
         sqli_dialect = None
         sqli_dialect_source = None
@@ -241,6 +258,19 @@ class EvidenceRow:
                 xss_context_ml_proba = xss_context_ml.get("proba")
             elif xss_context_rule:
                 xss_context_source = "rule"
+
+        # Heuristic fallback for injection-confirmed XSS without probe context
+        try:
+            if family == "xss" and (not xss_context or xss_context == "unknown"):
+                payload = rec.get("payload") if isinstance(rec, dict) else None
+                snippet = getattr(inj, "response_snippet", "") or ""
+                if payload and ("<" in payload and ">" in payload):
+                    xss_context = "html_body"
+                    xss_context_source = xss_context_source or "heuristic"
+                    # Escaping inference: default to raw for payload-based confirmation flows
+                    xss_escaping = "raw"
+        except Exception:
+            pass
 
         # Extract SQLi dialect information
         sqli_dialect = None

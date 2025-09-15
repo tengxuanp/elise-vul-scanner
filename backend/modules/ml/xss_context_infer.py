@@ -11,6 +11,8 @@ from typing import Dict, Any, Optional, Tuple
 from threading import Lock
 from pathlib import Path
 import joblib
+import sys
+import os
 
 from backend.app_state import MODEL_DIR
 import joblib
@@ -96,9 +98,17 @@ def load_models() -> Tuple[bool, bool]:
             context_vectorizer_path = MODEL_DIR / "xss_context_vectorizer.joblib"
             ctx_pipe_path = MODEL_DIR / "xss_context_pipeline.joblib"
             
-            if ctx_pipe_path.exists():
+            skip_pipe = os.getenv('ELISE_SKIP_XSS_PIPELINE', '1') == '1'
+            if not skip_pipe and ctx_pipe_path.exists():
                 try:
                     global _ctx_pipeline
+                    # Compat: some pipelines depend on numpy._core (NumPy >=2)
+                    try:
+                        import numpy as _np
+                        if 'numpy._core' not in sys.modules:
+                            sys.modules['numpy._core'] = _np.core
+                    except Exception:
+                        pass
                     _ctx_pipeline = joblib.load(ctx_pipe_path)
                     context_loaded = True
                     print("XSS context pipeline loaded successfully")
@@ -106,6 +116,13 @@ def load_models() -> Tuple[bool, bool]:
                     print(f"Failed to load XSS context pipeline: {e}")
             if _ctx_pipeline is None and context_model_path.exists() and context_vectorizer_path.exists():
                 # Try loading with compatibility options for numpy 2.x
+                # Compat alias for numpy._core
+                try:
+                    import numpy as _np
+                    if 'numpy._core' not in sys.modules:
+                        sys.modules['numpy._core'] = _np.core
+                except Exception:
+                    pass
                 _context_model = joblib.load(context_model_path, mmap_mode=None)
                 _context_vectorizer = joblib.load(context_vectorizer_path, mmap_mode=None)
                 context_loaded = True
@@ -128,9 +145,17 @@ def load_models() -> Tuple[bool, bool]:
             escaping_vectorizer_path = MODEL_DIR / "xss_escaping_vectorizer.joblib"
             esc_pipe_path = MODEL_DIR / "xss_escaping_pipeline.joblib"
             
-            if esc_pipe_path.exists():
+            skip_esc_pipe = os.getenv('ELISE_SKIP_XSS_PIPELINE', '1') == '1'
+            if not skip_esc_pipe and esc_pipe_path.exists():
                 try:
                     global _esc_pipeline
+                    # Compat: numpy._core alias for legacy pickles
+                    try:
+                        import numpy as _np
+                        if 'numpy._core' not in sys.modules:
+                            sys.modules['numpy._core'] = _np.core
+                    except Exception:
+                        pass
                     _esc_pipeline = joblib.load(esc_pipe_path)
                     escaping_loaded = True
                     print("XSS escaping pipeline loaded successfully")
@@ -138,6 +163,12 @@ def load_models() -> Tuple[bool, bool]:
                     print(f"Failed to load XSS escaping pipeline: {e}")
             if _esc_pipeline is None and escaping_model_path.exists() and escaping_vectorizer_path.exists():
                 # Try loading with compatibility options for numpy 2.x
+                try:
+                    import numpy as _np
+                    if 'numpy._core' not in sys.modules:
+                        sys.modules['numpy._core'] = _np.core
+                except Exception:
+                    pass
                 _escaping_model = joblib.load(escaping_model_path, mmap_mode=None)
                 _escaping_vectorizer = joblib.load(escaping_vectorizer_path, mmap_mode=None)
                 escaping_loaded = True

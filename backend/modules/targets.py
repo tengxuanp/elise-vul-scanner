@@ -13,6 +13,9 @@ class Target:
     status: Optional[int] = None
     content_type: Optional[str] = None
     base_params: Optional[Dict[str, Any]] = None  # original params for that location
+    # SPA context (optional, for DOM probes)
+    spa_view_url: Optional[str] = None
+    spa_view: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -81,7 +84,20 @@ def enumerate_targets_from_endpoints(endpoints: List[Dict[str, Any]]) -> List[Di
         if not any([query_params, form_params, json_params]) and isinstance(endpoint.get("params"), list):
             # Legacy format: params is a list of parameter names
             query_params = [str(p) for p in endpoint.get("params", [])]
-        
+
+        # Final fallback: derive names from the URL query string itself
+        if not any([query_params, form_params, json_params]):
+            try:
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(url)
+                qs_names = sorted(parse_qs(parsed.query, keep_blank_values=True).keys())
+                if qs_names:
+                    query_params = [str(n) for n in qs_names]
+            except Exception:
+                pass
+        spa_view_url = endpoint.get("spa_view_url") or endpoint.get("view_url")
+        spa_view = endpoint.get("spa_view") or endpoint.get("view")
+
         # Create targets for each parameter in each location
         for param_name in query_params:
             base_params = _build_query_base_params(url)
@@ -95,10 +111,19 @@ def enumerate_targets_from_endpoints(endpoints: List[Dict[str, Any]]) -> List[Di
                 "status": status,
                 "content_type": content_type,
                 "base_params": base_params,
+                "spa_view_url": spa_view_url,
+                "spa_view": spa_view,
                 "source": "persisted"
             })
         
+        # Pre-build base form/json params with neutral defaults so probes/injections
+        # hit realistic code paths (many OWASP Benchmark forms expect multiple fields).
+        default_form_base = {name: "SafeText" for name in form_params}
+        default_json_base = {name: "SafeText" for name in json_params}
+
         for param_name in form_params:
+            # Use defaults for all form fields; the active param will be overridden by payload
+            base_form = dict(default_form_base)
             targets.append({
                 "url": url,
                 "path": path,
@@ -108,11 +133,14 @@ def enumerate_targets_from_endpoints(endpoints: List[Dict[str, Any]]) -> List[Di
                 "headers": {},
                 "status": status,
                 "content_type": content_type,
-                "base_params": {"__form_present__": True},
+                "base_params": base_form,
+                "spa_view_url": spa_view_url,
+                "spa_view": spa_view,
                 "source": "persisted"
             })
         
         for param_name in json_params:
+            base_json = dict(default_json_base)
             targets.append({
                 "url": url,
                 "path": path,
@@ -122,7 +150,9 @@ def enumerate_targets_from_endpoints(endpoints: List[Dict[str, Any]]) -> List[Di
                 "headers": {},
                 "status": status,
                 "content_type": content_type,
-                "base_params": {"__json_present__": True},
+                "base_params": base_json,
+                "spa_view_url": spa_view_url,
+                "spa_view": spa_view,
                 "source": "persisted"
             })
     
@@ -135,7 +165,8 @@ def _build_query_base_params(url: str) -> Dict[str, Any]:
     
     try:
         parsed = urlparse(url)
-        query_params = parse_qs(parsed.query)
+        # keep_blank_values preserves names like ?q=
+        query_params = parse_qs(parsed.query, keep_blank_values=True)
         # Convert lists to single values and add sentinel for probed param
         base_params = {}
         for key, values in query_params.items():
@@ -154,12 +185,14 @@ def enumerate_targets(endpoint: Dict[str, Any]) -> Iterable[Target]:
     headers = endpoint.get("headers") or {}
     param_locs = endpoint.get("param_locs") or {}
     results: List[Target] = []
+    spa_view_url = endpoint.get("spa_view_url") or endpoint.get("view_url")
+    spa_view = endpoint.get("spa_view") or endpoint.get("view")
     for loc in ("query", "form", "json"):
         params = (param_locs.get(loc) or []) if isinstance(param_locs, dict) else []
         for p in params:
-            results.append(Target(url=url, method=_method, param_in=loc, param=p, headers=headers, status=status, content_type=ctype, base_params={}))
+            results.append(Target(url=url, method=_method, param_in=loc, param=p, headers=headers, status=status, content_type=ctype, base_params={}, spa_view_url=spa_view_url, spa_view=spa_view))
     # fallback: if legacy 'params' dict present
     if not results and isinstance(endpoint.get("params"), dict):
         for p in endpoint["params"].keys():
-            results.append(Target(url=url, method=_method, param_in="query", param=p, headers=headers, status=status, content_type=ctype, base_params={}))
+            results.append(Target(url=url, method=_method, param_in="query", param=p, headers=headers, status=status, content_type=ctype, base_params={}, spa_view_url=spa_view_url, spa_view=spa_view))
     return results

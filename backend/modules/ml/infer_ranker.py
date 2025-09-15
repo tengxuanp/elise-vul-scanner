@@ -9,6 +9,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from backend.app_state import MODEL_DIR, USE_ML, REQUIRE_RANKER
+from .shims import install_joblib_shims
 from .feature_spec import build_features
 
 
@@ -190,6 +191,11 @@ def _load_model(family: str) -> Optional[Any]:
 
     try:
         import joblib
+        # Install shims before loading legacy pickles
+        try:
+            install_joblib_shims()
+        except Exception:
+            pass
         model = joblib.load(model_path)
         _model_cache[family] = model
         print(f"MODEL_LOAD_SUCCESS fam={family} type={type(model)}")

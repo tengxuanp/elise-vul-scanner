@@ -1,4 +1,6 @@
 import httpx, time
+import os
+from urllib.parse import urlparse
 import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
@@ -190,12 +192,35 @@ def run_sqli_probe(url, method, param_in, param, headers=None, plan=None) -> Sql
     
     probe = SqliProbe()
     
+    def _tls_insecure(u: str) -> bool:
+        try:
+            if os.getenv("ELISE_TLS_INSECURE", "0") == "1":
+                return True
+            v = (os.getenv("ELISE_HTTP_VERIFY_TLS") or "").strip().lower()
+            if v in {"0", "false", "no"}:
+                return True
+            p = urlparse(u)
+            if (p.scheme or "").lower() == "https" and (p.hostname or "").lower() in {"localhost", "127.0.0.1"}:
+                return True
+        except Exception:
+            pass
+        return False
+
     def send(val):
         params={}; data=None; js=None
         if param_in=="query": params={param: val}
         elif param_in=="form": data={param: val}
         elif param_in=="json": js={param: val}
-        return httpx.request(method, url, params=params, data=data, json=js, headers=headers, timeout=8.0)
+        return httpx.request(
+            method,
+            url,
+            params=params,
+            data=data,
+            json=js,
+            headers=headers,
+            timeout=8.0,
+            verify=not _tls_insecure(url),
+        )
     
     # error-based
     r = send("'")
