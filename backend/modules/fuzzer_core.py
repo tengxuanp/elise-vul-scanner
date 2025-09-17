@@ -6,7 +6,7 @@ import time
 import os
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from collections import defaultdict
@@ -123,7 +123,7 @@ def _confirmed_family(probe_bundle) -> Optional[tuple[str, str]]:
     fired_family, reason_code = oracle_from_signals(signals)
     return (fired_family, reason_code) if fired_family else None
 
-def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None, ctx_mode: str = "auto", sqli_ml_mode: str = "never", meta: dict = None) -> Dict[str, Any]:
+def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock, findings_lock: Lock, start_ts: float = None, plan = None, ctx_mode: str = "auto", sqli_ml_mode: str = "never", meta: dict = None) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
     """Process a single target and return the result."""
     violations = []  # Track strategy violations
     result_dict = None  # Initialize result_dict to avoid UnboundLocalError
@@ -1202,10 +1202,10 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
         # If we found positive results during family processing, return them
         if 'positive_results' in locals() and positive_results:
             print(f"POSITIVE_RESULT_DEBUG Returning {len(positive_results)} stored positive results")
-            # Return the first result (no artificial prioritization)
-            # The family processing should have already determined the correct vulnerability type
-            print(f"POSITIVE_RESULT_DEBUG Returning first result: family={positive_results[0].get('family')}")
-            return positive_results[0]
+            # Return all positive results to allow multiple vulnerability types per target
+            # The workflow will handle upserting them properly
+            print(f"POSITIVE_RESULT_DEBUG Returning all {len(positive_results)} results")
+            return positive_results
         
         # If we have probe-confirmed evidence but no ML results, return the probe result
         # But not for ml_with_context strategy which should only return ML results
@@ -1390,52 +1390,56 @@ def run_job(target_url: str, job_id: str, max_depth: int = 2, max_endpoints: int
                 try:
                     result = future.result()
                     
-                    # Track telemetry
-                    if "meta" in result and "ml_attempted_payloads" in result["meta"]:
-                        injections_attempted += len(result["meta"]["ml_attempted_payloads"])
-                    if result.get("decision") == DECISION["POS"]:
-                        injections_succeeded += 1
+                    # Handle both single result and list of results
+                    results_to_process = result if isinstance(result, list) else [result]
                     
-                    # Track rank source counts
-                    rank_source = result.get("rank_source")
-                    if rank_source in rank_source_counts:
-                        rank_source_counts[rank_source] += 1
-                    
-                    # Extract path from URL
-                    from urllib.parse import urlparse
-                    parsed_url = urlparse(result["target"]["url"])
-                    path = parsed_url.path or "/"
-                    
-                    # Create slim result row
-                    slim_result = {
-                        "evidence_id": result.get("evidence_id"),
-                        "url": result["target"]["url"],
-                        "path": path,
-                        "method": result["target"]["method"],
-                        "param_in": result["target"]["param_in"],
-                        "param": result["target"]["param"],
-                        "family": result.get("family"),
-                        "decision": result["decision"],
-                        "why": result["why"],
-                        "cvss": result.get("cvss"),
-                        "rank_source": result.get("rank_source"),
-                        "ml_role": result.get("ml_role"),
-                        "gated": result.get("gated"),
-                        "ml_family": result.get("ml_family"),
-                        "ml_proba": result.get("ml_proba"),
-                        "ml_threshold": result.get("ml_threshold"),
-                        "model_tag": result.get("model_tag"),
-                        "attempt_idx": result.get("attempt_idx"),
-                        "top_k_used": result.get("top_k_used"),
-                        "timing_ms": result.get("timing_ms", 0),
-                        "status": result["target"].get("status", 0),
-                        "ml": result.get("ml")  # Add ML state
-                    }
-                    results.append(slim_result)
-                    
-                    # Add to findings if positive
-                    if result.get("decision") == DECISION["POS"] and result.get("evidence_id"):
-                        findings.append(result["evidence_id"])
+                    for result in results_to_process:
+                        # Track telemetry
+                        if "meta" in result and "ml_attempted_payloads" in result["meta"]:
+                            injections_attempted += len(result["meta"]["ml_attempted_payloads"])
+                        if result.get("decision") == DECISION["POS"]:
+                            injections_succeeded += 1
+                        
+                        # Track rank source counts
+                        rank_source = result.get("rank_source")
+                        if rank_source in rank_source_counts:
+                            rank_source_counts[rank_source] += 1
+                        
+                        # Extract path from URL
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(result["target"]["url"])
+                        path = parsed_url.path or "/"
+                        
+                        # Create slim result row
+                        slim_result = {
+                            "evidence_id": result.get("evidence_id"),
+                            "url": result["target"]["url"],
+                            "path": path,
+                            "method": result["target"]["method"],
+                            "param_in": result["target"]["param_in"],
+                            "param": result["target"]["param"],
+                            "family": result.get("family"),
+                            "decision": result["decision"],
+                            "why": result["why"],
+                            "cvss": result.get("cvss"),
+                            "rank_source": result.get("rank_source"),
+                            "ml_role": result.get("ml_role"),
+                            "gated": result.get("gated"),
+                            "ml_family": result.get("ml_family"),
+                            "ml_proba": result.get("ml_proba"),
+                            "ml_threshold": result.get("ml_threshold"),
+                            "model_tag": result.get("model_tag"),
+                            "attempt_idx": result.get("attempt_idx"),
+                            "top_k_used": result.get("top_k_used"),
+                            "timing_ms": result.get("timing_ms", 0),
+                            "status": result["target"].get("status", 0),
+                            "ml": result.get("ml")  # Add ML state
+                        }
+                        results.append(slim_result)
+                        
+                        # Add to findings if positive
+                        if result.get("decision") == DECISION["POS"] and result.get("evidence_id"):
+                            findings.append(result["evidence_id"])
                         
                 except Exception as e:
                     target = future_to_target[future]

@@ -56,7 +56,7 @@ const ProofTypeBadge = ({ vuln_proof }) => {
 };
 
 // Decision Source badge (shows probe ML)
-const DecisionSourceBadge = ({ family, xssContextSource, sqliDialectSource }) => {
+const DecisionSourceBadge = ({ family, xss_context_source, sqli_dialect_source }) => {
   
   // Map probe ML sources to more specific descriptions with model names
   const getProbeMLSource = (family, xssContextSource, sqliDialectSource) => {
@@ -83,7 +83,7 @@ const DecisionSourceBadge = ({ family, xssContextSource, sqliDialectSource }) =>
   };
   
   // For Decision Source, we want to show probe ML, not payload ranking ML
-  const specificSource = getProbeMLSource(family, xssContextSource, sqliDialectSource);
+  const specificSource = getProbeMLSource(family, xss_context_source, sqli_dialect_source);
   
   const colors = {
     "XSS Context Classifier": "bg-purple-100 text-purple-700",
@@ -474,8 +474,8 @@ export default function FindingsTable({ results=[], onView }) {
       <td className="p-2">
         <DecisionSourceBadge 
           family={result.family}
-          xssContextSource={result.xss_context_source}
-          sqliDialectSource={result.sqli_dialect_source}
+          xss_context_source={result.xss_context_source}
+          sqli_dialect_source={result.sqli_dialect_source}
         />
       </td>
       <td className="p-2 text-right tabular-nums">

@@ -391,11 +391,15 @@ def assess_endpoints(endpoints: List[Dict[str,Any]], job_id: str, top_k:int=3, s
         
         # Use the same _process_target function from fuzzer_core
         result = _process_target(target, job_id, top_k, Lock(), Lock(), plan=plan, ctx_mode=ctx_mode, sqli_ml_mode=sqli_ml_mode, meta={})
-        raw_results.append(result)
+        
+        # Handle both single result and list of results
+        results_to_process = result if isinstance(result, list) else [result]
+        raw_results.extend(results_to_process)
         
         # Extract evidence if present
-        if "evidence" in result:
-            findings.append(result["evidence"])
+        for result in results_to_process:
+            if "evidence" in result:
+                findings.append(result["evidence"])
     
     # Apply upsert logic to create one-row-per-(target,family)
     # Do not create rows for NA/no-params. Keep them out of results; the NA badge is computed separately.
