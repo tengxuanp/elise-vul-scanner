@@ -52,6 +52,23 @@ docker-logs:
 	@echo "Showing logs for all services..."
 	docker compose logs -f
 
+# Workflow commands
+workflow-full:
+	@echo "Running full Elise workflow (build/train/reassess/export/scorecard)..."
+	./venv/bin/python scripts/elise_workflow.py --workflow full --target https://localhost:8443/benchmark/ --insecure-tls
+
+workflow-build-train:
+	@echo "Running build and train workflow..."
+	./venv/bin/python scripts/elise_workflow.py --workflow build-train --target https://localhost:8443/benchmark/ --insecure-tls
+
+workflow-reassess:
+	@echo "Running reassessment workflow..."
+	./venv/bin/python scripts/elise_workflow.py --workflow reassess --job-id $(JOB_ID)
+
+workflow-export-scorecard:
+	@echo "Running export and scorecard workflow..."
+	./venv/bin/python scripts/elise_workflow.py --workflow export-scorecard --job-id $(JOB_ID)
+
 # Show help
 help:
 	@echo "Available targets:"
@@ -66,6 +83,10 @@ help:
 	@echo "  labs-logs    - Tail logs for DVWA/Benchmark labs"
 	@echo "  playwright   - Install Playwright browsers for development"
 	@echo "  models       - Train ML models with synthetic data"
+	@echo "  workflow-full - Run complete workflow (build/train/reassess/export/scorecard)"
+	@echo "  workflow-build-train - Run build and train steps only"
+	@echo "  workflow-reassess - Run reassessment (requires JOB_ID=...)"
+	@echo "  workflow-export-scorecard - Run export and scorecard (requires JOB_ID=...)"
 	@echo "  docker-build - Build all Docker images"
 	@echo "  docker-up    - Start full Elise stack (lab + backend + frontend)"
 	@echo "  docker-down  - Stop Elise stack"

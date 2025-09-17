@@ -1,0 +1,117 @@
+{
+  "vulnerabilities": [
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00157.html",
+      "parameter": "BenchmarkTest00157",
+      "vulnerability_type": "xss",
+      "payload": "><svg onload=alert(1)>",
+      "context": "html",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in query parameter - OWASP Benchmark Test 00157"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00157.html",
+      "parameter": "answer",
+      "vulnerability_type": "xss",
+      "payload": "<img src=x onerror=alert(1)>",
+      "context": "form",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in form parameter - OWASP Benchmark Test 00157"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00275.html",
+      "parameter": "BenchmarkTest00275",
+      "vulnerability_type": "xss",
+      "payload": "'\"><script>alert(1)</script>",
+      "context": "html",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in query parameter - OWASP Benchmark Test 00275"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00275.html",
+      "parameter": "BenchmarkTest00275Area",
+      "vulnerability_type": "xss",
+      "payload": "><svg onload=alert(1)>",
+      "context": "form",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in textarea parameter - OWASP Benchmark Test 00275"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00275.html",
+      "parameter": "answer",
+      "vulnerability_type": "xss",
+      "payload": "<img src=x onerror=alert(1)>",
+      "context": "form",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in form parameter - OWASP Benchmark Test 00275"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00276.html",
+      "parameter": "BenchmarkTest00276",
+      "vulnerability_type": "xss",
+      "payload": "><svg onload=alert(1)>",
+      "context": "html",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in query parameter - OWASP Benchmark Test 00276"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00277.html",
+      "parameter": "BenchmarkTest00277",
+      "vulnerability_type": "xss",
+      "payload": "><svg onload=alert(1)>",
+      "context": "html",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in query parameter - OWASP Benchmark Test 00277"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00277.html",
+      "parameter": "BenchmarkTest00277Area",
+      "vulnerability_type": "xss",
+      "payload": "><svg onload=alert(1)>",
+      "context": "form",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in textarea parameter - OWASP Benchmark Test 00277"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00277.html",
+      "parameter": "answer",
+      "vulnerability_type": "xss",
+      "payload": "<img src=x onerror=alert(1)>",
+      "context": "form",
+      "severity": "high",
+      "cwe": "CWE-79",
+      "description": "Reflected XSS in form parameter - OWASP Benchmark Test 00277"
+    }
+  ],
+  "safe_endpoints": [
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00158.html",
+      "parameter": "BenchmarkTest00158",
+      "vulnerability_type": "xss",
+      "description": "Safe endpoint - no XSS vulnerability (OWASP Benchmark Test 00158)"
+    },
+    {
+      "endpoint": "https://localhost:8443/benchmark/xss-00/BenchmarkTest00159.html",
+      "parameter": "BenchmarkTest00159",
+      "vulnerability_type": "xss",
+      "description": "Safe endpoint - no XSS vulnerability (OWASP Benchmark Test 00159)"
+    }
+  ],
+  "metadata": {
+    "total_vulnerable_endpoints": 9,
+    "total_safe_endpoints": 2,
+    "vulnerability_families": ["xss"],
+    "test_framework": "OWASP Benchmark",
+    "version": "1.2",
+    "cwe_focus": "CWE-79 (Cross-site Scripting)",
+    "source": "Based on OWASP Benchmark XSS test cases observed during scanning"
+  }
+}

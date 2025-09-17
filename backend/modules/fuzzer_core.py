@@ -237,6 +237,9 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 elif fam == "sqli":
                     if sqli_ml_mode in {"always", "force_ml"}:
                         condition_met = True
+                    # For ml_with_context strategy, SQLi probes are signals only, not confirmed findings
+                    if plan and plan.name == "ml_with_context":
+                        condition_met = True  # Continue to ML but don't return probe result
                 print(f"PROBE_CONFIRM_DEBUG condition_met={condition_met} for fam={fam}")
                 if condition_met:
                     print(f"PROBE_CONFIRMED continuing to ML payload selection for {fam} family")
@@ -403,30 +406,12 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         logging.warning(f"Demo context injection failed: {e}")
             
             # For ml_with_context strategy, we still want to run ML injections
-            # even when probes confirm vulnerabilities
+            # even when probes confirm vulnerabilities, but we never return probe results
             if plan and plan.name == "ml_with_context":
-                # Continue to ML injections below, but store the probe result
+                # Continue to ML injections below, but don't store probe result for return
                 probe_confirmed_family = fam
-                # Create a minimal result_dict for ml_with_context strategy
-                probe_confirmed_evidence = {
-                    "target": target.to_dict(),
-                    "family": fam,
-                    "decision": DECISION["POS"],
-                    "why": ["probe_proof", reason_code],
-                    "evidence_id": None,  # Will be set if needed
-                    "cvss": None,
-                    "rank_source": "probe_only",
-                    "ml_role": None,
-                    "gated": False,
-                    "ml_family": None,
-                    "ml_proba": None,
-                    "ml_threshold": None,
-                    "model_tag": None,
-                    "attempt_idx": None,
-                    "top_k_used": None,
-                    "timing_ms": 0
-                }
-                # Don't return here - continue to ML injections below
+                # Don't create probe_confirmed_evidence for ml_with_context strategy
+                # This ensures we never return probe-confirmed results
                 pass
             else:
                 # For other strategies, return probe result immediately
@@ -777,6 +762,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                 
                 # Process ranked payloads for injection
                 print(f"RANKED_DEBUG before injection loop: ranked={ranked is not None}, len={len(ranked) if ranked else 'None'}")
+                # Collect all attempts for evidence timeline
+                attempts_log: list = []
                 for attempt_idx, cand in enumerate(ranked):
                     print(f"INJECTION_DEBUG attempt_idx={attempt_idx}, cand={cand is not None}, cand_type={type(cand)}")
                     payload = cand.get("payload")
@@ -915,6 +902,35 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         decision = "positive"  # Assume positive for non-SQLi families
                         extras = {}
                     
+                    # Build attempt timeline entry (for both hits and misses)
+                    try:
+                        from urllib.parse import urlparse
+                        parsed_url = urlparse(target.url)
+                    except Exception:
+                        parsed_url = type('P', (), {'path': target.url})()
+                    attempt_why = []
+                    if fam == "sqli":
+                        attempt_why = [reason_code] if reason_code else []
+                    elif fam == "xss":
+                        attempt_why = ["signal:reflection+payload"]
+                    elif fam == "redirect":
+                        attempt_why = ["signal:redirect"] if reason_code else []
+                    else:
+                        attempt_why = ["signal:generic"]
+                    attempt_entry = {
+                        "payload": payload or "",
+                        "method": target.method,
+                        "path": getattr(parsed_url, 'path', target.url),
+                        "param_in": target.param_in,
+                        "param": target.param,
+                        "status": getattr(inj, 'status', 0),
+                        "latency_ms": getattr(inj, "timing_ms", getattr(inj, "latency_ms", 0)),
+                        "hit": (fired_family is not None and decision in ["positive", "suspected"]),
+                        "why": attempt_why,
+                        "rank_source": rank_source,
+                    }
+                    attempts_log.append(attempt_entry)
+
                     # Create evidence only if family fired
                     if fired_family:
                         # Update injection attempt to success
@@ -1009,36 +1025,8 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
                         ev.ranking_pool_size = len(ranked)
                         ev.ranking_model = {"name": model_tag, "version": "2025-01-01", "features": ["param_in", "context", "path_hash"]} if model_tag else None
                         
-                        # Add attempt timeline (current attempt)
-                        from urllib.parse import urlparse
-                        parsed_url = urlparse(target.url)
-                        # Use proper decision reason instead of generic "reflection+payload"
-                        attempt_why = []
-                        if fired_family == "sqli":
-                            # SQLi uses canonical decision reason
-                            attempt_why = [reason_code] if reason_code else []
-                        elif fired_family == "xss":
-                            # XSS can use reflection+payload
-                            attempt_why = ["signal:reflection+payload"]
-                        elif fired_family == "redirect":
-                            # Redirect uses specific reason
-                            attempt_why = ["signal:redirect"] if reason_code else []
-                        else:
-                            attempt_why = ["signal:generic"]
-                        
-                        attempt_data = {
-                            "payload": cand.get("payload", ""),
-                            "method": target.method,
-                            "path": parsed_url.path,
-                            "param_in": target.param_in,
-                            "param": target.param,
-                            "status": inj.status,
-                            "latency_ms": getattr(inj, "latency_ms", 0),
-                            "hit": True,
-                            "why": attempt_why,
-                            "rank_source": rank_source
-                        }
-                        ev.attempts_timeline = create_attempt_timeline([attempt_data])
+                        # Persist all attempts up to (and including) this hit
+                        ev.attempts_timeline = create_attempt_timeline(attempts_log)
                         
                         # Add telemetry to match attempt timeline
                         ev.telemetry = {
@@ -1220,9 +1208,14 @@ def _process_target(target: Target, job_id: str, top_k: int, results_lock: Lock,
             return positive_results[0]
         
         # If we have probe-confirmed evidence but no ML results, return the probe result
+        # But not for ml_with_context strategy which should only return ML results
         if 'probe_confirmed_evidence' in locals() and probe_confirmed_evidence:
-            print(f"PROBE_RESULT_DEBUG Returning probe-confirmed evidence: family={probe_confirmed_evidence.get('family')}")
-            return _ensure_telemetry_defaults(probe_confirmed_evidence)
+            if plan and plan.name == "ml_with_context":
+                print(f"PROBE_RESULT_DEBUG Skipping probe-confirmed evidence for ml_with_context strategy")
+                # Don't return probe results for ml_with_context strategy
+            else:
+                print(f"PROBE_RESULT_DEBUG Returning probe-confirmed evidence: family={probe_confirmed_evidence.get('family')}")
+                return _ensure_telemetry_defaults(probe_confirmed_evidence)
         
         # If none confirmed, mark auditable negative
         why_reasons = [f"tried:{sum(attempted_by_family.values())}", "no_confirm_after_topk"]

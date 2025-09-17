@@ -48,3 +48,31 @@ __pycache__/
 
 # env files
 venv/
+
+# Evaluation and testing results
+test_results/
+*_results.json
+*_metrics.json
+intermediate_results_*.json
+comprehensive_xss_results.json
+corrected_xss_results.json
+simple_xss_results.json
+xss_sample_results.json
+final_elise_metrics.json
+owasp_xss_ground_truth.csv
+xss_test_cases.txt
+debug_test/
+
+# Evaluation scripts (temporary)
+test_all_xss_cases.py
+test_xss_sample.py
+simple_xss_evaluator.py
+corrected_xss_evaluator.py
+comprehensive_xss_evaluator.py
+monitor_progress.py
+calculate_final_metrics.py
+
+# Ground truth files
+accurate_owasp_ground_truth.json
+owasp_ground_truth.json
+ground_truth_example.json

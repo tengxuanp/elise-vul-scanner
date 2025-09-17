@@ -1,5 +1,4 @@
 {
-  "note": "Calibrated within model; p_cal comes from predict_proba",
-  "a": 1.0,
-  "b": 0.0
+  "slope": 0.7097140188655395,
+  "intercept": -0.16573909775173143
 }

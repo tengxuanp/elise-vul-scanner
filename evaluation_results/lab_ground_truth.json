@@ -1,0 +1,74 @@
+{
+  "vulnerabilities": [
+    {
+      "endpoint": "https://localhost:5001/search",
+      "parameter": "q",
+      "vulnerability_type": "xss",
+      "payload": "<script>alert('XSS')</script>",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/profile",
+      "parameter": "name",
+      "vulnerability_type": "xss",
+      "payload": "\"><script>alert('XSS')</script>",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/script",
+      "parameter": "msg",
+      "vulnerability_type": "xss",
+      "payload": "\";alert('XSS');//",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/notes",
+      "parameter": "content",
+      "vulnerability_type": "xss",
+      "payload": "<script>alert('Stored')</script>",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/product",
+      "parameter": "id",
+      "vulnerability_type": "sqli",
+      "payload": "1 OR 1=1",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/login",
+      "parameter": "username",
+      "vulnerability_type": "sqli",
+      "payload": "alice' OR '1'='1",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/api/search-json",
+      "parameter": "q",
+      "vulnerability_type": "sqli",
+      "payload": "a' OR 1=1--",
+      "context": null
+    },
+    {
+      "endpoint": "https://localhost:5001/go",
+      "parameter": "url",
+      "vulnerability_type": "redirect",
+      "payload": "https://evil.com",
+      "context": null
+    }
+  ],
+  "safe_endpoints": [
+    {
+      "endpoint": "https://localhost:5001/",
+      "parameter": "index"
+    },
+    {
+      "endpoint": "https://localhost:5001/about",
+      "parameter": "page"
+    },
+    {
+      "endpoint": "https://localhost:5001/contact",
+      "parameter": "form"
+    }
+  ]
+}

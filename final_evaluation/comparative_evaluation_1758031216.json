@@ -1,0 +1,34 @@
+{
+  "elise": {
+    "metrics": {
+      "recall_at_param": {
+        "xss": 0.0
+      },
+      "median_probes_per_confirm": {},
+      "time_to_first_confirm": {},
+      "precision_at_5": {
+        "xss": 0.0
+      },
+      "false_positive_rate": 0.0,
+      "total_evaluation_time": 179.1009819507599,
+      "total_vulnerabilities_found": 0,
+      "total_false_positives": 0,
+      "total_safe_cases_tested": 2,
+      "metadata": {
+        "evaluation_timestamp": 1758031216.293736,
+        "ground_truth_vulns": 9,
+        "ground_truth_safe": 2,
+        "detected_vulns": 0
+      }
+    },
+    "vulnerabilities": []
+  },
+  "baseline_tools": {
+    "error": "'EvaluationConfig' object has no attribute 'get'"
+  },
+  "comparison": {},
+  "config": {
+    "target_url": "https://localhost:8443/benchmark/xss-Index.html",
+    "evaluation_timestamp": 1758031037.192727
+  }
+}
